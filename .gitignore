@@ -1,0 +1,15 @@
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+.data/
+.tmp/
+test-results/
+playwright-report/
+blob-report/
+*.db
+*.db-wal
+*.db-shm
+.env*
+!.env.example
+*.log

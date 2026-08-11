@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+:root {
+  --canvas: #eef1f4;
+  --surface: #f7f8fa;
+  --surface-raised: #ffffff;
+  --surface-muted: #e5e9ed;
+  --line: #d2d8de;
+  --ink: #182027;
+  --ink-muted: #5f6a74;
+  --ink-faint: #5d6872;
+  --accent: #b53b35;
+  --accent-strong: #8f2926;
+  --accent-soft: #f5dfdd;
+  --on-accent: #ffffff;
+  --success: #2b6a54;
+  --danger: #9b332e;
+  --focus: #b53b35;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #13181c;
+    --surface: #1a2025;
+    --surface-raised: #212930;
+    --surface-muted: #2a333b;
+    --line: #3a454e;
+    --ink: #eef2f4;
+    --ink-muted: #aeb9c1;
+    --ink-faint: #a4b0b8;
+    --accent: #e06459;
+    --accent-strong: #f17b70;
+    --accent-soft: #4a2727;
+    --on-accent: #13181c;
+    --success: #8bc2a8;
+    --danger: #f0837d;
+    --focus: #f17b70;
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-muted: var(--surface-muted);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans), "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--canvas);
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
