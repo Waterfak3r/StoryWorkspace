@@ -16,7 +16,9 @@ Successful JSON responses use `{ "data": ... }`. Failed responses use:
 }
 ```
 
-Expected codes include `VALIDATION_ERROR`, `NOT_FOUND`, `EDIT_CONFLICT`, `AI_NOT_CONFIGURED`, `AI_TIMEOUT`, `AI_AUTHENTICATION_ERROR`, `AI_RATE_LIMITED`, `AI_PROVIDER_ERROR`, `AI_INVALID_RESPONSE`, `AI_GENERATION_ALREADY_ACCEPTED`, `AI_GENERATION_ALREADY_CONSUMED`, and `INTERNAL_ERROR`. An edit conflict includes the canonical `currentChapter` or `currentAdaptation` for the affected document. A consumed generation includes `consumedBy` (`chapter` or `adaptation`) and, for an adaptation consumer, a typed `currentAdaptation`. Route handlers log diagnostic details server-side but return no stack traces or secrets.
+Expected codes include `VALIDATION_ERROR`, `NOT_FOUND`, `EDIT_CONFLICT`, `IDEMPOTENCY_CONFLICT`, `ANALYSIS_STALE`, `AI_NOT_CONFIGURED`, `AI_TIMEOUT`, `AI_AUTHENTICATION_ERROR`, `AI_RATE_LIMITED`, `AI_PROVIDER_ERROR`, `AI_INVALID_RESPONSE`, `AI_GENERATION_ALREADY_ACCEPTED`, `AI_GENERATION_ALREADY_CONSUMED`, and `INTERNAL_ERROR`. An edit conflict includes the canonical `currentChapter`, `currentAdaptation`, or `currentLink` for the affected resource. A consumed generation includes `consumedBy` (`chapter` or `adaptation`) and, for an adaptation consumer, a typed `currentAdaptation`. Route handlers log diagnostic details server-side but return no stack traces or secrets.
+
+Phase 2 adds `PATCH_CONFLICT` and `PATCH_RESOLVED`; both include the canonical `patch`/`currentPatch` and are non-retryable until the author reviews the proposal.
 
 ## HTTP behavior
 
@@ -27,10 +29,37 @@ Expected codes include `VALIDATION_ERROR`, `NOT_FOUND`, `EDIT_CONFLICT`, `AI_NOT
 - Malformed JSON and schema failures return 400 with field errors when available.
 - Missing records return 404. Stale autosaves return 409. Unexpected failures return 500.
 
+Phase 0 Story Bible routes:
+
+- `/api/projects/{projectId}/documents`: list/create ScriptDocuments.
+- `/api/documents/{documentId}` and `/api/documents/{documentId}/revisions`: read/update metadata and save immutable revisions. These short resource routes require an explicit `projectId` query parameter; project-nested variants carry the same scope in the path. A revision save accepts `baseVersion`, `requestId`, and an ordered `scenes` set; IDs are retained across reorder and omitted scenes are marked deleted.
+- `/api/projects/{projectId}/entities`, `/api/entities/{entityId}/aliases`, `/api/projects/{projectId}/evidence-sources`, and `/api/projects/{projectId}/facts`: project-scoped Entity/Alias/Evidence/Canon Fact commands.
+- `/api/facts/{factId}/supersede` and `/api/facts/{factId}/retract`: append/supersede or statefully retract a fact. Short entity, evidence, and fact routes require `projectId`; Fact values are never updated in place.
+- `/api/projects/{projectId}/schema-registry`, `/api/projects/{projectId}/audit-events`, and `/api/projects/{projectId}/outbox-events`: inspect the code-owned predicate registry and transactional audit/outbox records.
+
+Phase 1 deterministic analysis and scene-link routes:
+
+- `/api/projects/{projectId}/scenes/{sceneId}/analysis-runs`: `POST` enqueues a current scene revision and returns `202` (`queued`) or `200` for a semantic/request-idempotent replay; `GET` lists project/scene/revision-scoped runs.
+- `/api/projects/{projectId}/analysis/runs/{runId}/execute`: explicit `POST` lease/execute command. It returns a fenced `queued`, `running`, `succeeded`, `failed`, or `stale` run and never runs from document save.
+- `/api/projects/{projectId}/scenes/{sceneId}/entity-review`: `GET` returns the selected current (or explicitly requested historical) revision's `analysisRun`, runs, mentions, links, entities, aliases, and evidenceSources. Evidence is strictly limited to returned mention evidence IDs.
+- `/api/projects/{projectId}/scenes/{sceneId}/entity-links/{linkId}`: `GET` and `PATCH` read/review one link. `PATCH` requires `expectedVersion`, `expectedSceneRevisionId`, and `requestId`; confirming one candidate rejects sibling candidates in the same group transactionally.
+
+Analysis requests are project-scoped and revision-bound. Canonical names and active aliases are normalized deterministically; unique matches may be confirmed, while same-normalized-name matches and explicit `[[character:...]]`, `[[location:...]]`, or `[[prop:...]]` stubs remain review candidates. Each run has a durable semantic idempotency tuple `(projectId, sceneRevisionId, analyzerVersion, contentHash)` plus a request-key mapping that includes its input fingerprint. A short SQLite lease token fences old executors before projection and completion. This slice has no hosted queue, LLM analyzer, Organization/Event model, or remote coordination.
+
+Phase 2 Canon / Inference / Pending Patch routes:
+
+- `GET /api/projects/{projectId}/patches?status=&sceneRevisionId=` lists project-scoped review records. Invalid status values return 400.
+- `POST /api/projects/{projectId}/scenes/{sceneId}/fact-patches` creates a deterministic schema-validated fact candidate and its Evidence, ModelRun, Inference, and Pending Patch provenance.
+- `GET /api/projects/{projectId}/scenes/{sceneId}/patch-review?sceneRevisionId=` returns current-revision `patches`, `inferences`, `modelRuns`, `evidenceSources`, `applications`, and project-scoped target/result `facts`.
+- `GET /api/projects/{projectId}/patches/{patchId}` reads one patch; `POST` on `accept`, `accept-edited`, and `reject` requires `expectedVersion` and `requestId`.
+
+Accept runs a source-revision/evidence/target-version/schema/cardinality check in one transaction. It creates or supersedes a Canon Fact only after the Patch is accepted, records `patch_applications.applied_payload_json`, emits `patch.accepted` and `story_bible.changed`, and returns 409 for hard conflicts. `accept-edited` permits changing only the schema-valid value; subject, predicate, valueType, scope, and scene/range bounds remain bound to the reviewed Patch. Rejected proposals dismiss their active Inference. Repeated semantic proposals for the same SceneRevision are suppressed even when request IDs differ.
+
 ## SQLite invariants
 
 - Every connection enables foreign keys, a finite busy timeout, and WAL when backed by a file.
 - Schema bootstrap is idempotent and versioned with `PRAGMA user_version`.
+- Phase 0/1/2 migrations bring the local schema to version 12 from the MVP baseline. New cross-project references are checked in repositories and SQLite project-guard triggers; revisions, evidence, analysis identities, patch payload/provenance, and fact values are immutable, with only documented lifecycle/version transitions. Pending Patches are Canon-only review commands with operation-specific target/baseVersion shape; Patch status/version and Inference lifecycle transitions are trigger-guarded. v11 enforces fact/inference scope shape and same-project resolvable entity references; v12 additionally requires accepted non-null ModelRuns to be succeeded and bound to the Patch source revision, and rejects mixed Patch/Inference evidence provenance. A new revision that removes accepted text evidence creates a reviewable revision-bound retract suggestion; it never directly mutates Canon.
 - Multi-record changes run inside an explicit transaction.
 - SQL parameters are always bound. User input is never interpolated into SQL.
 - Database files, WAL files, and test databases are ignored by Git.

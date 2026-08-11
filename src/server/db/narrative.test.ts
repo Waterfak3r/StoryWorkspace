@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createChapter, createNarrativeRepository } from "./narrative";
 import { createDatabase } from "./connection";
-import { bootstrapDatabase } from "./schema";
+import { bootstrapDatabase, CURRENT_SCHEMA_VERSION } from "./schema";
 import { AdaptationEditConflictError, AiGenerationAlreadyConsumedError, ChapterEditConflictError, NarrativeDataIntegrityError, NarrativeNotFoundError, NarrativeValidationError } from "./narrative-errors";
 
 const databaseHandles: Array<{ database: DatabaseSync; directory: string }> = [];
@@ -61,20 +61,20 @@ describe("narrative database schema", () => {
 
     bootstrapDatabase(database);
 
-    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
+    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(CURRENT_SCHEMA_VERSION);
     expect((database.prepare("SELECT title FROM projects WHERE id = :id").get({ id: projectId }) as { title: string }).title).toBe("Legacy project");
     expect((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapters'").get() as { name: string }).name).toBe("chapters");
     expect((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_generations'").get() as { name: string }).name).toBe("ai_generations");
     expect((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'adaptations'").get() as { name: string }).name).toBe("adaptations");
 
     expect(() => bootstrapDatabase(database)).not.toThrow();
-    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
+    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(CURRENT_SCHEMA_VERSION);
 
     database.close();
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("migrates a v3 database to v4 without replacing existing records", () => {
+  it("migrates a v3 database to the current schema without replacing existing records", () => {
     const directory = mkdtempSync(join(tmpdir(), "story-narrative-v3-migration-"));
     const database = new DatabaseSync(join(directory, "legacy.db"));
     bootstrapDatabase(database);
@@ -83,7 +83,7 @@ describe("narrative database schema", () => {
 
     bootstrapDatabase(database);
 
-    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
+    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(CURRENT_SCHEMA_VERSION);
     expect((database.prepare("SELECT title FROM projects WHERE id = :id").get({ id: projectId }) as { title: string }).title).toContain("Project");
     expect((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'adaptations'").get() as { name: string }).name).toBe("adaptations");
     expect(() => bootstrapDatabase(database)).not.toThrow();

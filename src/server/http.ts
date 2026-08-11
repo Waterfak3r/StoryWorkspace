@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AdaptationEditConflictError, AiGenerationAlreadyAcceptedError, AiGenerationAlreadyConsumedError, ChapterEditConflictError, NarrativeNotFoundError, NarrativeValidationError } from "@/server/db/narrative-errors";
 import { AiProviderError } from "@/server/ai/provider";
+import { SceneAnalysisStaleError, SceneEntityLinkConflictError, StoryBibleConflictError, StoryBibleIdempotencyConflictError, StoryBibleNotFoundError, StoryBiblePatchConflictError, StoryBiblePatchResolvedError, StoryBibleValidationError } from "@/server/db/story-bible-errors";
 
 type ValidationIssue = {
   path: Array<string | number>;
@@ -89,6 +90,31 @@ export function adaptationEditConflictResponse(currentAdaptation: unknown, messa
   );
 }
 
+export function storyBibleConflictResponse(resourceType: "document" | "revision" | "entity" | "fact", current: unknown, message = "The resource changed on the server. Review the current version before saving again.") {
+  const key = resourceType === "document" ? "currentDocument" : resourceType === "entity" ? "currentEntity" : resourceType === "fact" ? "currentFact" : "currentRevision";
+  return NextResponse.json({ error: { code: "EDIT_CONFLICT", message, [key]: current, retryable: false } }, { status: 409 });
+}
+
+export function idempotencyConflictResponse(message = "This request ID was already used for a different operation") {
+  return NextResponse.json({ error: { code: "IDEMPOTENCY_CONFLICT", message, retryable: false } }, { status: 409 });
+}
+
+export function sceneEntityLinkConflictResponse(currentLink: unknown, message = "The scene link changed on the server. Review the current candidate before trying again.") {
+  return NextResponse.json({ error: { code: "EDIT_CONFLICT", message, currentLink, retryable: false } }, { status: 409 });
+}
+
+export function analysisStaleResponse(message = "The analysis belongs to an older scene revision. Enqueue the current revision again.") {
+  return NextResponse.json({ error: { code: "ANALYSIS_STALE", message, retryable: false } }, { status: 409 });
+}
+
+export function storyBiblePatchConflictResponse(patch: unknown, message: string) {
+  return NextResponse.json({ error: { code: "PATCH_CONFLICT", message, patch, currentPatch: patch, retryable: false } }, { status: 409 });
+}
+
+export function storyBiblePatchResolvedResponse(patch: unknown, message: string) {
+  return NextResponse.json({ error: { code: "PATCH_RESOLVED", message, patch, retryable: false } }, { status: 409 });
+}
+
 export function aiGenerationAlreadyAcceptedResponse(message = "This AI draft has already been accepted.") {
   return NextResponse.json(
     {
@@ -152,6 +178,30 @@ export function routeErrorResponse(method: string, path: string, error: unknown)
   }
   if (error instanceof AiGenerationAlreadyConsumedError) {
     return aiGenerationAlreadyConsumedResponse(error.consumedBy, error.currentAdaptation);
+  }
+  if (error instanceof StoryBibleNotFoundError) {
+    return notFoundResponse(error.message);
+  }
+  if (error instanceof StoryBibleValidationError) {
+    return validationResponse(error);
+  }
+  if (error instanceof StoryBibleConflictError) {
+    return storyBibleConflictResponse(error.resourceType, error.current, error.message);
+  }
+  if (error instanceof StoryBibleIdempotencyConflictError) {
+    return idempotencyConflictResponse(error.message);
+  }
+  if (error instanceof SceneEntityLinkConflictError) {
+    return sceneEntityLinkConflictResponse(error.current, error.message);
+  }
+  if (error instanceof SceneAnalysisStaleError) {
+    return analysisStaleResponse(error.message);
+  }
+  if (error instanceof StoryBiblePatchConflictError) {
+    return storyBiblePatchConflictResponse(error.patch, error.reason);
+  }
+  if (error instanceof StoryBiblePatchResolvedError) {
+    return storyBiblePatchResolvedResponse(error.patch, error.message);
   }
 
   console.error(`${method} ${path}`, error);

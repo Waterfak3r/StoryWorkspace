@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, BookOpenText, CaretRight, FilmScript, Notebook, Plus, Trash, TreeStructure } from "@phosphor-icons/react";
+import { ArrowLeft, BookOpenText, CaretRight, FileText, FilmScript, Notebook, Plus, Trash, TreeStructure } from "@phosphor-icons/react";
 import type { Chapter, BibleEntry, OutlineNode } from "@/domain/narrative";
 import type { Adaptation } from "@/domain/adaptation";
 import type { Project } from "@/domain/project";
+import type { ScriptDocument } from "@/domain/document";
 import { projectOutlineTree } from "./outline-tree";
 
-export type WorkspaceSection = "bible" | "outline" | "chapters" | "adaptations";
+export type WorkspaceSection = "bible" | "outline" | "chapters" | "adaptations" | "scripts";
 
 type WorkspaceNavigatorProps = {
   project: Project;
@@ -17,10 +18,12 @@ type WorkspaceNavigatorProps = {
   outlineNodes: OutlineNode[];
   chapters: Chapter[];
   adaptations: Adaptation[];
+  scriptDocuments: ScriptDocument[];
   selectedBibleId: string | null;
   selectedOutlineId: string | null;
   selectedChapterId: string | null;
   selectedAdaptationId: string | null;
+  selectedScriptDocumentId: string | null;
   onBibleSelect: (id: string) => void;
   onOutlineSelect: (id: string) => void;
   onChapterSelect: (id: string) => void;
@@ -29,19 +32,26 @@ type WorkspaceNavigatorProps = {
   onAdaptationSelect: (id: string) => void;
   onAdaptationCreate: () => void;
   onAdaptationDelete: (id: string) => void;
+  onScriptDocumentSelect: (id: string) => void;
+  onScriptDocumentCreate: () => void;
+  onScriptDocumentRetry?: () => void;
   chapterMutationPending?: boolean;
   chapterError?: string | null;
   adaptationMutationPending?: boolean;
   adaptationError?: string | null;
+  scriptDocumentLoading?: boolean;
+  scriptDocumentError?: string | null;
+  scriptMutationPending?: boolean;
   navigationPending?: boolean;
   onLibraryNavigate?: () => void;
 };
 
-const sectionItems: Array<{ id: WorkspaceSection; label: string; detail: string; countKey: "bible" | "outline" | "chapters" | "adaptations"; Icon: typeof BookOpenText }> = [
+const sectionItems: Array<{ id: WorkspaceSection; label: string; detail: string; countKey: "bible" | "outline" | "chapters" | "adaptations" | "scripts"; Icon: typeof BookOpenText }> = [
   { id: "bible", label: "Story bible", detail: "World, people, and rules", countKey: "bible", Icon: BookOpenText },
   { id: "outline", label: "Outline", detail: "Shape the story structure", countKey: "outline", Icon: TreeStructure },
   { id: "chapters", label: "Chapters", detail: "Write the manuscript", countKey: "chapters", Icon: Notebook },
   { id: "adaptations", label: "Adaptations", detail: "Prepare another format", countKey: "adaptations", Icon: FilmScript },
+  { id: "scripts", label: "Scripts", detail: "Edit stable scenes", countKey: "scripts", Icon: FileText },
 ];
 
 const bibleCategoryLabels: Record<BibleEntry["category"], string> = {
@@ -52,11 +62,12 @@ const bibleCategoryLabels: Record<BibleEntry["category"], string> = {
   theme: "Theme",
 };
 
-function countFor(item: Pick<WorkspaceNavigatorProps, "bibleEntries" | "outlineNodes" | "chapters" | "adaptations">, key: (typeof sectionItems)[number]["countKey"]) {
+function countFor(item: Pick<WorkspaceNavigatorProps, "bibleEntries" | "outlineNodes" | "chapters" | "adaptations" | "scriptDocuments">, key: (typeof sectionItems)[number]["countKey"]) {
   if (key === "bible") return item.bibleEntries.length;
   if (key === "outline") return item.outlineNodes.length;
   if (key === "chapters") return item.chapters.length;
-  return item.adaptations.length;
+  if (key === "adaptations") return item.adaptations.length;
+  return item.scriptDocuments.length;
 }
 
 export function WorkspaceNavigator({
@@ -67,10 +78,12 @@ export function WorkspaceNavigator({
   outlineNodes,
   chapters,
   adaptations,
+  scriptDocuments,
   selectedBibleId,
   selectedOutlineId,
   selectedChapterId,
   selectedAdaptationId,
+  selectedScriptDocumentId,
   onBibleSelect,
   onOutlineSelect,
   onChapterSelect,
@@ -79,10 +92,16 @@ export function WorkspaceNavigator({
   onAdaptationSelect,
   onAdaptationCreate,
   onAdaptationDelete,
+  onScriptDocumentSelect,
+  onScriptDocumentCreate,
+  onScriptDocumentRetry,
   chapterMutationPending = false,
   chapterError = null,
   adaptationMutationPending = false,
   adaptationError = null,
+  scriptDocumentLoading = false,
+  scriptDocumentError = null,
+  scriptMutationPending = false,
   navigationPending = false,
   onLibraryNavigate,
 }: WorkspaceNavigatorProps) {
@@ -91,7 +110,7 @@ export function WorkspaceNavigator({
   return (
     <aside className="flex min-h-0 w-full flex-col bg-surface lg:w-[260px] lg:border-r lg:border-line">
       <div className="border-b border-line px-5 py-5">
-        <Link href="/" aria-disabled={navigationPending || chapterMutationPending || adaptationMutationPending} onNavigate={(event) => { if (onLibraryNavigate) { event.preventDefault(); onLibraryNavigate(); } }} className={`inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink ${navigationPending || chapterMutationPending || adaptationMutationPending ? "cursor-wait opacity-60" : ""}`}>
+        <Link href="/" aria-disabled={navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending} onNavigate={(event) => { if (onLibraryNavigate) { event.preventDefault(); onLibraryNavigate(); } }} className={`inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink ${navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending ? "cursor-wait opacity-60" : ""}`}>
           <ArrowLeft size={18} weight="regular" aria-hidden="true" />
           Project library
         </Link>
@@ -110,7 +129,7 @@ export function WorkspaceNavigator({
                 key={id}
                 type="button"
                 onClick={() => onSectionChange(id)}
-                disabled={navigationPending || chapterMutationPending || adaptationMutationPending}
+                disabled={navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending}
                 aria-pressed={active}
                 className={`flex min-h-12 w-full items-center gap-3 rounded-lg px-3 text-left transition-colors active:translate-y-px ${active ? "bg-accent-soft text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`}
               >
@@ -119,7 +138,7 @@ export function WorkspaceNavigator({
                   <span className="block text-sm font-semibold">{label}</span>
                   <span className="mt-0.5 block truncate text-xs text-ink-faint">{detail}</span>
                 </span>
-                <span className="font-mono text-[11px] text-ink-faint">{countFor({ bibleEntries, outlineNodes, chapters, adaptations }, countKey)}</span>
+                 <span className="font-mono text-[11px] text-ink-faint">{countFor({ bibleEntries, outlineNodes, chapters, adaptations, scriptDocuments }, countKey)}</span>
               </button>
             );
           })}
@@ -196,8 +215,77 @@ export function WorkspaceNavigator({
             error={adaptationError}
           />
         ) : null}
+
+        {activeSection === "scripts" ? (
+          <ScriptDocumentNavigatorList
+            documents={scriptDocuments}
+            selectedDocumentId={selectedScriptDocumentId}
+            onSelect={onScriptDocumentSelect}
+            onCreate={onScriptDocumentCreate}
+            onRetry={onScriptDocumentRetry}
+            navigationPending={navigationPending}
+            scriptMutationPending={scriptMutationPending}
+            loading={scriptDocumentLoading}
+            error={scriptDocumentError}
+          />
+        ) : null}
       </nav>
     </aside>
+  );
+}
+
+function ScriptDocumentNavigatorList({
+  documents,
+  selectedDocumentId,
+  onSelect,
+  onCreate,
+  onRetry,
+  navigationPending,
+  scriptMutationPending,
+  loading,
+  error,
+}: {
+  documents: ScriptDocument[];
+  selectedDocumentId: string | null;
+  onSelect: (id: string) => void;
+  onCreate: () => void;
+  onRetry?: () => void;
+  navigationPending: boolean;
+  scriptMutationPending: boolean;
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="mt-7">
+      <div className="flex items-center justify-between gap-3 px-3">
+        <div>
+          <p className="text-xs font-semibold text-ink">Scripts</p>
+          <p className="mt-1 text-xs text-ink-faint">Edit stable scenes</p>
+        </div>
+        <button type="button" onClick={onCreate} disabled={navigationPending || scriptMutationPending || loading} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label="New script document">
+          <Plus size={17} weight="regular" aria-hidden="true" />
+        </button>
+      </div>
+      {loading ? <p className="mt-3 px-3 text-xs text-ink-faint">Loading script documents.</p> : null}
+      {error ? <div className="mt-3 px-3"><p role="alert" className="border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{error}</p>{onRetry ? <button type="button" onClick={onRetry} disabled={loading || navigationPending} className="mt-3 min-h-10 rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">Retry list</button> : null}</div> : null}
+      {!loading && documents.length === 0 ? <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">No script documents yet. Create the first one.</p> : null}
+      {documents.length > 0 ? (
+        <ul aria-label="Script documents" className="mt-3 space-y-1">
+          {documents.map((document) => {
+            const selected = selectedDocumentId === document.id;
+            return (
+              <li key={document.id} className={`min-w-0 rounded-lg ${selected ? "bg-surface-raised shadow-sm" : "hover:bg-surface-muted"}`}>
+                <button type="button" onClick={() => onSelect(document.id)} disabled={navigationPending || scriptMutationPending} aria-pressed={selected} className={`flex min-h-12 w-full min-w-0 items-center gap-2 rounded-lg px-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${selected ? "font-semibold text-ink" : "text-ink-muted hover:text-ink"}`}>
+                  <CaretRight size={14} weight="regular" className={selected ? "text-accent" : "text-ink-faint"} aria-hidden="true" />
+                  <span className="min-w-0 flex-1 break-words">{document.title || "Untitled script"}</span>
+                  <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-ink-faint">{document.kind}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

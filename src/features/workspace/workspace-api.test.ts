@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiAcceptResponse, AiGenerateResponse } from "@/domain/ai";
 import type { Adaptation } from "@/domain/adaptation";
 import type { Chapter, ChapterVersion, CreateChapterInput, RestoreChapterInput, UpdateChapterInput } from "@/domain/narrative";
+import type { DocumentRevision, ScriptDocument } from "@/domain/document";
+import type { AnalysisRun } from "@/domain/analysis";
+import type { Inference, ModelRun } from "@/domain/inference";
+import type { AcceptEditedPatchInput, AcceptPatchInput, Patch, PatchApplication, ProposeFactPatchInput, RejectPatchInput } from "@/domain/canon-patch";
+import type { SceneEntityLink } from "@/domain/scene-link";
+import type { Entity, EntityAlias, EvidenceSource, Fact } from "@/domain/story-bible";
 import {
   WorkspaceApiError,
   createChapter,
@@ -22,6 +28,25 @@ import {
   restoreChapterVersion,
   safeDownloadFilename,
   updateChapter,
+  createDocumentRevision,
+  createEntity,
+  createEntityAlias,
+  createScriptDocument,
+  enqueueAnalysis,
+  executeAnalysis,
+  acceptEditedPatch,
+  acceptPatch,
+  getScenePatchReview,
+  getDocumentRevision,
+  getSceneEntityReview,
+  getScriptDocument,
+  listEntities,
+  listPatches,
+  listScriptDocuments,
+  proposeFactPatch,
+  rejectPatch,
+  parseScenePatchReview,
+  reviewSceneEntityLink,
 } from "./workspace-api";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -80,6 +105,126 @@ const adaptation: Adaptation = {
   body: "INT. ROOM",
   position: 0,
   sourceGenerationId: null,
+  createdAt,
+  updatedAt,
+};
+
+const documentId = "77777777-7777-4777-8777-777777777777";
+const revisionId = "88888888-8888-4888-8888-888888888888";
+const sceneId = "99999999-9999-4999-8999-999999999999";
+const sceneRevisionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const entityId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const aliasId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const runId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const linkId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const mentionId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const inferenceId = "12121212-1212-4121-8121-121212121212";
+const patchId = "23232323-2323-4232-8232-232323232323";
+const patchEvidenceId = "34343434-3434-4434-8434-343434343434";
+const patchModelRunId = "45454545-4545-4454-8454-454545454545";
+const patchApplicationId = "56565656-5656-4565-8565-565656565656";
+const patchFactId = "67676767-6767-4676-8676-676767676767";
+const hash = "a".repeat(64);
+
+const scriptDocument: ScriptDocument = {
+  id: documentId,
+  projectId,
+  title: "Pilot",
+  kind: "screenplay",
+  status: "active",
+  version: 1,
+  currentRevisionId: revisionId,
+  createdAt,
+  updatedAt,
+};
+
+const documentRevision: DocumentRevision = {
+  id: revisionId,
+  projectId,
+  documentId,
+  revisionNumber: 1,
+  baseVersion: 0,
+  contentHash: hash,
+  createdBy: "local-user",
+  requestId: "revision-request",
+  createdAt,
+  sceneRevisions: [{
+    id: sceneRevisionId,
+    projectId,
+    documentId,
+    sceneId,
+    documentRevisionId: revisionId,
+    narrativeRank: 0,
+    title: "Opening",
+    content: "Lin Mo enters.",
+    contentHash: hash,
+    status: "active",
+    createdAt,
+  }],
+};
+
+const entity: Entity = {
+  id: entityId,
+  projectId,
+  type: "character",
+  canonicalName: "Lin Mo",
+  status: "draft",
+  mergedIntoEntityId: null,
+  attributes: {},
+  schemaVersion: 1,
+  version: 1,
+  createdAt,
+  updatedAt,
+};
+
+const entityAlias: EntityAlias = {
+  id: aliasId,
+  projectId,
+  entityId,
+  alias: "Lin",
+  normalizedAlias: "lin",
+  locale: null,
+  status: "active",
+  createdAt,
+};
+
+const analysisRun: AnalysisRun = {
+  id: runId,
+  projectId,
+  documentId,
+  sceneId,
+  sceneRevisionId,
+  contentHash: hash,
+  analyzerVersion: "deterministic-v1",
+  idempotencyKey: "analysis-request",
+  status: "succeeded",
+  leaseToken: null,
+  leaseExpiresAt: null,
+  attempt: 1,
+  errorCode: null,
+  errorMessage: null,
+  startedAt: createdAt,
+  completedAt: updatedAt,
+  createdAt,
+  updatedAt,
+};
+
+const sceneLink: SceneEntityLink = {
+  id: linkId,
+  projectId,
+  sceneId,
+  sceneRevisionId,
+  entityId,
+  entityType: "character",
+  role: "appears",
+  status: "candidate",
+  resolver: "exact_alias",
+  confidence: 0.9,
+  version: 1,
+  candidateGroupId: "13131313-1313-4131-8131-131313131313",
+  fingerprint: "fingerprint",
+  analysisRunId: runId,
+  mentionIds: [mentionId],
   createdAt,
   updatedAt,
 };
@@ -362,5 +507,276 @@ describe("chapter workspace API", () => {
     expect(safeDownloadFilename("attachment; filename*=UTF-8''bad%ZZ; filename=backup.md")).toBe("backup.md");
     expect(safeDownloadFilename("attachment; filename=\"draft.md\"\r\nX-Injected: yes")).toBe("story-workspace-export.md");
     expect(safeDownloadFilename("attachment; filename=\"   ...   \"")).toBe("story-workspace-export.md");
+  });
+
+  it("scopes script document and revision reads by project and sends revision concurrency", async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { documents: [scriptDocument] } }),
+      jsonResponse({ data: { document: scriptDocument } }, 201),
+      jsonResponse({ data: { document: scriptDocument } }),
+      jsonResponse({ data: { revision: documentRevision } }),
+      jsonResponse({ data: { revision: documentRevision } }, 201),
+    );
+    await expect(listScriptDocuments(projectId)).resolves.toEqual([scriptDocument]);
+    await expect(createScriptDocument(projectId, { title: "Pilot", kind: "screenplay", requestId: "create-1", scenes: [] })).resolves.toEqual(scriptDocument);
+    await expect(getScriptDocument(projectId, documentId)).resolves.toEqual(scriptDocument);
+    await expect(getDocumentRevision(projectId, documentId, revisionId)).resolves.toEqual(documentRevision);
+    await expect(createDocumentRevision(projectId, documentId, {
+      baseVersion: 1,
+      expectedVersion: 1,
+      requestId: "revision-1",
+      scenes: [{ id: sceneId, title: "Opening", content: "Lin Mo enters.", narrativeRank: 0 }],
+    })).resolves.toEqual(documentRevision);
+    expect(fetchMock).toHaveBeenNthCalledWith(3, `/api/documents/${documentId}?projectId=${projectId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, `/api/documents/${documentId}/revisions/${revisionId}?projectId=${projectId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/documents/${documentId}/revisions`, "POST", {
+      baseVersion: 1,
+      expectedVersion: 1,
+      requestId: "revision-1",
+      scenes: [{ id: sceneId, title: "Opening", content: "Lin Mo enters.", narrativeRank: 0 }],
+    });
+  });
+
+  it("uses project-scoped entity, analysis, review, and link routes", async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { entities: [entity] } }),
+      jsonResponse({ data: { entity } }, 201),
+      jsonResponse({ data: { alias: entityAlias } }, 201),
+      jsonResponse({ data: { run: analysisRun } }, 201),
+      jsonResponse({ data: { run: analysisRun } }),
+      jsonResponse({ data: { review: { runs: [analysisRun], mentions: [], links: [] } } }),
+      jsonResponse({ data: { link: { ...sceneLink, status: "confirmed", version: 2 } } }),
+    );
+    await expect(listEntities(projectId)).resolves.toEqual([entity]);
+    await expect(createEntity(projectId, { type: "character", canonicalName: "Lin Mo", requestId: "entity-1" })).resolves.toEqual(entity);
+    await expect(createEntityAlias(projectId, entityId, { alias: "Lin", requestId: "alias-1" })).resolves.toEqual(entityAlias);
+    await expect(enqueueAnalysis(projectId, { documentId, sceneId, sceneRevisionId, contentHash: hash, requestId: "analysis-1" })).resolves.toEqual(analysisRun);
+    await expect(executeAnalysis(projectId, runId, { requestId: "execute-1" })).resolves.toEqual(analysisRun);
+    await expect(getSceneEntityReview(projectId, sceneId, sceneRevisionId)).resolves.toMatchObject({ analysisRun, mentions: [], links: [] });
+    await expect(reviewSceneEntityLink(projectId, sceneId, linkId, {
+      status: "confirmed",
+      expectedVersion: 1,
+      expectedSceneRevisionId: sceneRevisionId,
+      requestId: "review-1",
+    })).resolves.toMatchObject({ id: linkId, status: "confirmed", version: 2 });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, `/api/projects/${projectId}/analysis/runs/${runId}/execute`, expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(6, `/api/projects/${projectId}/scenes/${sceneId}/entity-review?projectId=${projectId}&sceneRevisionId=${sceneRevisionId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/scenes/${sceneId}/entity-links/${linkId}`, "PATCH", {
+      status: "confirmed",
+      expectedVersion: 1,
+      expectedSceneRevisionId: sceneRevisionId,
+      requestId: "review-1",
+    });
+  });
+
+  it("parses the Phase 2 scene patch read model and rejects malformed provenance", () => {
+    const source: EvidenceSource = {
+      id: patchEvidenceId,
+      projectId,
+      kind: "text_span",
+      documentId,
+      sceneId,
+      revisionId: sceneRevisionId,
+      sceneRevisionId,
+      anchorStart: "0",
+      anchorEnd: "12",
+      quotedText: "silver earring",
+      createdByUserId: null,
+      modelRunId: patchModelRunId,
+      createdAt,
+    };
+    const modelRun: ModelRun = {
+      id: patchModelRunId,
+      projectId,
+      kind: "fact_extractor",
+      model: "deterministic-fixture",
+      modelVersion: "fact-fixture-v1",
+      sourceRevisionId: sceneRevisionId,
+      inputHash: hash,
+      status: "succeeded",
+      outputHash: hash,
+      errorCode: null,
+      errorMessage: null,
+      createdAt,
+      completedAt: updatedAt,
+    };
+    const inference: Inference = {
+      id: inferenceId,
+      projectId,
+      subjectEntityId: entityId,
+      predicate: "appearance.distinctive_features",
+      value: ["silver earring"],
+      valueType: "json",
+      scope: "base",
+      sceneId: null,
+      validFromSceneId: null,
+      validToSceneId: null,
+      confidence: 0.98,
+      rationale: "Explicit text evidence",
+      modelRunId: patchModelRunId,
+      status: "active",
+      version: 1,
+      createdAt,
+    };
+    const patch: Patch = {
+      id: patchId,
+      projectId,
+      operation: "add_fact",
+      targetEntityId: entityId,
+      targetFactId: null,
+      baseVersion: 1,
+      payload: { subjectEntityId: entityId, predicate: inference.predicate, value: inference.value, valueType: "json", scope: "base", sceneId: null, validFromSceneId: null, validToSceneId: null, before: null },
+      truthClass: "canon",
+      evidenceSourceIds: [patchEvidenceId],
+      confidence: 0.98,
+      conflictKind: "none",
+      conflictingFactIds: [],
+      conflictMessage: null,
+      sourceRevisionId: sceneRevisionId,
+      inferenceId,
+      modelRunId: patchModelRunId,
+      status: "pending",
+      proposedBy: "model",
+      version: 1,
+      createdAt,
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    const application: PatchApplication = {
+      id: patchApplicationId,
+      projectId,
+      patchId,
+      operation: "add_fact",
+      resultingFactId: patchFactId,
+      appliedPayload: patch.payload,
+      requestId: "patch-accept-1",
+      createdAt: updatedAt,
+    };
+    const fact: Fact = {
+      id: patchFactId,
+      projectId,
+      subjectEntityId: entityId,
+      predicate: "appearance.distinctive_features",
+      value: ["silver earring"],
+      valueType: "json",
+      truthClass: "canon",
+      scope: "base",
+      sceneId: null,
+      validFromSceneId: null,
+      validToSceneId: null,
+      sourceId: patchEvidenceId,
+      promotedFromInferenceId: inferenceId,
+      status: "active",
+      supersedesFactId: null,
+      version: 1,
+      createdAt,
+    };
+
+    expect(parseScenePatchReview({ review: { pendingPatches: [patch], inferences: [inference], modelRuns: [modelRun], evidence: [source], applications: [application], facts: [fact] } })).toEqual({
+      patches: [patch],
+      inferences: [inference],
+      modelRuns: [modelRun],
+      evidenceSources: [source],
+      applications: [application],
+      facts: [fact],
+    });
+    expect(() => parseScenePatchReview({ review: { pendingPatches: [{ ...patch, version: 0 }] } })).toThrowError(/invalid scene patch review/i);
+  });
+
+  it("uses the canonical Phase 2 patch routes with revision and concurrency inputs", async () => {
+    const patch: Patch = {
+      id: patchId,
+      projectId,
+      operation: "add_fact",
+      targetEntityId: entityId,
+      targetFactId: null,
+      baseVersion: 1,
+      payload: { subjectEntityId: entityId, predicate: "appearance.distinctive_features", value: ["silver earring"], valueType: "json", scope: "base", sceneId: null, validFromSceneId: null, validToSceneId: null },
+      truthClass: "canon",
+      evidenceSourceIds: [patchEvidenceId],
+      confidence: 0.98,
+      conflictKind: "none",
+      conflictingFactIds: [],
+      conflictMessage: null,
+      sourceRevisionId: sceneRevisionId,
+      inferenceId: inferenceId,
+      modelRunId: patchModelRunId,
+      status: "pending",
+      proposedBy: "model",
+      version: 1,
+      createdAt,
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    const proposalInput: ProposeFactPatchInput = {
+      documentId,
+      sceneId,
+      sceneRevisionId,
+      operation: "add_fact",
+      subjectEntityId: entityId,
+      predicate: "appearance.distinctive_features",
+      value: ["silver earring"],
+      valueType: "json",
+      scope: "base",
+      evidence: [{ anchorStart: 0, anchorEnd: 14, quotedText: "silver earring" }],
+      confidence: 0.98,
+      requestId: "patch-propose-1",
+    };
+    const acceptInput: AcceptPatchInput = { expectedVersion: 1, requestId: "patch-accept-1" };
+    const editedInput: AcceptEditedPatchInput = { expectedVersion: 1, requestId: "patch-edit-1", payload: { ...patch.payload, value: ["silver earring", "left ear"] } };
+    const rejectInput: RejectPatchInput = { expectedVersion: 1, requestId: "patch-reject-1", reason: "Not stable enough" };
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { patches: [patch], inferences: [], modelRuns: [], evidenceSources: [] } }),
+      jsonResponse({ data: { patches: [patch] } }),
+      jsonResponse({ data: { patch, inference: null, modelRun: null, idempotent: false } }, 201),
+      jsonResponse({ data: { patch: { ...patch, status: "accepted", version: 2 }, fact: null, application: null, idempotent: false } }),
+      jsonResponse({ data: { patch: { ...patch, status: "accepted", version: 2 }, fact: null, application: null, idempotent: false } }),
+      jsonResponse({ data: { patch: { ...patch, status: "rejected", version: 2 }, idempotent: false } }),
+    );
+
+    await expect(getScenePatchReview(projectId, sceneId, sceneRevisionId)).resolves.toMatchObject({ patches: [patch] });
+    await expect(listPatches(projectId, { status: "pending", sceneRevisionId })).resolves.toEqual([patch]);
+    await expect(proposeFactPatch(projectId, sceneId, proposalInput)).resolves.toMatchObject({ patch, idempotent: false });
+    await expect(acceptPatch(projectId, patchId, acceptInput)).resolves.toMatchObject({ patch: { status: "accepted", version: 2 } });
+    await expect(acceptEditedPatch(projectId, patchId, editedInput)).resolves.toMatchObject({ patch: { status: "accepted", version: 2 } });
+    await expect(rejectPatch(projectId, patchId, rejectInput)).resolves.toMatchObject({ patch: { status: "rejected", version: 2 } });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/projects/${projectId}/scenes/${sceneId}/patch-review?sceneRevisionId=${sceneRevisionId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/projects/${projectId}/patches?status=pending&sceneRevisionId=${sceneRevisionId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/scenes/${sceneId}/fact-patches`, "POST", proposalInput);
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/patches/${patchId}/accept`, "POST", acceptInput);
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/patches/${patchId}/accept-edited`, "POST", editedInput);
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/patches/${patchId}/reject`, "POST", rejectInput);
+  });
+
+  it("preserves the latest Patch in a 409 conflict without weakening the error payload", async () => {
+    const currentPatch: Patch = {
+      id: patchId,
+      projectId,
+      operation: "add_fact",
+      targetEntityId: entityId,
+      targetFactId: null,
+      baseVersion: 2,
+      payload: { subjectEntityId: entityId, predicate: "appearance.hair", value: "red hair", valueType: "string", scope: "base", sceneId: null, validFromSceneId: null, validToSceneId: null },
+      truthClass: "canon",
+      evidenceSourceIds: [patchEvidenceId],
+      confidence: 0.8,
+      conflictKind: "hard",
+      conflictingFactIds: ["56565656-5656-4565-8565-565656565656"],
+      conflictMessage: "Canon changed on the server.",
+      sourceRevisionId: sceneRevisionId,
+      inferenceId: inferenceId,
+      modelRunId: patchModelRunId,
+      status: "pending",
+      proposedBy: "user",
+      version: 2,
+      createdAt,
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    mockFetch(jsonResponse({ error: { code: "PATCH_CONFLICT", message: "The Patch changed on the server.", patch: currentPatch, retryable: false } }, 409));
+    const rejection = listPatches(projectId);
+    await expect(rejection).rejects.toMatchObject({ status: 409, code: "PATCH_CONFLICT", currentPatch });
+    await expect(rejection).rejects.toMatchObject({ details: { currentPatch } });
   });
 });

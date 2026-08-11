@@ -40,10 +40,14 @@ No browser code may read API keys or access SQLite. Generated content is always 
 - `/api/projects/[projectId]/adaptations`: list and create manual or reviewed-AI adaptation drafts.
 - `/api/adaptations/[adaptationId]`: update or delete an adaptation draft.
 - `/api/projects/[projectId]/export`: download project Markdown.
+- `/api/projects/[projectId]/scenes/[sceneId]/analysis-runs`: enqueue and list deterministic scene analysis.
+- `/api/projects/[projectId]/analysis/runs/[runId]/execute`: explicitly claim/execute one durable analysis run.
+- `/api/projects/[projectId]/scenes/[sceneId]/entity-review`: read revision-bound runs, mentions, links, entities, aliases, and evidence.
+- `/api/projects/[projectId]/scenes/[sceneId]/entity-links/[linkId]`: project-scoped link read and CAS review.
 
 ## Workspace layout
 
-- Left rail: project identity, story bible, outline, chapters, adaptations.
+- Left rail: project identity, story bible, outline, chapters, adaptations, Scripts.
 - Center: the active editor or structured form.
 - Right rail: context picker and AI action panel.
 - Below 1024px, the side regions become drawers; the editor remains primary.
@@ -58,6 +62,32 @@ The visual system uses cool neutral surfaces, a single restrained vermilion acce
 - `chapters`: project, optional outline node with `ON DELETE SET NULL`, title, summary, body, position, status, timestamps.
 - `chapter_versions`: chapter, body, source, optional AI action, instruction, resolved context reference IDs, created timestamp.
 - `adaptations`: project, screenplay-scene format, title, body, order, optional source-generation provenance, timestamps.
+
+Phase 0 adds a separate authoring aggregate without changing Chapter behavior:
+
+- `script_documents`: project-owned document identity and optimistic `version`.
+- `document_revisions`: immutable document snapshots with a content hash.
+- `scenes`: stable scene UUIDs, narrative rank, and stateful deletion status.
+- `scene_revisions`: immutable scene content tied to exactly one document revision and its content hash.
+- `entities`, `entity_aliases`, `facts`, and `evidence_sources`: project-scoped Story Bible records. Fact values are append-only; replacement creates a `supersedes_fact_id` chain.
+- `audit_events`, `outbox_events`, and `idempotency_keys`: transactional observability and retry boundaries.
+
+Phase 1 extends the same aggregate with deterministic, revision-bound analysis:
+
+- `analysis_runs`: queued/running/succeeded/failed/stale runs with attempt, lease token, analyzer version, content hash, and semantic/request idempotency.
+- `entity_mentions` and `evidence_sources`: immutable surface/offset fingerprints tied to one scene revision and run; stale/rejected lifecycle never changes the stored anchor.
+- `scene_entity_links` and `scene_entity_link_mentions`: project-scoped candidate/confirmed/rejected/stale links with CAS versions and mention aggregation.
+
+Phase 2 adds an explicit provenance and review plane:
+
+- `model_runs`: deterministic fact-extractor/revalidation runs bound to one source SceneRevision.
+- `inferences` and `inference_evidence`: independently stored `inferred` candidates; promotion never edits their truth class.
+- `pending_patches`, `patch_evidence`, and `patch_applications`: immutable payload/provenance with pending/accepted/rejected/expired/superseded CAS state. Accepted patches create or supersede Canon Facts in one transaction and emit `story_bible.changed`.
+- `promoted_from_inference_id` on `facts`: a traceable link from the resulting Canon Fact to its reviewed Inference.
+
+The schema is currently v12. SQLite migrations add project guards, immutable revision/provenance triggers, analysis identity guards, lease/status fencing, confirmed-link tombstone guards, fact status/version invariants, and Patch/Inference status and provenance guards. Phase 2 v10 makes Pending Patch commands Canon-only and enforces operation-specific target/base-version shape at the database boundary; v11 adds scope-shape and same-project entity-reference guards plus operation-specific accepted Fact/Application provenance checks; v12 fences accepted patches to succeeded ModelRuns bound to the source revision and rejects mixed Patch/Inference evidence provenance. The worker is an explicit local enqueue/execute protocol; Phase 2 fact extraction is deterministic fixture/revalidation only, not a hosted queue or a live LLM.
+
+SQLite triggers reject cross-project references for the new aggregates in addition to repository checks. The predicate schema registry is code-owned in `src/domain/story-bible.ts`; clients cannot introduce arbitrary fact paths.
 
 All records use application-generated UUIDs. Foreign keys cascade within a project. Reordering uses integer positions. Timestamps are ISO-8601 UTC strings at API boundaries.
 
@@ -80,7 +110,7 @@ Missing configuration returns a typed `AI_NOT_CONFIGURED` response. Provider fai
 - `src/server/ai`: context assembly, prompts, and provider adapter.
 - `src/server/export`: deterministic Markdown rendering.
 - `src/components`: reusable visual and interaction primitives.
-- `src/features`: project, bible, outline, chapter, AI, adaptation, and export UI.
+- `src/features`: project, bible, outline, chapter, AI, adaptation, Scripts analysis/review, and export UI.
 
 Feature UI must call route handlers, not repositories. Repositories must not import React or HTTP types. Prompts must not import database primitives.
 

@@ -32,6 +32,55 @@ import type {
   UpdateBibleEntryInput,
   UpdateOutlineNodeInput,
 } from "@/domain/narrative";
+import {
+  documentRevisionSchema,
+  scriptDocumentSchema,
+  type CreateDocumentRevisionInput,
+  type CreateScriptDocumentInput,
+  type DocumentRevision,
+  type ScriptDocument,
+} from "@/domain/document";
+import {
+  analysisRunSchema,
+  entityMentionSchema,
+  type AnalysisRun,
+  type EnqueueAnalysisInput,
+  type ExecuteAnalysisInput,
+  type EntityMention,
+} from "@/domain/analysis";
+import {
+  inferenceSchema,
+  modelRunSchema,
+  type Inference,
+  type ModelRun,
+} from "@/domain/inference";
+import {
+  type AcceptEditedPatchInput,
+  type AcceptPatchInput,
+  patchApplicationSchema,
+  type PatchApplication,
+  type ProposeFactPatchInput,
+  patchSchema,
+  type RejectPatchInput,
+  type Patch,
+} from "@/domain/canon-patch";
+import {
+  sceneEntityLinkSchema,
+  type ReviewSceneEntityLinkInput,
+  type SceneEntityLink,
+} from "@/domain/scene-link";
+import {
+  entityAliasSchema,
+  entitySchema,
+  evidenceSourceSchema,
+  type CreateEntityAliasInput,
+  type CreateEntityInput,
+  type Entity,
+  type EntityAlias,
+  type EvidenceSource,
+  factSchema,
+  type Fact,
+} from "@/domain/story-bible";
 
 export type WorkspaceFieldErrors = Record<string, string[]>;
 
@@ -43,7 +92,53 @@ export type WorkspaceErrorPayload = {
   details?: unknown;
   currentChapter?: unknown;
   currentAdaptation?: unknown;
+  currentPatch?: unknown;
+  patch?: unknown;
   consumedBy?: "chapter" | "adaptation";
+};
+
+/**
+ * The review query is intentionally a read model rather than a new domain
+ * aggregate. The API has used both `run` and `analysisRun` while Phase 1 was
+ * being wired, so the parser accepts either without weakening validation of
+ * the records inside the read model.
+ */
+export type SceneEntityReview = {
+  analysisRun: AnalysisRun | null;
+  mentions: EntityMention[];
+  links: SceneEntityLink[];
+  entities: Entity[];
+  aliases: EntityAlias[];
+  evidenceSources: EvidenceSource[];
+};
+
+/** Phase 2 read model for a single immutable SceneRevision. */
+export type ScenePatchReview = {
+  patches: Patch[];
+  inferences: Inference[];
+  modelRuns: ModelRun[];
+  evidenceSources: EvidenceSource[];
+  applications: PatchApplication[];
+  facts: Fact[];
+};
+
+export type PatchProposalResult = {
+  patch: Patch;
+  inference: Inference | null;
+  modelRun: ModelRun | null;
+  idempotent: boolean;
+};
+
+export type PatchAcceptanceResult = {
+  patch: Patch;
+  fact: Fact | null;
+  application: PatchApplication | null;
+  idempotent: boolean;
+};
+
+export type PatchRejectionResult = {
+  patch: Patch;
+  idempotent: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -90,6 +185,16 @@ function rawCurrentAdaptation(payload: WorkspaceErrorPayload) {
   return undefined;
 }
 
+function rawCurrentPatch(payload: WorkspaceErrorPayload) {
+  if (payload.currentPatch !== undefined) return payload.currentPatch;
+  if (payload.patch !== undefined) return payload.patch;
+  if (isRecord(payload.details)) {
+    if ("currentPatch" in payload.details) return payload.details.currentPatch;
+    if ("patch" in payload.details) return payload.details.patch;
+  }
+  return undefined;
+}
+
 export class WorkspaceApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -98,6 +203,7 @@ export class WorkspaceApiError extends Error {
   readonly details: unknown;
   readonly currentChapter: Chapter | null;
   readonly currentAdaptation: Adaptation | null;
+  readonly currentPatch: Patch | null;
   readonly consumedBy: "chapter" | "adaptation" | null;
 
   constructor(status: number, payload: WorkspaceErrorPayload) {
@@ -113,6 +219,8 @@ export class WorkspaceApiError extends Error {
     const rawAdaptation = rawCurrentAdaptation(payload);
     const parsedAdaptation = adaptationSchema.safeParse(rawAdaptation);
     this.currentAdaptation = parsedAdaptation.success ? parsedAdaptation.data : null;
+    const parsedPatch = patchSchema.safeParse(rawCurrentPatch(payload));
+    this.currentPatch = parsedPatch.success ? parsedPatch.data : null;
     this.consumedBy = payload.consumedBy === "chapter" || payload.consumedBy === "adaptation" ? payload.consumedBy : null;
     const withChapter = payload.currentChapter !== undefined
       ? detailsWithCurrentChapter(payload.details, payload.currentChapter)
@@ -120,6 +228,11 @@ export class WorkspaceApiError extends Error {
     this.details = payload.currentAdaptation !== undefined
       ? detailsWithCurrentAdaptation(withChapter, payload.currentAdaptation)
       : withChapter;
+    if (payload.currentPatch !== undefined || payload.patch !== undefined) {
+      this.details = isRecord(this.details)
+        ? { ...this.details, currentPatch: payload.currentPatch ?? payload.patch }
+        : { value: this.details, currentPatch: payload.currentPatch ?? payload.patch };
+    }
   }
 }
 
@@ -229,6 +342,226 @@ function parseAdaptationList(value: unknown) {
     throw invalidDataError("adaptation list response");
   }
   return parsed.data;
+}
+
+function parseScriptDocument(value: unknown) {
+  const parsed = scriptDocumentSchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidDataError("script document response");
+  }
+  return parsed.data;
+}
+
+function parseScriptDocumentEnvelope(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("script document response");
+  }
+  return parseScriptDocument(value.document);
+}
+
+function parseScriptDocumentList(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("script document list response");
+  }
+  const parsed = z.array(scriptDocumentSchema).safeParse(value.documents);
+  if (!parsed.success) {
+    throw invalidDataError("script document list response");
+  }
+  return parsed.data;
+}
+
+function parseDocumentRevision(value: unknown) {
+  const parsed = documentRevisionSchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidDataError("document revision response");
+  }
+  return parsed.data;
+}
+
+function parseDocumentRevisionEnvelope(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("document revision response");
+  }
+  return parseDocumentRevision(value.revision);
+}
+
+function parseAnalysisRun(value: unknown) {
+  const parsed = analysisRunSchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidDataError("analysis run response");
+  }
+  return parsed.data;
+}
+
+function parseAnalysisRunEnvelope(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("analysis run response");
+  }
+  return parseAnalysisRun(value.analysisRun ?? value.run ?? value);
+}
+
+function parseEntity(value: unknown) {
+  const parsed = entitySchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidDataError("entity response");
+  }
+  return parsed.data;
+}
+
+function parseEntityEnvelope(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("entity response");
+  }
+  return parseEntity(value.entity);
+}
+
+function parseEntityList(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("entity list response");
+  }
+  const parsed = z.array(entitySchema).safeParse(value.entities);
+  if (!parsed.success) {
+    throw invalidDataError("entity list response");
+  }
+  return parsed.data;
+}
+
+function parseEntityAlias(value: unknown) {
+  const parsed = entityAliasSchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidDataError("entity alias response");
+  }
+  return parsed.data;
+}
+
+function parseEntityAliasEnvelope(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("entity alias response");
+  }
+  return parseEntityAlias(value.alias);
+}
+
+function parseSceneEntityLink(value: unknown) {
+  const parsed = sceneEntityLinkSchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidDataError("scene entity link response");
+  }
+  return parsed.data;
+}
+
+function parseSceneEntityLinkEnvelope(value: unknown) {
+  if (!isRecord(value)) {
+    throw invalidDataError("scene entity link response");
+  }
+  return parseSceneEntityLink(value.link ?? value.entityLink);
+}
+
+function parseSceneEntityReview(value: unknown): SceneEntityReview {
+  if (!isRecord(value)) {
+    throw invalidDataError("scene entity review response");
+  }
+
+  const review = isRecord(value.review) ? value.review : value;
+  const runValue = review.analysisRun ?? review.run;
+  const parsedRuns = z.array(analysisRunSchema).safeParse(review.runs ?? []);
+  if (!parsedRuns.success) {
+    throw invalidDataError("scene entity review response");
+  }
+  const run = runValue === null || runValue === undefined
+    ? (parsedRuns.data[0] ?? null)
+    : parseAnalysisRun(runValue);
+  const mentions = z.array(entityMentionSchema).safeParse(review.mentions ?? review.entityMentions ?? []);
+  const links = z.array(sceneEntityLinkSchema).safeParse(review.links ?? review.entityLinks ?? []);
+  const entities = z.array(entitySchema).safeParse(review.entities ?? []);
+  const aliases = z.array(entityAliasSchema).safeParse(review.aliases ?? review.entityAliases ?? []);
+  const evidenceSources = z.array(evidenceSourceSchema).safeParse(review.evidenceSources ?? review.evidence ?? []);
+
+  if (!mentions.success || !links.success || !entities.success || !aliases.success || !evidenceSources.success) {
+    throw invalidDataError("scene entity review response");
+  }
+
+  return {
+    analysisRun: run,
+    mentions: mentions.data,
+    links: links.data,
+    entities: entities.data,
+    aliases: aliases.data,
+    evidenceSources: evidenceSources.data,
+  };
+}
+
+export function parseScenePatchReview(value: unknown): ScenePatchReview {
+  if (!isRecord(value)) throw invalidDataError("scene patch review response");
+  const review = isRecord(value.review) ? value.review : value;
+  const patches = z.array(patchSchema).safeParse(review.patches ?? review.pendingPatches ?? []);
+  const inferences = z.array(inferenceSchema).safeParse(review.inferences ?? []);
+  const modelRuns = z.array(modelRunSchema).safeParse(review.modelRuns ?? review.runs ?? []);
+  const evidenceSources = z.array(evidenceSourceSchema).safeParse(review.evidenceSources ?? review.evidence ?? []);
+  const applications = z.array(patchApplicationSchema).safeParse(review.applications ?? review.patchApplications ?? []);
+  const facts = z.array(factSchema).safeParse(review.facts ?? []);
+  if (!patches.success || !inferences.success || !modelRuns.success || !evidenceSources.success || !applications.success || !facts.success) {
+    throw invalidDataError("scene patch review response");
+  }
+  return { patches: patches.data, inferences: inferences.data, modelRuns: modelRuns.data, evidenceSources: evidenceSources.data, applications: applications.data, facts: facts.data };
+}
+
+function parsePatch(value: unknown) {
+  const parsed = patchSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("patch response");
+  return parsed.data;
+}
+
+export function parsePatchEnvelope(value: unknown) {
+  if (!isRecord(value)) throw invalidDataError("patch response");
+  return parsePatch(value.patch ?? value);
+}
+
+function parsePatchList(value: unknown) {
+  if (!isRecord(value)) throw invalidDataError("patch list response");
+  const parsed = z.array(patchSchema).safeParse(value.patches ?? value.pendingPatches ?? []);
+  if (!parsed.success) throw invalidDataError("patch list response");
+  return parsed.data;
+}
+
+function parsePatchProposalResult(value: unknown): PatchProposalResult {
+  if (!isRecord(value)) throw invalidDataError("patch proposal response");
+  const patch = parsePatch(value.patch);
+  const inference = value.inference === null || value.inference === undefined ? null : (() => {
+    const parsed = inferenceSchema.safeParse(value.inference);
+    if (!parsed.success) throw invalidDataError("patch proposal inference response");
+    return parsed.data;
+  })();
+  const modelRun = value.modelRun === null || value.modelRun === undefined ? null : (() => {
+    const parsed = modelRunSchema.safeParse(value.modelRun);
+    if (!parsed.success) throw invalidDataError("patch proposal model run response");
+    return parsed.data;
+  })();
+  if (typeof value.idempotent !== "boolean") throw invalidDataError("patch proposal response");
+  return { patch, inference, modelRun, idempotent: value.idempotent };
+}
+
+function parsePatchAcceptanceResult(value: unknown): PatchAcceptanceResult {
+  if (!isRecord(value)) throw invalidDataError("patch acceptance response");
+  const patch = parsePatch(value.patch);
+  const fact = value.fact === null || value.fact === undefined ? null : (() => {
+    const parsed = factSchema.safeParse(value.fact);
+    if (!parsed.success) throw invalidDataError("patch acceptance fact response");
+    return parsed.data;
+  })();
+  const application = value.application === null || value.application === undefined ? null : (() => {
+    const parsed = patchApplicationSchema.safeParse(value.application);
+    if (!parsed.success) throw invalidDataError("patch application response");
+    return parsed.data;
+  })();
+  if (typeof value.idempotent !== "boolean") throw invalidDataError("patch acceptance response");
+  return { patch, fact, application, idempotent: value.idempotent };
+}
+
+function parsePatchRejectionResult(value: unknown): PatchRejectionResult {
+  if (!isRecord(value)) throw invalidDataError("patch rejection response");
+  const patch = parsePatch(value.patch);
+  if (typeof value.idempotent !== "boolean") throw invalidDataError("patch rejection response");
+  return { patch, idempotent: value.idempotent };
 }
 
 function parseDeleted(value: unknown) {
@@ -470,6 +803,161 @@ export async function updateAdaptation(adaptationId: string, input: UpdateAdapta
 export async function deleteAdaptation(adaptationId: string): Promise<{ deleted: boolean }> {
   const result = await requestData<unknown>(`/api/adaptations/${encodeURIComponent(adaptationId)}`, { method: "DELETE" });
   return parseDeleted(result);
+}
+
+function projectQuery(projectId: string) {
+  return `projectId=${encodeURIComponent(projectId)}`;
+}
+
+export async function listScriptDocuments(projectId: string): Promise<ScriptDocument[]> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/documents`);
+  return parseScriptDocumentList(result);
+}
+
+/** Backwards-friendly alias for callers that use the shorter domain name. */
+export const listDocuments = listScriptDocuments;
+
+export async function createScriptDocument(projectId: string, input: CreateScriptDocumentInput): Promise<ScriptDocument> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/documents`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseScriptDocumentEnvelope(result);
+}
+
+export const createDocument = createScriptDocument;
+
+export async function getScriptDocument(projectId: string, documentId: string): Promise<ScriptDocument> {
+  const result = await requestData<unknown>(`/api/documents/${encodeURIComponent(documentId)}?${projectQuery(projectId)}`);
+  return parseScriptDocumentEnvelope(result);
+}
+
+export const getDocument = getScriptDocument;
+
+export async function getDocumentRevision(projectId: string, documentId: string, revisionId: string): Promise<DocumentRevision> {
+  const result = await requestData<unknown>(`/api/documents/${encodeURIComponent(documentId)}/revisions/${encodeURIComponent(revisionId)}?${projectQuery(projectId)}`);
+  return parseDocumentRevisionEnvelope(result);
+}
+
+export const getScriptDocumentRevision = getDocumentRevision;
+
+export async function createDocumentRevision(projectId: string, documentId: string, input: CreateDocumentRevisionInput): Promise<DocumentRevision> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/revisions`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseDocumentRevisionEnvelope(result);
+}
+
+export const saveDocumentRevision = createDocumentRevision;
+
+export async function listEntities(projectId: string): Promise<Entity[]> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/entities`);
+  return parseEntityList(result);
+}
+
+export async function createEntity(projectId: string, input: CreateEntityInput): Promise<Entity> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/entities`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseEntityEnvelope(result);
+}
+
+export async function createEntityAlias(projectId: string, entityId: string, input: CreateEntityAliasInput): Promise<EntityAlias> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/entities/${encodeURIComponent(entityId)}/aliases`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseEntityAliasEnvelope(result);
+}
+
+export async function getSceneEntityReview(projectId: string, sceneId: string, sceneRevisionId: string): Promise<SceneEntityReview> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/entity-review?${projectQuery(projectId)}&sceneRevisionId=${encodeURIComponent(sceneRevisionId)}`);
+  return parseSceneEntityReview(result);
+}
+
+export async function enqueueAnalysis(projectId: string, input: EnqueueAnalysisInput): Promise<AnalysisRun> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(input.sceneId)}/analysis-runs`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseAnalysisRunEnvelope(result);
+}
+
+export const enqueueAnalysisRun = enqueueAnalysis;
+
+export async function executeAnalysis(projectId: string, runId: string, input: ExecuteAnalysisInput = {}): Promise<AnalysisRun> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/analysis/runs/${encodeURIComponent(runId)}/execute`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseAnalysisRunEnvelope(result);
+}
+
+export const executeAnalysisRun = executeAnalysis;
+
+export async function reviewSceneEntityLink(projectId: string, sceneId: string, linkId: string, input: ReviewSceneEntityLinkInput): Promise<SceneEntityLink> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/entity-links/${encodeURIComponent(linkId)}`, {
+    method: "PATCH",
+    ...jsonBody(input),
+  });
+  return parseSceneEntityLinkEnvelope(result);
+}
+
+export const updateSceneEntityLink = reviewSceneEntityLink;
+
+export async function getScenePatchReview(projectId: string, sceneId: string, sceneRevisionId: string): Promise<ScenePatchReview> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/patch-review?sceneRevisionId=${encodeURIComponent(sceneRevisionId)}`);
+  return parseScenePatchReview(result);
+}
+
+export type ListPatchesOptions = {
+  status?: Patch["status"];
+  sceneRevisionId?: string;
+  targetEntityId?: string;
+};
+
+export async function listPatches(projectId: string, options: ListPatchesOptions = {}): Promise<Patch[]> {
+  const query = new URLSearchParams();
+  if (options.status) query.set("status", options.status);
+  if (options.sceneRevisionId) query.set("sceneRevisionId", options.sceneRevisionId);
+  if (options.targetEntityId) query.set("targetEntityId", options.targetEntityId);
+  const suffix = query.toString();
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/patches${suffix ? `?${suffix}` : ""}`);
+  return parsePatchList(result);
+}
+
+export async function proposeFactPatch(projectId: string, sceneId: string, input: ProposeFactPatchInput): Promise<PatchProposalResult> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/fact-patches`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parsePatchProposalResult(result);
+}
+
+export async function acceptPatch(projectId: string, patchId: string, input: AcceptPatchInput): Promise<PatchAcceptanceResult> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/patches/${encodeURIComponent(patchId)}/accept`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parsePatchAcceptanceResult(result);
+}
+
+export async function acceptEditedPatch(projectId: string, patchId: string, input: AcceptEditedPatchInput): Promise<PatchAcceptanceResult> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/patches/${encodeURIComponent(patchId)}/accept-edited`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parsePatchAcceptanceResult(result);
+}
+
+export async function rejectPatch(projectId: string, patchId: string, input: RejectPatchInput): Promise<PatchRejectionResult> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/patches/${encodeURIComponent(patchId)}/reject`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parsePatchRejectionResult(result);
 }
 
 export type ProjectMarkdownDownload = {

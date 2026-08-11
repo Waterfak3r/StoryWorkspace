@@ -29,6 +29,7 @@
 - 新领域字段必须同步更新 schema、持久化迁移、API 类型、测试夹具和相关分卷。
 - 原规范中的数据不变量优先于临时实现便利；若确需改变，先更新规范和 ADR。
 - 首选演进起点是第 18 章的首个 Vertical Slice，但具体开工范围仍由当前任务决定。
+- 当前 Phase 1 采用方式：在 SQLite/Next 本地单体内落地 revision-bound deterministic scene analysis、显式 enqueue/execute lease、项目隔离的 entity review 与 Scripts workspace；这不是 PostgreSQL、托管队列或 LLM 已接入的声明。
 
 ## 维护规则
 

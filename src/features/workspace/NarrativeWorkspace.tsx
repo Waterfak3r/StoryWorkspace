@@ -1,15 +1,17 @@
 "use client";
 
 import * as React from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { List, X } from "@phosphor-icons/react";
 import type { Adaptation } from "@/domain/adaptation";
+import type { ScriptDocument } from "@/domain/document";
 import type { BibleEntry, Chapter, OutlineNode } from "@/domain/narrative";
 import type { Project } from "@/domain/project";
 import { ChapterWorkspace, type ChapterWorkspaceHandle } from "./ChapterWorkspace";
 import { AdaptationWorkspace, type AdaptationWorkspaceHandle } from "./AdaptationWorkspace";
 import { OutlineWorkspace } from "./OutlineWorkspace";
-import { WorkspaceApiError, createChapter, createManualAdaptation, deleteAdaptation, deleteChapter } from "./workspace-api";
+import { WorkspaceApiError, createChapter, createManualAdaptation, createScriptDocument, deleteAdaptation, deleteChapter, listScriptDocuments } from "./workspace-api";
 import { chapterSelectionAfterDelete, replaceCanonicalChapter, sortChapters } from "./chapter-shell-helpers";
 import { replaceCanonicalRecord } from "./outline-tree";
 import { StoryBibleWorkspace } from "./StoryBibleWorkspace";
@@ -17,6 +19,11 @@ import { WorkspaceNavigator, type WorkspaceSection } from "./WorkspaceNavigator"
 import { workspaceSelectionKey } from "./workspace-selection";
 import { adaptationSelectionAfterDelete, replaceCanonicalAdaptation, sortAdaptations } from "./adaptation-shell-helpers";
 import { ExportProjectDialog } from "./ExportProjectDialog";
+
+const ScriptsWorkspace = dynamic(() => import("./ScriptsWorkspace").then((module) => module.ScriptsWorkspace), {
+  ssr: false,
+  loading: () => <div className="min-h-32 text-sm text-ink-muted">Loading Scripts…</div>,
+});
 
 export type WorkspaceInitialData = {
   project: Project;
@@ -38,17 +45,23 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
   const [outlineNodes, setOutlineNodes] = React.useState(initialWorkspace.outlineNodes);
   const [chapters, setChapters] = React.useState(() => sortChapters(initialWorkspace.chapters));
   const [adaptations, setAdaptations] = React.useState(() => sortAdaptations(initialWorkspace.adaptations));
+  const [scriptDocuments, setScriptDocuments] = React.useState<ScriptDocument[]>([]);
   const [selectedBibleId, setSelectedBibleId] = React.useState<string | null>(initialWorkspace.bibleEntries[0]?.id ?? null);
   const [selectedOutlineId, setSelectedOutlineId] = React.useState<string | null>(initialWorkspace.outlineNodes[0]?.id ?? null);
   const [selectedChapterId, setSelectedChapterId] = React.useState<string | null>(() => sortChapters(initialWorkspace.chapters)[0]?.id ?? null);
   const [selectedAdaptationId, setSelectedAdaptationId] = React.useState<string | null>(() => sortAdaptations(initialWorkspace.adaptations)[0]?.id ?? null);
+  const [selectedScriptDocumentId, setSelectedScriptDocumentId] = React.useState<string | null>(null);
   const [bibleDirty, setBibleDirty] = React.useState(false);
   const [outlineDirty, setOutlineDirty] = React.useState(false);
+  const [scriptDirty, setScriptDirty] = React.useState(false);
   const [navigationPending, setNavigationPending] = React.useState(false);
   const [chapterMutationPending, setChapterMutationPending] = React.useState(false);
   const [chapterError, setChapterError] = React.useState<string | null>(null);
   const [adaptationMutationPending, setAdaptationMutationPending] = React.useState(false);
   const [adaptationError, setAdaptationError] = React.useState<string | null>(null);
+  const [scriptDocumentLoading, setScriptDocumentLoading] = React.useState(false);
+  const [scriptDocumentError, setScriptDocumentError] = React.useState<string | null>(null);
+  const [scriptMutationPending, setScriptMutationPending] = React.useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = React.useState(false);
   const drawerRef = React.useRef<HTMLDivElement>(null);
   const chapterRef = React.useRef<ChapterWorkspaceHandle>(null);
@@ -56,6 +69,8 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
   const navigationPendingRef = React.useRef(false);
   const chapterMutationPendingRef = React.useRef(false);
   const adaptationMutationPendingRef = React.useRef(false);
+  const scriptMutationPendingRef = React.useRef(false);
+  const scriptDocumentsLoadedRef = React.useRef(false);
 
   const confirmBibleDiscard = React.useCallback(() => {
     if (!bibleDirty) {
@@ -70,6 +85,13 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     }
     return typeof window === "undefined" || window.confirm("Discard unsaved changes to this outline node?");
   }, [outlineDirty]);
+
+  const confirmScriptDiscard = React.useCallback(() => {
+    if (!scriptDirty) {
+      return true;
+    }
+    return typeof window === "undefined" || window.confirm("Discard unsaved script changes?");
+  }, [scriptDirty]);
 
   const setNavigationBusy = React.useCallback((busy: boolean) => {
     navigationPendingRef.current = busy;
@@ -86,6 +108,11 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     setAdaptationMutationPending(busy);
   }, []);
 
+  const setScriptMutationBusy = React.useCallback((busy: boolean) => {
+    scriptMutationPendingRef.current = busy;
+    setScriptMutationPending(busy);
+  }, []);
+
   const flushCurrentChapter = React.useCallback(() => chapterRef.current?.flush() ?? Promise.resolve(true), []);
   const flushCurrentAdaptation = React.useCallback(() => adaptationRef.current?.flush() ?? Promise.resolve(true), []);
   const flushActiveDocument = React.useCallback(() => {
@@ -98,18 +125,45 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     return Promise.resolve(true);
   }, [activeSection, flushCurrentAdaptation, flushCurrentChapter]);
 
+  const loadScriptDocuments = React.useCallback(async (force = false) => {
+    if (scriptDocumentLoading || (scriptDocumentsLoadedRef.current && !force)) {
+      return;
+    }
+    setScriptDocumentLoading(true);
+    setScriptDocumentError(null);
+    try {
+      const documents = await listScriptDocuments(project.id);
+      setScriptDocuments(documents);
+      setSelectedScriptDocumentId((current) => current && documents.some((document) => document.id === current)
+        ? current
+        : documents[0]?.id ?? null);
+      scriptDocumentsLoadedRef.current = true;
+    } catch (error) {
+      setScriptDocumentError(error instanceof WorkspaceApiError ? error.message : "The script documents could not be loaded. Try again.");
+    } finally {
+      setScriptDocumentLoading(false);
+    }
+  }, [project.id, scriptDocumentLoading]);
+
+  const retryScriptDocuments = React.useCallback(() => {
+    void loadScriptDocuments(true);
+  }, [loadScriptDocuments]);
+
   const requestSectionChange = React.useCallback(async (section: WorkspaceSection) => {
     if (section === activeSection) {
       setMobileNavigationOpen(false);
       return;
     }
-    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
       return;
     }
     if (activeSection === "bible" && !confirmBibleDiscard()) {
       return;
     }
     if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
       return;
     }
     setNavigationBusy(true);
@@ -123,13 +177,19 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       if (activeSection === "outline") {
         setOutlineDirty(false);
       }
+      if (activeSection === "scripts") {
+        setScriptDirty(false);
+      }
       setActiveSection(section);
       setChapterError(null);
       setMobileNavigationOpen(false);
+      if (section === "scripts") {
+        void loadScriptDocuments();
+      }
     } finally {
       setNavigationBusy(false);
     }
-  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, flushActiveDocument, setNavigationBusy]);
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, loadScriptDocuments, setNavigationBusy]);
 
   const requestBibleSelect = React.useCallback(async (id: string) => {
     const changingSelection = id !== selectedBibleId || activeSection !== "bible";
@@ -137,13 +197,16 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       setMobileNavigationOpen(false);
       return;
     }
-    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
       return;
     }
     if (activeSection === "bible" && !confirmBibleDiscard()) {
       return;
     }
     if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
       return;
     }
     setNavigationBusy(true);
@@ -156,6 +219,9 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       }
       if (activeSection === "outline") {
         setOutlineDirty(false);
+      }
+      if (activeSection === "scripts") {
+        setScriptDirty(false);
       }
       setActiveSection("bible");
       setSelectedBibleId(id);
@@ -164,7 +230,7 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     } finally {
       setNavigationBusy(false);
     }
-  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, flushActiveDocument, selectedBibleId, setNavigationBusy]);
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, selectedBibleId, setNavigationBusy]);
 
   const requestOutlineSelect = React.useCallback(async (id: string) => {
     const changingSelection = id !== selectedOutlineId || activeSection !== "outline";
@@ -172,13 +238,16 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       setMobileNavigationOpen(false);
       return;
     }
-    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
       return;
     }
     if (activeSection === "bible" && !confirmBibleDiscard()) {
       return;
     }
     if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
       return;
     }
     setNavigationBusy(true);
@@ -191,6 +260,9 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       }
       if (activeSection === "outline") {
         setOutlineDirty(false);
+      }
+      if (activeSection === "scripts") {
+        setScriptDirty(false);
       }
       setActiveSection("outline");
       setSelectedOutlineId(id);
@@ -199,7 +271,7 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     } finally {
       setNavigationBusy(false);
     }
-  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, flushActiveDocument, selectedOutlineId, setNavigationBusy]);
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, selectedOutlineId, setNavigationBusy]);
 
   const requestChapterSelect = React.useCallback(async (id: string) => {
     const changingSelection = id !== selectedChapterId || activeSection !== "chapters";
@@ -207,13 +279,16 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       setMobileNavigationOpen(false);
       return;
     }
-    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
       return;
     }
     if (activeSection === "bible" && !confirmBibleDiscard()) {
       return;
     }
     if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
       return;
     }
     setNavigationBusy(true);
@@ -226,6 +301,9 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       }
       if (activeSection === "outline") {
         setOutlineDirty(false);
+      }
+      if (activeSection === "scripts") {
+        setScriptDirty(false);
       }
       setSelectedChapterId(id);
       setActiveSection("chapters");
@@ -234,7 +312,7 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     } finally {
       setNavigationBusy(false);
     }
-  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, flushActiveDocument, selectedChapterId, setNavigationBusy]);
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, selectedChapterId, setNavigationBusy]);
 
   const requestAdaptationSelect = React.useCallback(async (id: string) => {
     const changingSelection = id !== selectedAdaptationId || activeSection !== "adaptations";
@@ -242,13 +320,16 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       setMobileNavigationOpen(false);
       return;
     }
-    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
       return;
     }
     if (activeSection === "bible" && !confirmBibleDiscard()) {
       return;
     }
     if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
       return;
     }
     setNavigationBusy(true);
@@ -262,6 +343,9 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       if (activeSection === "outline") {
         setOutlineDirty(false);
       }
+      if (activeSection === "scripts") {
+        setScriptDirty(false);
+      }
       setSelectedAdaptationId(id);
       setActiveSection("adaptations");
       setAdaptationError(null);
@@ -269,16 +353,60 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     } finally {
       setNavigationBusy(false);
     }
-  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, flushActiveDocument, selectedAdaptationId, setNavigationBusy]);
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, selectedAdaptationId, setNavigationBusy]);
 
-  const requestLibraryNavigation = React.useCallback(() => {
-    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+  const requestScriptDocumentSelect = React.useCallback(async (id: string) => {
+    const changingSelection = id !== selectedScriptDocumentId || activeSection !== "scripts";
+    if (!changingSelection) {
+      setMobileNavigationOpen(false);
+      return;
+    }
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
       return;
     }
     if (activeSection === "bible" && !confirmBibleDiscard()) {
       return;
     }
     if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
+      return;
+    }
+    setNavigationBusy(true);
+    try {
+      if (!(await flushActiveDocument())) {
+        return;
+      }
+      if (activeSection === "bible") {
+        setBibleDirty(false);
+      }
+      if (activeSection === "outline") {
+        setOutlineDirty(false);
+      }
+      if (activeSection === "scripts") {
+        setScriptDirty(false);
+      }
+      setSelectedScriptDocumentId(id);
+      setActiveSection("scripts");
+      setScriptDocumentError(null);
+      setMobileNavigationOpen(false);
+    } finally {
+      setNavigationBusy(false);
+    }
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, selectedScriptDocumentId, setNavigationBusy]);
+
+  const requestLibraryNavigation = React.useCallback(() => {
+    if (navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current || scriptMutationPendingRef.current) {
+      return;
+    }
+    if (activeSection === "bible" && !confirmBibleDiscard()) {
+      return;
+    }
+    if (activeSection === "outline" && !confirmOutlineDiscard()) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
       return;
     }
 
@@ -295,10 +423,10 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       }
     };
     void navigate();
-  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, flushActiveDocument, router, setNavigationBusy]);
+  }, [activeSection, confirmBibleDiscard, confirmOutlineDiscard, confirmScriptDiscard, flushActiveDocument, router, setNavigationBusy]);
 
   React.useEffect(() => {
-    if (!bibleDirty && !outlineDirty) {
+    if (!bibleDirty && !outlineDirty && !scriptDirty) {
       return;
     }
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -307,7 +435,7 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [bibleDirty, outlineDirty]);
+  }, [bibleDirty, outlineDirty, scriptDirty]);
 
   React.useEffect(() => {
     if (!mobileNavigationOpen || typeof window === "undefined") {
@@ -508,7 +636,46 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     }
   }, [activeSection, adaptations, flushCurrentAdaptation, setAdaptationMutationBusy]);
 
-  const activeLabel = activeSection === "bible" ? "Story bible" : activeSection === "outline" ? "Outline" : activeSection === "chapters" ? "Chapters" : "Adaptations";
+  const handleScriptDocumentCreate = React.useCallback(async () => {
+    if (scriptMutationPendingRef.current || navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
+      return;
+    }
+    if (activeSection === "scripts" && !confirmScriptDiscard()) {
+      return;
+    }
+    setScriptDocumentError(null);
+    setScriptMutationBusy(true);
+    try {
+      if (!(await flushActiveDocument())) {
+        return;
+      }
+      const created = await createScriptDocument(project.id, {
+        title: "Untitled script",
+        kind: "screenplay",
+        requestId: `script-create-${Date.now()}`,
+        actorId: "local-user",
+        scenes: [],
+      });
+      setScriptDocuments((current) => [...current.filter((document) => document.id !== created.id), created]);
+      scriptDocumentsLoadedRef.current = true;
+      setScriptDirty(false);
+      setSelectedScriptDocumentId(created.id);
+      setActiveSection("scripts");
+      setScriptDocumentError(null);
+      setMobileNavigationOpen(false);
+    } catch (error) {
+      setScriptDocumentError(error instanceof WorkspaceApiError ? error.message : "The script document could not be created. Try again.");
+    } finally {
+      setScriptMutationBusy(false);
+    }
+  }, [activeSection, confirmScriptDiscard, flushActiveDocument, project.id, setScriptMutationBusy]);
+
+  const selectedScriptDocument = scriptDocuments.find((document) => document.id === selectedScriptDocumentId) ?? null;
+  const handleScriptDocumentChanged = React.useCallback((canonical: ScriptDocument) => {
+    setScriptDocuments((current) => current.map((document) => document.id === canonical.id ? canonical : document));
+  }, []);
+
+  const activeLabel = activeSection === "bible" ? "Story bible" : activeSection === "outline" ? "Outline" : activeSection === "chapters" ? "Chapters" : activeSection === "adaptations" ? "Adaptations" : "Scripts";
   const selectedChapter = chapters.find((chapter) => chapter.id === selectedChapterId) ?? null;
   const selectedAdaptation = adaptations.find((adaptation) => adaptation.id === selectedAdaptationId) ?? null;
   const activeTitle = activeSection === "bible"
@@ -517,7 +684,9 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       ? (outlineNodes.find((node) => node.id === selectedOutlineId)?.title ?? "Outline")
       : activeSection === "chapters"
         ? (selectedChapter?.title ?? "Chapters")
-        : (selectedAdaptation?.title ?? activeLabel);
+        : activeSection === "adaptations"
+          ? (selectedAdaptation?.title ?? activeLabel)
+          : (selectedScriptDocument?.title ?? activeLabel);
 
   return (
     <main className="min-h-[100dvh] bg-canvas text-ink">
@@ -529,12 +698,14 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
             onSectionChange={requestSectionChange}
             bibleEntries={bibleEntries}
             outlineNodes={outlineNodes}
-            chapters={chapters}
-            adaptations={adaptations}
+             chapters={chapters}
+             adaptations={adaptations}
+             scriptDocuments={scriptDocuments}
             selectedBibleId={selectedBibleId}
             selectedOutlineId={selectedOutlineId}
-            selectedChapterId={selectedChapterId}
-            selectedAdaptationId={selectedAdaptationId}
+             selectedChapterId={selectedChapterId}
+             selectedAdaptationId={selectedAdaptationId}
+             selectedScriptDocumentId={selectedScriptDocumentId}
             onBibleSelect={requestBibleSelect}
             onOutlineSelect={requestOutlineSelect}
             onChapterSelect={requestChapterSelect}
@@ -542,12 +713,18 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
             onChapterDelete={handleChapterDelete}
             onAdaptationSelect={requestAdaptationSelect}
             onAdaptationCreate={handleAdaptationCreate}
-            onAdaptationDelete={handleAdaptationDelete}
+             onAdaptationDelete={handleAdaptationDelete}
+             onScriptDocumentSelect={requestScriptDocumentSelect}
+             onScriptDocumentCreate={handleScriptDocumentCreate}
+             onScriptDocumentRetry={retryScriptDocuments}
             chapterMutationPending={chapterMutationPending}
             chapterError={chapterError}
             adaptationMutationPending={adaptationMutationPending}
-            adaptationError={adaptationError}
-            navigationPending={navigationPending}
+             adaptationError={adaptationError}
+             scriptDocumentLoading={scriptDocumentLoading}
+             scriptDocumentError={scriptDocumentError}
+             scriptMutationPending={scriptMutationPending}
+             navigationPending={navigationPending}
             onLibraryNavigate={requestLibraryNavigation}
           />
         </div>
@@ -572,7 +749,7 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
                 bibleDirty={bibleDirty}
                 outlineDirty={outlineDirty}
                 flushActiveDocument={flushActiveDocument}
-                disabled={navigationPending || chapterMutationPending || adaptationMutationPending}
+                 disabled={navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending}
               />
             </div>
           </header>
@@ -634,6 +811,16 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
                 <AdaptationEmptySection onCreate={handleAdaptationCreate} pending={adaptationMutationPending} error={adaptationError} />
               )
             ) : null}
+            {activeSection === "scripts" ? (
+              <ScriptsWorkspace
+                key={workspaceSelectionKey("scripts", selectedScriptDocumentId)}
+                projectId={project.id}
+                document={selectedScriptDocument}
+                onDocumentChanged={handleScriptDocumentChanged}
+                onCreateDocument={handleScriptDocumentCreate}
+                onDirtyChange={setScriptDirty}
+              />
+            ) : null}
           </div>
         </div>
       </div>
@@ -649,12 +836,14 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
               onSectionChange={requestSectionChange}
               bibleEntries={bibleEntries}
               outlineNodes={outlineNodes}
-              chapters={chapters}
-              adaptations={adaptations}
+               chapters={chapters}
+               adaptations={adaptations}
+               scriptDocuments={scriptDocuments}
               selectedBibleId={selectedBibleId}
               selectedOutlineId={selectedOutlineId}
-              selectedChapterId={selectedChapterId}
-              selectedAdaptationId={selectedAdaptationId}
+               selectedChapterId={selectedChapterId}
+               selectedAdaptationId={selectedAdaptationId}
+               selectedScriptDocumentId={selectedScriptDocumentId}
               onBibleSelect={requestBibleSelect}
               onOutlineSelect={requestOutlineSelect}
               onChapterSelect={requestChapterSelect}
@@ -662,11 +851,17 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
               onChapterDelete={handleChapterDelete}
               onAdaptationSelect={requestAdaptationSelect}
               onAdaptationCreate={handleAdaptationCreate}
-              onAdaptationDelete={handleAdaptationDelete}
+               onAdaptationDelete={handleAdaptationDelete}
+               onScriptDocumentSelect={requestScriptDocumentSelect}
+               onScriptDocumentCreate={handleScriptDocumentCreate}
+               onScriptDocumentRetry={retryScriptDocuments}
               chapterMutationPending={chapterMutationPending}
               chapterError={chapterError}
               adaptationMutationPending={adaptationMutationPending}
-              adaptationError={adaptationError}
+               adaptationError={adaptationError}
+               scriptDocumentLoading={scriptDocumentLoading}
+               scriptDocumentError={scriptDocumentError}
+               scriptMutationPending={scriptMutationPending}
               navigationPending={navigationPending}
               onLibraryNavigate={requestLibraryNavigation}
             />

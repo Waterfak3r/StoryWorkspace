@@ -98,6 +98,16 @@ The critical path creates a project, saves bible and outline records, autosaves 
 
 Story data is stored in the configured SQLite file and its sidecars. Back up that file when the story is important. API keys are read only by server-side route handlers from environment variables. Do not place credentials in client code, committed files, browser storage, screenshots, or exported Markdown. The bundled fake provider is for local automated tests only and returns deterministic content.
 
+## Phase 0 Story Bible foundation
+
+The local SQLite schema includes an independent `ScriptDocument → DocumentRevision → Scene → SceneRevision` aggregate alongside the existing Chapter model. Document revisions are immutable snapshots: reordering preserves scene UUIDs, and omitted scenes become stateful `deleted` records. Story Bible entities, aliases, evidence sources, canon facts, audit events, and outbox events are project-scoped and exposed through Phase 0 JSON routes. Fact replacement creates a supersede chain; it never overwrites a fact value in place. Mutations accept an expected version and request ID for optimistic concurrency and idempotent retries.
+
+## Phase 1 deterministic scene analysis
+
+The Scripts workspace adds one project-scoped `ScriptDocument` with explicitly saved scene revisions. Schema v12 stores revision-bound analysis runs, entity mentions, evidence anchors, versioned scene-entity links, Canon-only Pending Patches, and transactional review decisions. The v11 additive guards enforce fact/inference scope shape and same-project entity references; v12 additionally requires accepted non-null ModelRuns to be succeeded and bound to the Patch source revision, and rejects mixed Patch evidence provenance. Together they verify accepted PatchApplication results against their applied payload, evidence, provenance, and target lifecycle. Enqueue is durable and returns immediately; a separate execute command claims a short SQLite lease and performs deterministic projection with fencing, retry, and stale-revision checks.
+
+The local resolver matches exact canonical names and active aliases after NFKC/whitespace/case normalization. Unique matches are confirmed, same-normalized-name matches remain candidates, and `[[character:...]]`, `[[location:...]]`, and `[[prop:...]]` stubs create draft entities for review. No LLM or background queue is required for this slice, and document save never waits for analysis. Evidence and review read models are always filtered by project and scene revision.
+
 ## Current limits and next route
 
 This MVP is single-user and local-first. It has no accounts, collaboration, remote database adapter, background job queue, rich text editor, media generation, or provider-specific model management. AI output still needs author review, and a configured Responses-compatible provider is required for live AI assistance. Planned follow-up work can add authentication and shared projects, remote storage, richer export formats, media attachments, provider health controls, and collaborative review without changing the browser mutation boundaries.

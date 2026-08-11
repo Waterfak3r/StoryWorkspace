@@ -9,6 +9,7 @@ test("creates, adapts, exports, and reloads a story workspace", async ({ page })
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Stories in progress" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Loading projects" })).toBeHidden();
 
   await page.getByRole("button", { name: /New project|Create your first project/ }).first().click();
   await page.getByLabel("Project title").fill("Lantern Signal");
