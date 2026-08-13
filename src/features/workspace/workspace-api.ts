@@ -38,6 +38,7 @@ import {
   type CreateDocumentRevisionInput,
   type CreateScriptDocumentInput,
   type DocumentRevision,
+  type SceneRevision,
   type ScriptDocument,
 } from "@/domain/document";
 import {
@@ -73,6 +74,10 @@ import {
   entityAliasSchema,
   entitySchema,
   evidenceSourceSchema,
+  entityStateSchema,
+  sceneStatePredicateSchema,
+  type SceneStatePredicate,
+  type EntityState,
   type CreateEntityAliasInput,
   type CreateEntityInput,
   type Entity,
@@ -81,6 +86,18 @@ import {
   factSchema,
   type Fact,
 } from "@/domain/story-bible";
+import {
+  continuityGroupSchema,
+  resolvedStateResponseSchema,
+  statePatchPayloadSchema,
+  type ContinuityGroup,
+  type CreateContinuityGroupInput,
+  type ProposeStatePatchInput,
+  type ResolvedStateResponse,
+  type StatePatchPayload,
+} from "@/domain/scene-state";
+
+export type { ContinuityGroup, ContinuityGroupKind, CreateContinuityGroupInput, ProposeStatePatchInput, StatePatchPayload } from "@/domain/scene-state";
 
 export type WorkspaceFieldErrors = Record<string, string[]>;
 
@@ -114,30 +131,82 @@ export type SceneEntityReview = {
 
 /** Phase 2 read model for a single immutable SceneRevision. */
 export type ScenePatchReview = {
-  patches: Patch[];
+  patches: WorkspacePatch[];
   inferences: Inference[];
   modelRuns: ModelRun[];
   evidenceSources: EvidenceSource[];
-  applications: PatchApplication[];
+  applications: WorkspacePatchApplication[];
   facts: Fact[];
+  states: EntityState[];
 };
 
+const uuidSchema = z.string().uuid();
+const timestampSchema = z.string().datetime({ offset: true });
+const strictContinuityGroupSchema = continuityGroupSchema.strict();
+
+export type WorkspaceSceneRevision = SceneRevision & {
+  continuityGroupId: string;
+};
+
+export type WorkspaceDocumentRevision = Omit<DocumentRevision, "sceneRevisions"> & {
+  sceneRevisions: WorkspaceSceneRevision[];
+};
+
+export type WorkspaceRevisionSceneInput = NonNullable<CreateDocumentRevisionInput["scenes"]>[number] & {
+  continuityGroupId?: string;
+};
+
+export type CreateWorkspaceDocumentRevisionInput = Omit<CreateDocumentRevisionInput, "scenes"> & {
+  scenes: WorkspaceRevisionSceneInput[];
+};
+
+export type StatePredicate = SceneStatePredicate;
+export const statePredicateSchema = sceneStatePredicateSchema;
+
+export type StatePatch = Omit<Patch, "operation" | "payload" | "targetEntityId" | "targetFactId" | "baseVersion"> & {
+  operation: "add_state";
+  targetEntityId: string;
+  targetFactId: null;
+  baseVersion: number;
+  payload: StatePatchPayload;
+};
+
+export type WorkspacePatch = Patch | StatePatch;
+
+export type StatePatchApplication = Omit<PatchApplication, "operation" | "resultingFactId" | "resultingStateId"> & {
+  operation: "add_state";
+  resultingFactId: null;
+  resultingStateId: string;
+};
+
+export type WorkspacePatchApplication = PatchApplication | StatePatchApplication;
+
+export type StatePatchProposalInput = ProposeStatePatchInput;
+
+export type ResolvedStateTier = "explicit" | "carried" | "base" | "missing" | "conflict";
+
+export type ResolvedState = ResolvedStateResponse;
+export type ResolvedStateEntity = ResolvedStateResponse["entities"][number];
+export type ResolvedStateField = ResolvedStateEntity["fields"][number];
+export type ResolvedStateSource = ResolvedStateField["sources"][number];
+
 export type PatchProposalResult = {
-  patch: Patch;
+  patch: WorkspacePatch;
   inference: Inference | null;
   modelRun: ModelRun | null;
   idempotent: boolean;
 };
 
 export type PatchAcceptanceResult = {
-  patch: Patch;
+  patch: WorkspacePatch;
   fact: Fact | null;
-  application: PatchApplication | null;
+  state?: EntityState | null;
+  application: WorkspacePatchApplication | null;
   idempotent: boolean;
 };
 
 export type PatchRejectionResult = {
-  patch: Patch;
+  patch: WorkspacePatch;
   idempotent: boolean;
 };
 
@@ -370,12 +439,30 @@ function parseScriptDocumentList(value: unknown) {
   return parsed.data;
 }
 
+export function parseContinuityGroup(value: unknown): ContinuityGroup {
+  const parsed = strictContinuityGroupSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("continuity group response");
+  return parsed.data;
+}
+
+function parseContinuityGroupEnvelope(value: unknown) {
+  if (!isRecord(value)) throw invalidDataError("continuity group response");
+  return parseContinuityGroup(value.continuityGroup);
+}
+
+export function parseContinuityGroupList(value: unknown) {
+  if (!isRecord(value)) throw invalidDataError("continuity group list response");
+  const parsed = z.array(strictContinuityGroupSchema).safeParse(value.continuityGroups);
+  if (!parsed.success) throw invalidDataError("continuity group list response");
+  return parsed.data;
+}
+
 function parseDocumentRevision(value: unknown) {
   const parsed = documentRevisionSchema.safeParse(value);
   if (!parsed.success) {
     throw invalidDataError("document revision response");
   }
-  return parsed.data;
+  return parsed.data as WorkspaceDocumentRevision;
 }
 
 function parseDocumentRevisionEnvelope(value: unknown) {
@@ -490,25 +577,106 @@ function parseSceneEntityReview(value: unknown): SceneEntityReview {
   };
 }
 
+const statePatchSchema = z.object({
+  id: uuidSchema,
+  projectId: uuidSchema,
+  operation: z.literal("add_state"),
+  targetEntityId: uuidSchema,
+  targetFactId: z.null(),
+  baseVersion: z.number().int().positive(),
+  payload: statePatchPayloadSchema,
+  truthClass: z.literal("canon"),
+  evidenceSourceIds: z.array(uuidSchema),
+  confidence: z.number().min(0).max(1).nullable(),
+  conflictKind: z.enum(["none", "possible", "hard"]),
+  conflictingFactIds: z.array(uuidSchema),
+  conflictingStateIds: z.array(uuidSchema),
+  conflictMessage: z.string().nullable(),
+  sourceRevisionId: uuidSchema,
+  inferenceId: uuidSchema.nullable(),
+  modelRunId: uuidSchema.nullable(),
+  status: z.enum(["pending", "accepted", "rejected", "expired", "superseded"]),
+  proposedBy: z.enum(["rule", "model", "user", "import"]),
+  version: z.number().int().positive(),
+  createdAt: timestampSchema,
+  resolvedAt: timestampSchema.nullable(),
+  resolvedByUserId: z.string().nullable(),
+}).strict();
+
+const statePatchApplicationSchema = z.object({
+  id: uuidSchema,
+  projectId: uuidSchema,
+  patchId: uuidSchema,
+  operation: z.literal("add_state"),
+  resultingFactId: z.null(),
+  resultingStateId: uuidSchema,
+  appliedPayload: z.record(z.string(), z.unknown()),
+  requestId: z.string().min(1),
+  createdAt: timestampSchema,
+}).strict();
+
+function parseWorkspacePatch(value: unknown): WorkspacePatch {
+  const parsed = isRecord(value) && value.operation === "add_state"
+    ? statePatchSchema.safeParse(value)
+    : patchSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("patch response");
+  return parsed.data as WorkspacePatch;
+}
+
+function parseWorkspacePatchList(value: unknown): WorkspacePatch[] {
+  if (!Array.isArray(value)) throw invalidDataError("patch list response");
+  return value.map((patch) => parseWorkspacePatch(patch));
+}
+
+function parseWorkspacePatchApplication(value: unknown): WorkspacePatchApplication {
+  const parsed = isRecord(value) && value.operation === "add_state"
+    ? statePatchApplicationSchema.safeParse(value)
+    : patchApplicationSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("patch application response");
+  return parsed.data as WorkspacePatchApplication;
+}
+
+function parseWorkspacePatchApplicationList(value: unknown): WorkspacePatchApplication[] {
+  if (!Array.isArray(value)) throw invalidDataError("patch application list response");
+  return value.map((application) => parseWorkspacePatchApplication(application));
+}
+
+function parseEntityState(value: unknown): EntityState {
+  const parsed = entityStateSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("entity state response");
+  return parsed.data;
+}
+
 export function parseScenePatchReview(value: unknown): ScenePatchReview {
   if (!isRecord(value)) throw invalidDataError("scene patch review response");
   const review = isRecord(value.review) ? value.review : value;
-  const patches = z.array(patchSchema).safeParse(review.patches ?? review.pendingPatches ?? []);
+  const patches = (() => {
+    try {
+      return { success: true as const, data: parseWorkspacePatchList(review.patches ?? review.pendingPatches ?? []) };
+    } catch {
+      return { success: false as const };
+    }
+  })();
   const inferences = z.array(inferenceSchema).safeParse(review.inferences ?? []);
   const modelRuns = z.array(modelRunSchema).safeParse(review.modelRuns ?? review.runs ?? []);
   const evidenceSources = z.array(evidenceSourceSchema).safeParse(review.evidenceSources ?? review.evidence ?? []);
-  const applications = z.array(patchApplicationSchema).safeParse(review.applications ?? review.patchApplications ?? []);
+  const applications = (() => {
+    try {
+      return { success: true as const, data: parseWorkspacePatchApplicationList(review.applications ?? review.patchApplications ?? []) };
+    } catch {
+      return { success: false as const };
+    }
+  })();
   const facts = z.array(factSchema).safeParse(review.facts ?? []);
-  if (!patches.success || !inferences.success || !modelRuns.success || !evidenceSources.success || !applications.success || !facts.success) {
+  const states = z.array(entityStateSchema).safeParse(review.states);
+  if (!patches.success || !inferences.success || !modelRuns.success || !evidenceSources.success || !applications.success || !facts.success || !states.success) {
     throw invalidDataError("scene patch review response");
   }
-  return { patches: patches.data, inferences: inferences.data, modelRuns: modelRuns.data, evidenceSources: evidenceSources.data, applications: applications.data, facts: facts.data };
+  return { patches: patches.data, inferences: inferences.data, modelRuns: modelRuns.data, evidenceSources: evidenceSources.data, applications: applications.data, facts: facts.data, states: states.data };
 }
 
 function parsePatch(value: unknown) {
-  const parsed = patchSchema.safeParse(value);
-  if (!parsed.success) throw invalidDataError("patch response");
-  return parsed.data;
+  return parseWorkspacePatch(value);
 }
 
 export function parsePatchEnvelope(value: unknown) {
@@ -518,9 +686,7 @@ export function parsePatchEnvelope(value: unknown) {
 
 function parsePatchList(value: unknown) {
   if (!isRecord(value)) throw invalidDataError("patch list response");
-  const parsed = z.array(patchSchema).safeParse(value.patches ?? value.pendingPatches ?? []);
-  if (!parsed.success) throw invalidDataError("patch list response");
-  return parsed.data;
+  return parseWorkspacePatchList(value.patches ?? value.pendingPatches ?? []);
 }
 
 function parsePatchProposalResult(value: unknown): PatchProposalResult {
@@ -549,16 +715,17 @@ function parsePatchAcceptanceResult(value: unknown): PatchAcceptanceResult {
     return parsed.data;
   })();
   const application = value.application === null || value.application === undefined ? null : (() => {
-    const parsed = patchApplicationSchema.safeParse(value.application);
-    if (!parsed.success) throw invalidDataError("patch application response");
-    return parsed.data;
+    return parseWorkspacePatchApplication(value.application);
   })();
+  if ("resultingState" in value) throw invalidDataError("patch acceptance response");
+  const state = value.state === null || value.state === undefined ? null : parseEntityState(value.state);
   if (typeof value.idempotent !== "boolean") throw invalidDataError("patch acceptance response");
-  return { patch, fact, application, idempotent: value.idempotent };
+  return state ? { patch, fact, state, application, idempotent: value.idempotent } : { patch, fact, application, idempotent: value.idempotent };
 }
 
 function parsePatchRejectionResult(value: unknown): PatchRejectionResult {
   if (!isRecord(value)) throw invalidDataError("patch rejection response");
+  if (Object.keys(value).some((key) => key !== "patch" && key !== "idempotent")) throw invalidDataError("patch rejection response");
   const patch = parsePatch(value.patch);
   if (typeof value.idempotent !== "boolean") throw invalidDataError("patch rejection response");
   return { patch, idempotent: value.idempotent };
@@ -827,6 +994,19 @@ export async function createScriptDocument(projectId: string, input: CreateScrip
 
 export const createDocument = createScriptDocument;
 
+export async function listContinuityGroups(projectId: string, documentId: string): Promise<ContinuityGroup[]> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/continuity-groups`);
+  return parseContinuityGroupList(result);
+}
+
+export async function createContinuityGroup(projectId: string, documentId: string, input: CreateContinuityGroupInput): Promise<ContinuityGroup> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/continuity-groups`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parseContinuityGroupEnvelope(result);
+}
+
 export async function getScriptDocument(projectId: string, documentId: string): Promise<ScriptDocument> {
   const result = await requestData<unknown>(`/api/documents/${encodeURIComponent(documentId)}?${projectQuery(projectId)}`);
   return parseScriptDocumentEnvelope(result);
@@ -841,7 +1021,7 @@ export async function getDocumentRevision(projectId: string, documentId: string,
 
 export const getScriptDocumentRevision = getDocumentRevision;
 
-export async function createDocumentRevision(projectId: string, documentId: string, input: CreateDocumentRevisionInput): Promise<DocumentRevision> {
+export async function createDocumentRevision(projectId: string, documentId: string, input: CreateWorkspaceDocumentRevisionInput): Promise<WorkspaceDocumentRevision> {
   const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/revisions`, {
     method: "POST",
     ...jsonBody(input),
@@ -918,7 +1098,7 @@ export type ListPatchesOptions = {
   targetEntityId?: string;
 };
 
-export async function listPatches(projectId: string, options: ListPatchesOptions = {}): Promise<Patch[]> {
+export async function listPatches(projectId: string, options: ListPatchesOptions = {}): Promise<WorkspacePatch[]> {
   const query = new URLSearchParams();
   if (options.status) query.set("status", options.status);
   if (options.sceneRevisionId) query.set("sceneRevisionId", options.sceneRevisionId);
@@ -934,6 +1114,27 @@ export async function proposeFactPatch(projectId: string, sceneId: string, input
     ...jsonBody(input),
   });
   return parsePatchProposalResult(result);
+}
+
+export async function proposeStatePatch(projectId: string, sceneId: string, input: StatePatchProposalInput): Promise<PatchProposalResult> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/state-patches`, {
+    method: "POST",
+    ...jsonBody(input),
+  });
+  return parsePatchProposalResult(result);
+}
+
+export function parseResolvedState(value: unknown): ResolvedState {
+  const parsed = resolvedStateResponseSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("resolved state response");
+  return parsed.data;
+}
+
+export async function getResolvedState(projectId: string, sceneId: string, options: { sceneRevisionId: string; entityId?: string }): Promise<ResolvedState> {
+  const query = new URLSearchParams({ sceneRevisionId: options.sceneRevisionId });
+  if (options.entityId) query.set("entityId", options.entityId);
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/resolved-state?${query.toString()}`);
+  return parseResolvedState(result);
 }
 
 export async function acceptPatch(projectId: string, patchId: string, input: AcceptPatchInput): Promise<PatchAcceptanceResult> {

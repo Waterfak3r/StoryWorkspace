@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listPatchApplications, listPatchFacts, listPatches } from "@/server/db/canon-patch";
+import { listPatchApplications, listPatchFacts, listPatchStates, listPatches } from "@/server/db/canon-patch";
 import { getDocumentForProject, getSceneRevision } from "@/server/db/document";
 import { listInferences, listModelRuns } from "@/server/db/canon-patch";
 import { listEvidenceSources } from "@/server/db/story-bible";
@@ -25,10 +25,12 @@ export async function GET(request: Request, context: RouteContext) {
     const patchIds = new Set(patches.map((patch) => patch.id));
     const applications = listPatchApplications(projectId).filter((application) => patchIds.has(application.patchId));
     const factIds = new Set(patches.flatMap((patch) => patch.targetFactId ? [patch.targetFactId] : []).concat(applications.flatMap((application) => application.resultingFactId ? [application.resultingFactId] : [])));
+    const stateIds = new Set(applications.flatMap((application) => application.resultingStateId ? [application.resultingStateId] : []));
     return NextResponse.json({ data: {
       patches,
       applications,
       facts: listPatchFacts(projectId).filter((fact) => factIds.has(fact.id)),
+      states: listPatchStates(projectId).filter((state) => stateIds.has(state.id)),
       inferences: listInferences(projectId).filter((inference) => patchInferenceIds.has(inference.id)),
       modelRuns: listModelRuns(projectId, { sourceRevisionId: sceneRevisionId }).filter((run) => patchModelRunIds.has(run.id)),
       evidenceSources: listEvidenceSources(projectId).filter((source) => patchEvidenceIds.has(source.id)),

@@ -12,6 +12,7 @@ import {
   evidenceSourceSchema,
   factSchema,
   getPredicateDefinition,
+  isSceneStatePredicate,
   normalizeAlias,
   retractFactInputSchema,
   supersedeFactInputSchema,
@@ -521,6 +522,7 @@ export function getFact(factId: string, projectId?: string, database?: DatabaseS
 
 export function createFact(projectId: string, input: CreateFactInput, database?: DatabaseSync): Fact {
   const values = createFactInputSchema.parse(input);
+  if (isSceneStatePredicate(values.predicate)) throw new StoryBibleValidationError("Scene state predicates must be proposed and accepted as EntityState, not Canon Fact", ["predicate"]);
   const db = resolveDatabase(database);
   getProject(db, projectId);
   const entity = validateFactReferences(db, projectId, values);

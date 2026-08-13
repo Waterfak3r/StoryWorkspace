@@ -23,6 +23,7 @@ export const sceneSchema = z.object({
   id: uuidSchema,
   projectId: uuidSchema,
   documentId: uuidSchema,
+  continuityGroupId: uuidSchema,
   narrativeRank: z.number().int().nonnegative(),
   status: sceneStatusSchema,
   version: z.number().int().positive(),
@@ -36,6 +37,7 @@ export const sceneRevisionSchema = z.object({
   projectId: uuidSchema,
   documentId: uuidSchema,
   sceneId: uuidSchema,
+  continuityGroupId: uuidSchema,
   documentRevisionId: uuidSchema,
   narrativeRank: z.number().int().nonnegative(),
   title: z.string(),
@@ -64,6 +66,7 @@ const revisionSceneInputSchema = z.object({
   title: z.string().max(300, "Scene title must be 300 characters or fewer").default(""),
   content: z.string().max(200_000, "Scene content must be 200,000 characters or fewer").default(""),
   narrativeRank: z.number().int().nonnegative().optional(),
+  continuityGroupId: uuidSchema.optional(),
   status: sceneStatusSchema.optional().default("active"),
 }).strict().superRefine((value, context) => {
   if (value.id !== undefined && value.sceneId !== undefined && value.id !== value.sceneId) {
@@ -150,6 +153,7 @@ export function canonicalDocumentScenes(scenes: Array<{
   title: string;
   content: string;
   status: SceneStatus;
+  continuityGroupId?: string;
 }>) {
   return scenes
     .slice()
@@ -160,5 +164,6 @@ export function canonicalDocumentScenes(scenes: Array<{
       title: scene.title,
       content: scene.content,
       status: scene.status,
+      continuityGroupId: scene.continuityGroupId ?? null,
     }));
 }

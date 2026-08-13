@@ -1,4 +1,5 @@
 import type { Entity, FactValueType } from "@/domain/story-bible";
+import { isSceneStatePredicate } from "@/domain/story-bible";
 import type { ScriptDocument } from "@/domain/document";
 import type { Inference } from "@/domain/inference";
 import type { Fact } from "@/domain/story-bible";
@@ -34,6 +35,57 @@ export function isStaleAnalysisResponse(current: AnalysisSelection | null | unde
 }
 
 export const shouldApplyAnalysisResponse = isCurrentAnalysisResponse;
+
+export type WorkspaceRevisionSelection = {
+  projectId: string;
+  documentId: string;
+  sceneId: string;
+  sceneRevisionId: string;
+  entityId?: string | null;
+};
+
+/** Phase 3 requests are scoped beyond a Scene because document lanes can
+ * reuse stable scene IDs across revisions and projects. */
+export function workspaceRevisionSelectionKey(selection: WorkspaceRevisionSelection) {
+  return [selection.projectId, selection.documentId, selection.sceneId, selection.sceneRevisionId, selection.entityId ?? "all"].join(":");
+}
+
+export function sameWorkspaceRevisionSelection(left: WorkspaceRevisionSelection | null | undefined, right: WorkspaceRevisionSelection | null | undefined) {
+  return Boolean(left && right
+    && left.projectId === right.projectId
+    && left.documentId === right.documentId
+    && left.sceneId === right.sceneId
+    && left.sceneRevisionId === right.sceneRevisionId
+    && (left.entityId ?? null) === (right.entityId ?? null));
+}
+
+export function isCurrentWorkspaceRevisionResponse(current: WorkspaceRevisionSelection | null | undefined, response: WorkspaceRevisionSelection) {
+  return sameWorkspaceRevisionSelection(current, response);
+}
+
+export function isStaleWorkspaceRevisionResponse(current: WorkspaceRevisionSelection | null | undefined, response: WorkspaceRevisionSelection) {
+  return !isCurrentWorkspaceRevisionResponse(current, response);
+}
+
+export function stateTierLabel(tier: "explicit" | "carried" | "base" | "missing" | "conflict") {
+  if (tier === "explicit") return "Explicit Scene State";
+  if (tier === "carried") return "Carried State";
+  if (tier === "base") return "Base Canon fallback";
+  if (tier === "conflict") return "Blocking conflict";
+  return "Missing";
+}
+
+export function statePredicateLabel(predicate: string) {
+  if (predicate === "wardrobe.current") return "Current wardrobe";
+  if (predicate === "state.injury") return "Injury state";
+  if (predicate === "state.held_prop") return "Held props";
+  return predicate;
+}
+
+/** Fact proposals must not expose the dedicated Scene State predicates. */
+export function isFactPredicate(predicate: string) {
+  return !isSceneStatePredicate(predicate);
+}
 
 /**
  * Replace a server-canonical record without losing its stable list position;

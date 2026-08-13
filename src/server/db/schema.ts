@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 function runMigration(database: DatabaseSync, version: number, migration: () => void) {
   database.exec("BEGIN IMMEDIATE");
@@ -1643,5 +1643,613 @@ export function bootstrapDatabase(database: DatabaseSync) {
         )
       BEGIN SELECT RAISE(ABORT, 'accepted patch model/evidence provenance is invalid'); END;
     `));
+  }
+
+  if (currentVersion < 13) {
+    runMigration(database, 13, () => {
+      /*
+       * Phase 3 continuity is document-scoped. Existing documents receive a
+       * stable main lane whose ID is the document ID; this keeps old scene
+       * references valid while making the lane explicit on every immutable
+       * revision.
+       */
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS continuity_groups (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          document_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('main', 'flashback', 'dream', 'parallel', 'custom')),
+          name TEXT NOT NULL,
+          is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+          version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (document_id) REFERENCES script_documents(id) ON DELETE CASCADE,
+          UNIQUE (document_id, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_continuity_groups_document
+          ON continuity_groups(project_id, document_id, created_at ASC, id ASC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_continuity_groups_one_default
+          ON continuity_groups(document_id) WHERE is_default = 1;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_continuity_groups_one_main
+          ON continuity_groups(document_id, kind) WHERE kind = 'main';
+
+        CREATE TRIGGER IF NOT EXISTS continuity_groups_project_guard
+        BEFORE INSERT ON continuity_groups
+        WHEN (SELECT project_id FROM script_documents WHERE id = NEW.document_id) IS NULL
+          OR (SELECT project_id FROM script_documents WHERE id = NEW.document_id) <> NEW.project_id
+          OR ((NEW.is_default = 1) <> (NEW.kind = 'main'))
+          OR NEW.version <> 1
+        BEGIN SELECT RAISE(ABORT, 'continuity group project mismatch'); END;
+
+        CREATE TRIGGER IF NOT EXISTS continuity_groups_update_project_guard
+        BEFORE UPDATE OF project_id, document_id ON continuity_groups
+        WHEN (SELECT project_id FROM script_documents WHERE id = NEW.document_id) IS NULL
+          OR (SELECT project_id FROM script_documents WHERE id = NEW.document_id) <> NEW.project_id
+          OR ((NEW.is_default = 1) <> (NEW.kind = 'main'))
+          OR NEW.version < OLD.version
+        BEGIN SELECT RAISE(ABORT, 'continuity group project mismatch'); END;
+
+        DROP TRIGGER IF EXISTS continuity_groups_immutable_guard;
+        CREATE TRIGGER continuity_groups_immutable_guard
+        BEFORE UPDATE OF id, project_id, document_id, name, kind, is_default, version, created_at, updated_at ON continuity_groups
+        WHEN NOT (NEW.id IS OLD.id AND NEW.project_id IS OLD.project_id AND NEW.document_id IS OLD.document_id
+          AND NEW.name IS OLD.name AND NEW.kind IS OLD.kind AND NEW.is_default IS OLD.is_default AND NEW.version IS OLD.version
+          AND NEW.created_at IS OLD.created_at AND NEW.updated_at IS OLD.updated_at)
+        BEGIN SELECT RAISE(ABORT, 'continuity group is immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS continuity_groups_delete_guard
+        BEFORE DELETE ON continuity_groups
+        WHEN OLD.is_default = 1
+          OR EXISTS (SELECT 1 FROM scenes WHERE continuity_group_id = OLD.id)
+          OR EXISTS (SELECT 1 FROM scene_revisions WHERE continuity_group_id = OLD.id)
+          OR EXISTS (SELECT 1 FROM entity_states WHERE continuity_group_id = OLD.id)
+        BEGIN SELECT RAISE(ABORT, 'continuity group is referenced or default'); END;
+      `);
+
+      const documents = database.prepare("SELECT id, project_id FROM script_documents ORDER BY id").all() as Array<{ id?: string; project_id?: string }>;
+      const timestamp = new Date().toISOString();
+      const insertGroup = database.prepare("INSERT OR IGNORE INTO continuity_groups (id, project_id, document_id, kind, name, is_default, version, created_at, updated_at) VALUES (:id, :projectId, :documentId, 'main', :name, 1, 1, :createdAt, :updatedAt)");
+      for (const document of documents) {
+        if (!document.id || !document.project_id) continue;
+        insertGroup.run({ id: document.id, projectId: document.project_id, documentId: document.id, name: "Main", createdAt: timestamp, updatedAt: timestamp });
+      }
+
+      const sceneColumns = database.prepare("PRAGMA table_info(scenes)").all() as Array<{ name?: string }>;
+      if (!sceneColumns.some((column) => column.name === "continuity_group_id")) database.exec("ALTER TABLE scenes ADD COLUMN continuity_group_id TEXT");
+      const sceneRevisionColumns = database.prepare("PRAGMA table_info(scene_revisions)").all() as Array<{ name?: string }>;
+      if (!sceneRevisionColumns.some((column) => column.name === "continuity_group_id")) database.exec("ALTER TABLE scene_revisions ADD COLUMN continuity_group_id TEXT");
+      database.exec("UPDATE scenes SET continuity_group_id = document_id WHERE continuity_group_id IS NULL");
+      database.exec("UPDATE scene_revisions SET continuity_group_id = document_id WHERE continuity_group_id IS NULL");
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_scenes_document_group_rank
+          ON scenes(document_id, continuity_group_id, narrative_rank, id);
+        CREATE INDEX IF NOT EXISTS idx_scene_revisions_group_rank
+          ON scene_revisions(document_id, continuity_group_id, narrative_rank, scene_id, created_at DESC);
+        CREATE TRIGGER IF NOT EXISTS story_scenes_continuity_group_guard
+        BEFORE INSERT ON scenes
+        WHEN NEW.continuity_group_id IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.project_id
+          OR (SELECT document_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.document_id
+        BEGIN SELECT RAISE(ABORT, 'scene continuity group mismatch'); END;
+        CREATE TRIGGER IF NOT EXISTS story_scenes_continuity_group_update_guard
+        BEFORE UPDATE OF continuity_group_id, project_id, document_id ON scenes
+        WHEN NEW.continuity_group_id IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.project_id
+          OR (SELECT document_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.document_id
+        BEGIN SELECT RAISE(ABORT, 'scene continuity group mismatch'); END;
+        CREATE TRIGGER IF NOT EXISTS story_scene_revisions_continuity_group_guard
+        BEFORE INSERT ON scene_revisions
+        WHEN NEW.continuity_group_id IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.project_id
+          OR (SELECT document_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.document_id
+          OR (SELECT continuity_group_id FROM scenes WHERE id = NEW.scene_id) <> NEW.continuity_group_id
+        BEGIN SELECT RAISE(ABORT, 'scene revision continuity group mismatch'); END;
+        CREATE TRIGGER IF NOT EXISTS story_scene_revisions_continuity_group_update_guard
+        BEFORE UPDATE OF continuity_group_id, project_id, document_id, scene_id ON scene_revisions
+        WHEN NEW.continuity_group_id IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.project_id
+          OR (SELECT document_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.document_id
+          OR (SELECT continuity_group_id FROM scenes WHERE id = NEW.scene_id) <> NEW.continuity_group_id
+        BEGIN SELECT RAISE(ABORT, 'scene revision continuity group mismatch'); END;
+        DROP TRIGGER IF EXISTS scene_revisions_immutable_columns_guard;
+        CREATE TRIGGER scene_revisions_immutable_columns_guard
+        BEFORE UPDATE OF id, project_id, document_id, scene_id, continuity_group_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at ON scene_revisions
+        WHEN NOT (
+          NEW.id IS OLD.id AND NEW.project_id IS OLD.project_id AND NEW.document_id IS OLD.document_id
+          AND NEW.scene_id IS OLD.scene_id AND NEW.continuity_group_id IS OLD.continuity_group_id
+          AND NEW.document_revision_id IS OLD.document_revision_id AND NEW.narrative_rank IS OLD.narrative_rank
+          AND NEW.title IS OLD.title AND NEW.content IS OLD.content AND NEW.content_hash IS OLD.content_hash
+          AND NEW.status IS OLD.status AND NEW.created_at IS OLD.created_at
+        )
+        BEGIN SELECT RAISE(ABORT, 'scene revision is immutable'); END;
+      `);
+
+      /*
+       * SQLite cannot alter a CHECK constraint. Rebuild the two Patch
+       * contract tables and their evidence junction in one migration while
+       * retaining every v12 row byte-for-byte. The old tables are removed
+       * only after the junction rows have been copied into temporary backups.
+       */
+      database.exec(`
+        DROP TRIGGER IF EXISTS pending_patches_canon_truth_guard;
+        DROP TRIGGER IF EXISTS pending_patches_shape_guard;
+        DROP TRIGGER IF EXISTS pending_patches_project_guard;
+        DROP TRIGGER IF EXISTS pending_patches_initial_status_version_guard;
+        DROP TRIGGER IF EXISTS pending_patches_immutable_guard;
+        DROP TRIGGER IF EXISTS pending_patches_status_version_guard;
+        DROP TRIGGER IF EXISTS pending_patches_accepted_application_guard;
+        DROP TRIGGER IF EXISTS pending_patches_accepted_fact_provenance_guard;
+        DROP TRIGGER IF EXISTS pending_patches_accepted_model_provenance_guard;
+        DROP TRIGGER IF EXISTS patch_evidence_project_guard;
+        DROP TRIGGER IF EXISTS patch_evidence_immutable_guard;
+        DROP TRIGGER IF EXISTS patch_application_project_guard;
+        DROP TRIGGER IF EXISTS patch_application_operation_guard;
+        DROP TRIGGER IF EXISTS patch_application_immutable_guard;
+        CREATE TEMP TABLE phase3_pending_patches_backup AS SELECT * FROM pending_patches;
+        CREATE TEMP TABLE phase3_patch_evidence_backup AS SELECT * FROM patch_evidence;
+        CREATE TEMP TABLE phase3_patch_applications_backup AS SELECT * FROM patch_applications;
+        DROP TABLE patch_applications;
+        DROP TABLE patch_evidence;
+        DROP TABLE pending_patches;
+
+        CREATE TABLE pending_patches (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('add_fact', 'replace_fact', 'retract_fact', 'add_state')),
+          target_entity_id TEXT,
+          target_fact_id TEXT,
+          base_version INTEGER,
+          payload_json TEXT NOT NULL,
+          input_fingerprint TEXT NOT NULL DEFAULT '',
+          truth_class TEXT NOT NULL CHECK (truth_class = 'canon'),
+          confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+          conflict_kind TEXT NOT NULL DEFAULT 'none' CHECK (conflict_kind IN ('none', 'possible', 'hard')),
+          conflicting_fact_ids_json TEXT NOT NULL DEFAULT '[]',
+          conflicting_state_ids_json TEXT NOT NULL DEFAULT '[]',
+          conflict_message TEXT,
+          source_revision_id TEXT NOT NULL,
+          inference_id TEXT,
+          model_run_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'expired', 'superseded')),
+          proposed_by TEXT NOT NULL CHECK (proposed_by IN ('rule', 'model', 'user', 'import')),
+          version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+          created_at TEXT NOT NULL,
+          resolved_at TEXT,
+          resolved_by_user_id TEXT,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (target_entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+          FOREIGN KEY (target_fact_id) REFERENCES facts(id) ON DELETE SET NULL,
+          FOREIGN KEY (source_revision_id) REFERENCES scene_revisions(id) ON DELETE CASCADE,
+          FOREIGN KEY (inference_id) REFERENCES inferences(id) ON DELETE SET NULL,
+          FOREIGN KEY (model_run_id) REFERENCES model_runs(id) ON DELETE SET NULL,
+          CHECK (
+            (operation = 'add_fact' AND target_entity_id IS NOT NULL AND target_fact_id IS NULL AND base_version IS NOT NULL)
+            OR (operation = 'replace_fact' AND target_entity_id IS NOT NULL AND target_fact_id IS NOT NULL AND base_version IS NOT NULL)
+            OR (operation = 'retract_fact' AND target_fact_id IS NOT NULL AND base_version IS NOT NULL)
+            OR (operation = 'add_state' AND target_entity_id IS NOT NULL AND target_fact_id IS NULL AND base_version IS NOT NULL)
+          )
+        );
+        INSERT INTO pending_patches (id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflicting_state_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id)
+          SELECT id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, '[]', conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id
+          FROM phase3_pending_patches_backup;
+
+        CREATE INDEX idx_pending_patches_project_status
+          ON pending_patches(project_id, status, created_at DESC, id DESC);
+        CREATE INDEX idx_pending_patches_source_revision
+          ON pending_patches(project_id, source_revision_id, status, created_at DESC);
+        CREATE INDEX idx_pending_patches_target_fact
+          ON pending_patches(project_id, target_fact_id, status);
+        CREATE INDEX idx_pending_patches_target_state
+          ON pending_patches(project_id, target_entity_id, operation, status);
+        CREATE UNIQUE INDEX idx_pending_patches_semantic_input
+          ON pending_patches(project_id, source_revision_id, input_fingerprint)
+          WHERE input_fingerprint <> '';
+
+        CREATE TABLE patch_evidence (
+          project_id TEXT NOT NULL,
+          patch_id TEXT NOT NULL,
+          evidence_source_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (project_id, patch_id, evidence_source_id),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (patch_id) REFERENCES pending_patches(id) ON DELETE CASCADE,
+          FOREIGN KEY (evidence_source_id) REFERENCES evidence_sources(id) ON DELETE RESTRICT
+        );
+        INSERT INTO patch_evidence (project_id, patch_id, evidence_source_id, created_at)
+          SELECT project_id, patch_id, evidence_source_id, created_at FROM phase3_patch_evidence_backup;
+
+        /* The result FK is declared before the application table is copied. */
+        CREATE TABLE IF NOT EXISTS entity_states (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          predicate TEXT NOT NULL CHECK (predicate IN ('wardrobe.current', 'state.injury', 'state.held_prop')),
+          value_json TEXT NOT NULL,
+          value_type TEXT NOT NULL CHECK (value_type IN ('string', 'entity_ref')),
+          applies_at_scene_id TEXT NOT NULL,
+          source_revision_id TEXT NOT NULL,
+          continuity_group_id TEXT NOT NULL,
+          carry_forward INTEGER NOT NULL DEFAULT 0 CHECK (carry_forward IN (0, 1)),
+          priority INTEGER NOT NULL DEFAULT 100,
+          valid_to_scene_id TEXT,
+          source_id TEXT NOT NULL,
+          truth_class TEXT NOT NULL DEFAULT 'canon' CHECK (truth_class = 'canon'),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'retracted')),
+          version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+          FOREIGN KEY (applies_at_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+          FOREIGN KEY (source_revision_id) REFERENCES scene_revisions(id) ON DELETE CASCADE,
+          FOREIGN KEY (continuity_group_id) REFERENCES continuity_groups(id) ON DELETE CASCADE,
+          FOREIGN KEY (valid_to_scene_id) REFERENCES scenes(id) ON DELETE SET NULL,
+          FOREIGN KEY (source_id) REFERENCES evidence_sources(id) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE patch_applications (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          patch_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('add_fact', 'replace_fact', 'retract_fact', 'add_state')),
+          resulting_fact_id TEXT,
+          resulting_state_id TEXT,
+          applied_payload_json TEXT NOT NULL DEFAULT '{}',
+          request_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (patch_id) REFERENCES pending_patches(id) ON DELETE RESTRICT,
+          FOREIGN KEY (resulting_fact_id) REFERENCES facts(id) ON DELETE SET NULL,
+          FOREIGN KEY (resulting_state_id) REFERENCES entity_states(id) ON DELETE SET NULL,
+          CHECK (
+            (operation IN ('add_fact', 'replace_fact') AND resulting_fact_id IS NOT NULL AND resulting_state_id IS NULL)
+            OR (operation = 'retract_fact' AND resulting_fact_id IS NOT NULL AND resulting_state_id IS NULL)
+            OR (operation = 'add_state' AND resulting_fact_id IS NULL AND resulting_state_id IS NOT NULL)
+          ),
+          UNIQUE (project_id, patch_id)
+        );
+        INSERT INTO patch_applications (id, project_id, patch_id, operation, resulting_fact_id, resulting_state_id, applied_payload_json, request_id, created_at)
+          SELECT id, project_id, patch_id, operation, resulting_fact_id, NULL, applied_payload_json, request_id, created_at FROM phase3_patch_applications_backup;
+        CREATE UNIQUE INDEX idx_patch_applications_one_per_patch
+          ON patch_applications(project_id, patch_id);
+        DROP TABLE phase3_patch_applications_backup;
+        DROP TABLE phase3_patch_evidence_backup;
+        DROP TABLE phase3_pending_patches_backup;
+      `);
+
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS entity_states (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          predicate TEXT NOT NULL CHECK (predicate IN ('wardrobe.current', 'state.injury', 'state.held_prop')),
+          value_json TEXT NOT NULL,
+          value_type TEXT NOT NULL CHECK (value_type IN ('string', 'entity_ref')),
+          applies_at_scene_id TEXT NOT NULL,
+          source_revision_id TEXT NOT NULL,
+          continuity_group_id TEXT NOT NULL,
+          carry_forward INTEGER NOT NULL DEFAULT 0 CHECK (carry_forward IN (0, 1)),
+          priority INTEGER NOT NULL DEFAULT 100,
+          valid_to_scene_id TEXT,
+          source_id TEXT NOT NULL,
+          truth_class TEXT NOT NULL DEFAULT 'canon' CHECK (truth_class = 'canon'),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'retracted')),
+          version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+          FOREIGN KEY (applies_at_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+          FOREIGN KEY (source_revision_id) REFERENCES scene_revisions(id) ON DELETE CASCADE,
+          FOREIGN KEY (continuity_group_id) REFERENCES continuity_groups(id) ON DELETE CASCADE,
+          FOREIGN KEY (valid_to_scene_id) REFERENCES scenes(id) ON DELETE SET NULL,
+          FOREIGN KEY (source_id) REFERENCES evidence_sources(id) ON DELETE RESTRICT
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_states_resolution
+          ON entity_states(project_id, entity_id, predicate, continuity_group_id, applies_at_scene_id, status, priority DESC, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_entity_states_source_revision
+          ON entity_states(project_id, source_revision_id, created_at DESC, id DESC);
+        DROP TRIGGER IF EXISTS entity_states_project_guard;
+        CREATE TRIGGER IF NOT EXISTS entity_states_project_guard
+        BEFORE INSERT ON entity_states
+        WHEN (SELECT project_id FROM entities WHERE id = NEW.entity_id) IS NULL
+          OR (SELECT project_id FROM entities WHERE id = NEW.entity_id) <> NEW.project_id
+          OR (SELECT entity_type FROM entities WHERE id = NEW.entity_id) <> 'character'
+          OR (SELECT status FROM entities WHERE id = NEW.entity_id) NOT IN ('active', 'draft')
+          OR (SELECT merged_into_entity_id FROM entities WHERE id = NEW.entity_id) IS NOT NULL
+          OR (SELECT project_id FROM scenes WHERE id = NEW.applies_at_scene_id) IS NULL
+          OR (SELECT project_id FROM scenes WHERE id = NEW.applies_at_scene_id) <> NEW.project_id
+          OR (SELECT project_id FROM scene_revisions WHERE id = NEW.source_revision_id) IS NULL
+          OR (SELECT project_id FROM scene_revisions WHERE id = NEW.source_revision_id) <> NEW.project_id
+          OR (SELECT scene_id FROM scene_revisions WHERE id = NEW.source_revision_id) <> NEW.applies_at_scene_id
+          OR (SELECT continuity_group_id FROM scene_revisions WHERE id = NEW.source_revision_id) <> NEW.continuity_group_id
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) IS NULL
+          OR (SELECT project_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> NEW.project_id
+          OR (SELECT document_id FROM continuity_groups WHERE id = NEW.continuity_group_id) <> (SELECT document_id FROM scenes WHERE id = NEW.applies_at_scene_id)
+          OR (SELECT project_id FROM evidence_sources WHERE id = NEW.source_id) IS NULL
+          OR (SELECT project_id FROM evidence_sources WHERE id = NEW.source_id) <> NEW.project_id
+          OR (SELECT scene_revision_id FROM evidence_sources WHERE id = NEW.source_id) IS NOT NEW.source_revision_id
+          OR (NEW.carry_forward = 0 AND NEW.valid_to_scene_id IS NOT NULL)
+          OR (NEW.valid_to_scene_id IS NOT NULL AND (SELECT project_id FROM scenes WHERE id = NEW.valid_to_scene_id) <> NEW.project_id)
+          OR (NEW.valid_to_scene_id IS NOT NULL AND (SELECT document_id FROM scenes WHERE id = NEW.valid_to_scene_id) <> (SELECT document_id FROM scenes WHERE id = NEW.applies_at_scene_id))
+          OR (NEW.valid_to_scene_id IS NOT NULL AND (SELECT continuity_group_id FROM scenes WHERE id = NEW.valid_to_scene_id) <> NEW.continuity_group_id)
+          OR (NEW.valid_to_scene_id IS NOT NULL AND (SELECT narrative_rank FROM scenes WHERE id = NEW.valid_to_scene_id) < (SELECT narrative_rank FROM scenes WHERE id = NEW.applies_at_scene_id))
+        BEGIN SELECT RAISE(ABORT, 'entity state project or range mismatch'); END;
+        CREATE TRIGGER IF NOT EXISTS entity_states_initial_status_version_guard
+        BEFORE INSERT ON entity_states
+        WHEN NEW.status <> 'active' OR NEW.version <> 1 OR NEW.truth_class <> 'canon'
+        BEGIN SELECT RAISE(ABORT, 'entity state must start active at version 1 as Canon'); END;
+        CREATE TRIGGER IF NOT EXISTS entity_states_value_guard
+        BEFORE INSERT ON entity_states
+        WHEN (NEW.predicate = 'state.held_prop' AND (NEW.value_type <> 'entity_ref' OR json_type(NEW.value_json) <> 'text'))
+          OR (NEW.predicate IN ('wardrobe.current', 'state.injury') AND (NEW.value_type <> 'string' OR json_type(NEW.value_json) <> 'text'))
+        BEGIN SELECT RAISE(ABORT, 'entity state value shape is invalid'); END;
+        CREATE TRIGGER IF NOT EXISTS entity_states_entity_ref_project_guard
+        BEFORE INSERT ON entity_states
+        WHEN NEW.predicate = 'state.held_prop'
+          AND ((SELECT project_id FROM entities WHERE id = json_extract(NEW.value_json, '$')) IS NULL
+            OR (SELECT project_id FROM entities WHERE id = json_extract(NEW.value_json, '$')) <> NEW.project_id
+            OR (SELECT entity_type FROM entities WHERE id = json_extract(NEW.value_json, '$')) <> 'prop'
+            OR (SELECT status FROM entities WHERE id = json_extract(NEW.value_json, '$')) NOT IN ('active', 'draft')
+            OR (SELECT merged_into_entity_id FROM entities WHERE id = json_extract(NEW.value_json, '$')) IS NOT NULL)
+        BEGIN SELECT RAISE(ABORT, 'entity state reference project or status mismatch'); END;
+        CREATE TRIGGER IF NOT EXISTS entity_states_immutable_guard
+        BEFORE UPDATE OF id, project_id, entity_id, predicate, value_json, value_type, applies_at_scene_id, source_revision_id, continuity_group_id, carry_forward, priority, valid_to_scene_id, source_id, truth_class, created_at ON entity_states
+        WHEN NOT (
+          NEW.id IS OLD.id AND NEW.project_id IS OLD.project_id AND NEW.entity_id IS OLD.entity_id
+          AND NEW.predicate IS OLD.predicate AND NEW.value_json IS OLD.value_json AND NEW.value_type IS OLD.value_type
+          AND NEW.applies_at_scene_id IS OLD.applies_at_scene_id AND NEW.source_revision_id IS OLD.source_revision_id
+          AND NEW.continuity_group_id IS OLD.continuity_group_id AND NEW.carry_forward IS OLD.carry_forward
+          AND NEW.priority IS OLD.priority AND NEW.valid_to_scene_id IS OLD.valid_to_scene_id
+          AND NEW.source_id IS OLD.source_id AND NEW.truth_class IS OLD.truth_class AND NEW.created_at IS OLD.created_at
+        )
+        BEGIN SELECT RAISE(ABORT, 'entity state is immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS entity_states_status_version_guard
+        BEFORE UPDATE OF status, version ON entity_states
+        WHEN NEW.version < OLD.version OR NEW.version > OLD.version + 1
+          OR (NEW.status = OLD.status AND NEW.version <> OLD.version)
+          OR (NEW.status <> OLD.status AND NEW.version <> OLD.version + 1)
+          OR (OLD.status <> 'active' AND NEW.status <> OLD.status)
+          OR NEW.status NOT IN ('active', 'superseded', 'retracted')
+        BEGIN SELECT RAISE(ABORT, 'entity state status/version transition is invalid'); END;
+      `);
+
+      database.exec(`
+        CREATE TRIGGER pending_patches_canon_truth_guard
+        BEFORE INSERT ON pending_patches
+        WHEN NEW.truth_class <> 'canon'
+        BEGIN SELECT RAISE(ABORT, 'pending patch truth class must be canon'); END;
+        CREATE TRIGGER pending_patches_shape_guard
+        BEFORE INSERT ON pending_patches
+        WHEN (NEW.operation = 'add_fact' AND (NEW.target_entity_id IS NULL OR NEW.target_fact_id IS NOT NULL OR NEW.base_version IS NULL))
+          OR (NEW.operation = 'replace_fact' AND (NEW.target_entity_id IS NULL OR NEW.target_fact_id IS NULL OR NEW.base_version IS NULL))
+          OR (NEW.operation = 'retract_fact' AND (NEW.target_fact_id IS NULL OR NEW.base_version IS NULL))
+          OR (NEW.operation = 'add_state' AND (NEW.target_entity_id IS NULL OR NEW.target_fact_id IS NOT NULL OR NEW.base_version IS NULL OR NEW.inference_id IS NOT NULL OR NEW.model_run_id IS NOT NULL OR NEW.proposed_by <> 'user'))
+          OR (NEW.operation = 'add_state' AND (SELECT project_id FROM entities WHERE id = NEW.target_entity_id) <> NEW.project_id)
+          OR (NEW.operation = 'add_state' AND NOT EXISTS (SELECT 1 FROM entities WHERE id = NEW.target_entity_id AND project_id = NEW.project_id AND entity_type = 'character' AND status IN ('active', 'draft') AND merged_into_entity_id IS NULL))
+        BEGIN SELECT RAISE(ABORT, 'pending patch command shape is invalid'); END;
+        CREATE TRIGGER pending_patches_project_guard
+        BEFORE INSERT ON pending_patches
+        WHEN (SELECT project_id FROM scene_revisions WHERE id = NEW.source_revision_id) IS NULL
+          OR (SELECT project_id FROM scene_revisions WHERE id = NEW.source_revision_id) <> NEW.project_id
+          OR (NEW.target_entity_id IS NOT NULL AND ((SELECT project_id FROM entities WHERE id = NEW.target_entity_id) IS NULL OR (SELECT project_id FROM entities WHERE id = NEW.target_entity_id) <> NEW.project_id))
+          OR (NEW.target_fact_id IS NOT NULL AND ((SELECT project_id FROM facts WHERE id = NEW.target_fact_id) IS NULL OR (SELECT project_id FROM facts WHERE id = NEW.target_fact_id) <> NEW.project_id))
+          OR (NEW.inference_id IS NOT NULL AND ((SELECT project_id FROM inferences WHERE id = NEW.inference_id) IS NULL OR (SELECT project_id FROM inferences WHERE id = NEW.inference_id) <> NEW.project_id))
+          OR (NEW.model_run_id IS NOT NULL AND ((SELECT project_id FROM model_runs WHERE id = NEW.model_run_id) IS NULL OR (SELECT project_id FROM model_runs WHERE id = NEW.model_run_id) <> NEW.project_id))
+        BEGIN SELECT RAISE(ABORT, 'pending patch project mismatch'); END;
+        CREATE TRIGGER pending_patches_initial_status_version_guard
+        BEFORE INSERT ON pending_patches
+        WHEN NEW.status <> 'pending' OR NEW.version <> 1
+        BEGIN SELECT RAISE(ABORT, 'pending patch must start pending at version 1'); END;
+        CREATE TRIGGER pending_patches_immutable_guard
+        BEFORE UPDATE OF id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflicting_state_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, proposed_by, created_at ON pending_patches
+        WHEN NOT (
+          NEW.id IS OLD.id AND NEW.project_id IS OLD.project_id AND NEW.operation IS OLD.operation
+          AND NEW.target_entity_id IS OLD.target_entity_id AND NEW.target_fact_id IS OLD.target_fact_id
+          AND NEW.base_version IS OLD.base_version AND NEW.payload_json IS OLD.payload_json
+          AND NEW.input_fingerprint IS OLD.input_fingerprint AND NEW.truth_class IS OLD.truth_class
+          AND NEW.confidence IS OLD.confidence AND NEW.conflict_kind IS OLD.conflict_kind
+          AND NEW.conflicting_fact_ids_json IS OLD.conflicting_fact_ids_json AND NEW.conflicting_state_ids_json IS OLD.conflicting_state_ids_json
+          AND NEW.conflict_message IS OLD.conflict_message AND NEW.source_revision_id IS OLD.source_revision_id
+          AND NEW.inference_id IS OLD.inference_id AND NEW.model_run_id IS OLD.model_run_id
+          AND NEW.proposed_by IS OLD.proposed_by AND NEW.created_at IS OLD.created_at
+        )
+        BEGIN SELECT RAISE(ABORT, 'pending patch payload/provenance is immutable'); END;
+        CREATE TRIGGER pending_patches_status_version_guard
+        BEFORE UPDATE OF status, version ON pending_patches
+        WHEN NEW.version < OLD.version OR NEW.version > OLD.version + 1
+          OR (NEW.status = OLD.status AND NEW.version <> OLD.version)
+          OR (NEW.status <> OLD.status AND NEW.version <> OLD.version + 1)
+          OR (OLD.status <> 'pending' AND NEW.status <> OLD.status)
+          OR NEW.status NOT IN ('pending', 'accepted', 'rejected', 'expired', 'superseded')
+        BEGIN SELECT RAISE(ABORT, 'pending patch status/version transition is invalid'); END;
+        CREATE TRIGGER patch_evidence_project_guard
+        BEFORE INSERT ON patch_evidence
+        WHEN (SELECT project_id FROM pending_patches WHERE id = NEW.patch_id) IS NULL
+          OR (SELECT project_id FROM pending_patches WHERE id = NEW.patch_id) <> NEW.project_id
+          OR (SELECT project_id FROM evidence_sources WHERE id = NEW.evidence_source_id) IS NULL
+          OR (SELECT project_id FROM evidence_sources WHERE id = NEW.evidence_source_id) <> NEW.project_id
+        BEGIN SELECT RAISE(ABORT, 'patch evidence project mismatch'); END;
+        CREATE TRIGGER patch_evidence_immutable_guard
+        BEFORE UPDATE OF project_id, patch_id, evidence_source_id, created_at ON patch_evidence
+        WHEN NOT (NEW.project_id IS OLD.project_id AND NEW.patch_id IS OLD.patch_id AND NEW.evidence_source_id IS OLD.evidence_source_id AND NEW.created_at IS OLD.created_at)
+        BEGIN SELECT RAISE(ABORT, 'patch evidence is immutable'); END;
+        CREATE TRIGGER patch_application_project_guard
+        BEFORE INSERT ON patch_applications
+        WHEN (SELECT project_id FROM pending_patches WHERE id = NEW.patch_id) IS NULL
+          OR (SELECT project_id FROM pending_patches WHERE id = NEW.patch_id) <> NEW.project_id
+          OR (NEW.resulting_fact_id IS NOT NULL AND ((SELECT project_id FROM facts WHERE id = NEW.resulting_fact_id) IS NULL OR (SELECT project_id FROM facts WHERE id = NEW.resulting_fact_id) <> NEW.project_id))
+          OR (NEW.resulting_state_id IS NOT NULL AND ((SELECT project_id FROM entity_states WHERE id = NEW.resulting_state_id) IS NULL OR (SELECT project_id FROM entity_states WHERE id = NEW.resulting_state_id) <> NEW.project_id))
+        BEGIN SELECT RAISE(ABORT, 'patch application project mismatch'); END;
+        CREATE TRIGGER patch_application_operation_guard
+        BEFORE INSERT ON patch_applications
+        WHEN (SELECT operation FROM pending_patches WHERE id = NEW.patch_id) IS NULL
+          OR (SELECT operation FROM pending_patches WHERE id = NEW.patch_id) <> NEW.operation
+          OR (NEW.operation IN ('add_fact', 'replace_fact') AND (NEW.resulting_fact_id IS NULL OR NEW.resulting_state_id IS NOT NULL))
+          OR (NEW.operation = 'retract_fact' AND (NEW.resulting_fact_id <> (SELECT target_fact_id FROM pending_patches WHERE id = NEW.patch_id) OR NEW.resulting_state_id IS NOT NULL))
+          OR (NEW.operation = 'add_state' AND (NEW.resulting_state_id IS NULL OR NEW.resulting_fact_id IS NOT NULL))
+        BEGIN SELECT RAISE(ABORT, 'patch application operation/result mismatch'); END;
+        CREATE TRIGGER patch_application_immutable_guard
+        BEFORE UPDATE OF id, project_id, patch_id, operation, resulting_fact_id, resulting_state_id, applied_payload_json, request_id, created_at ON patch_applications
+        WHEN NOT (NEW.id IS OLD.id AND NEW.project_id IS OLD.project_id AND NEW.patch_id IS OLD.patch_id AND NEW.operation IS OLD.operation
+          AND NEW.resulting_fact_id IS OLD.resulting_fact_id AND NEW.resulting_state_id IS OLD.resulting_state_id
+          AND NEW.applied_payload_json IS OLD.applied_payload_json AND NEW.request_id IS OLD.request_id AND NEW.created_at IS OLD.created_at)
+        BEGIN SELECT RAISE(ABORT, 'patch application is immutable'); END;
+      `);
+
+      /* A status transition can be forged only if all durable provenance is
+       * forged as well. This guard checks the actual resulting Fact/State,
+       * its evidence, source revision, model fence, and domain events. */
+      database.exec(`
+        CREATE TRIGGER pending_patches_accepted_application_guard
+        BEFORE UPDATE OF status ON pending_patches
+        WHEN NEW.status = 'accepted'
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM patch_applications pa
+              WHERE pa.project_id = NEW.project_id AND pa.patch_id = NEW.id AND pa.operation = NEW.operation
+                AND ((NEW.operation IN ('add_fact', 'replace_fact') AND pa.resulting_fact_id IS NOT NULL AND pa.resulting_state_id IS NULL)
+                  OR (NEW.operation = 'retract_fact' AND pa.resulting_fact_id = NEW.target_fact_id AND pa.resulting_state_id IS NULL)
+                  OR (NEW.operation = 'add_state' AND pa.resulting_state_id IS NOT NULL AND pa.resulting_fact_id IS NULL))
+                AND EXISTS (SELECT 1 FROM audit_events ae WHERE ae.project_id = pa.project_id AND ae.aggregate_id = NEW.id AND ae.event_type = 'patch.accepted' AND ae.request_id = pa.request_id)
+                AND EXISTS (SELECT 1 FROM audit_events ae WHERE ae.project_id = pa.project_id AND ae.aggregate_id = NEW.id AND ae.event_type = 'story_bible.changed' AND ae.request_id = pa.request_id)
+                AND EXISTS (SELECT 1 FROM outbox_events oe WHERE oe.project_id = pa.project_id AND oe.aggregate_id = NEW.id AND oe.event_type = 'patch.accepted' AND oe.request_id = pa.request_id)
+                AND EXISTS (SELECT 1 FROM outbox_events oe WHERE oe.project_id = pa.project_id AND oe.aggregate_id = NEW.id AND oe.event_type = 'story_bible.changed' AND oe.request_id = pa.request_id)
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM scene_revisions sr JOIN script_documents d ON d.id = sr.document_id AND d.project_id = sr.project_id
+              WHERE sr.id = NEW.source_revision_id AND sr.project_id = NEW.project_id AND d.current_revision_id = sr.document_revision_id
+                AND (NEW.operation = 'retract_fact' OR sr.status = 'active')
+            )
+            OR (NEW.operation = 'add_state' AND (NEW.truth_class <> 'canon' OR NEW.inference_id IS NOT NULL OR NEW.model_run_id IS NOT NULL OR NEW.proposed_by <> 'user'))
+            OR (NEW.model_run_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM model_runs mr WHERE mr.id = NEW.model_run_id AND mr.project_id = NEW.project_id AND mr.status = 'succeeded' AND mr.source_revision_id = NEW.source_revision_id))
+            OR EXISTS (
+              SELECT 1 FROM patch_evidence pe JOIN evidence_sources es ON es.id = pe.evidence_source_id AND es.project_id = pe.project_id
+              WHERE pe.project_id = NEW.project_id AND pe.patch_id = NEW.id
+                AND (es.scene_revision_id IS NOT NEW.source_revision_id OR es.model_run_id IS NOT NEW.model_run_id)
+            )
+            OR (NEW.operation = 'add_state' AND NOT EXISTS (
+              SELECT 1
+              FROM patch_applications pa JOIN entity_states es ON es.id = pa.resulting_state_id AND es.project_id = NEW.project_id
+              WHERE pa.project_id = NEW.project_id AND pa.patch_id = NEW.id AND pa.operation = 'add_state'
+                AND es.status = 'active' AND es.entity_id = NEW.target_entity_id
+                AND EXISTS (SELECT 1 FROM entities e WHERE e.id = es.entity_id AND e.project_id = NEW.project_id AND e.entity_type = 'character' AND e.status IN ('active', 'draft') AND e.merged_into_entity_id IS NULL)
+                AND json_extract(pa.applied_payload_json, '$.subjectEntityId') = NEW.target_entity_id
+                AND json_extract(pa.applied_payload_json, '$.subjectEntityId') = json_extract(NEW.payload_json, '$.subjectEntityId')
+                AND json_extract(pa.applied_payload_json, '$.predicate') = json_extract(NEW.payload_json, '$.predicate')
+                AND json_extract(pa.applied_payload_json, '$.valueType') = json_extract(NEW.payload_json, '$.valueType')
+                AND json_extract(pa.applied_payload_json, '$.appliesAtSceneId') = json_extract(NEW.payload_json, '$.appliesAtSceneId')
+                AND json_extract(pa.applied_payload_json, '$.validToSceneId') IS json_extract(NEW.payload_json, '$.validToSceneId')
+                AND json_extract(pa.applied_payload_json, '$.continuityGroupId') = json_extract(NEW.payload_json, '$.continuityGroupId')
+                AND json_extract(pa.applied_payload_json, '$.carryForward') = json_extract(NEW.payload_json, '$.carryForward')
+                AND json_extract(pa.applied_payload_json, '$.priority') = json_extract(NEW.payload_json, '$.priority')
+                AND es.predicate = json_extract(pa.applied_payload_json, '$.predicate')
+                AND es.value_type = json_extract(pa.applied_payload_json, '$.valueType')
+                AND es.value_json = json(pa.applied_payload_json -> '$.value')
+                AND es.applies_at_scene_id = json_extract(pa.applied_payload_json, '$.appliesAtSceneId')
+                AND es.source_revision_id = NEW.source_revision_id
+                AND es.continuity_group_id = json_extract(pa.applied_payload_json, '$.continuityGroupId')
+                AND es.carry_forward = json_extract(pa.applied_payload_json, '$.carryForward')
+                AND es.priority = json_extract(pa.applied_payload_json, '$.priority')
+                AND es.valid_to_scene_id IS json_extract(pa.applied_payload_json, '$.validToSceneId')
+                AND EXISTS (
+                  SELECT 1 FROM patch_evidence pe JOIN evidence_sources ev ON ev.id = pe.evidence_source_id
+                  WHERE pe.project_id = NEW.project_id AND pe.patch_id = NEW.id AND ev.id = es.source_id
+                    AND ev.scene_revision_id = NEW.source_revision_id AND ev.model_run_id IS NULL
+                )
+                AND EXISTS (SELECT 1 FROM entities e WHERE e.id = NEW.target_entity_id AND e.project_id = NEW.project_id AND e.version = NEW.base_version)
+            ))
+            OR (NEW.operation = 'add_state' AND EXISTS (
+              SELECT 1 FROM patch_applications pa JOIN entity_states es ON es.id = pa.resulting_state_id
+              WHERE pa.project_id = NEW.project_id AND pa.patch_id = NEW.id AND es.entity_id = NEW.target_entity_id
+                AND (es.predicate <> json_extract(pa.applied_payload_json, '$.predicate') OR es.value_json <> json(pa.applied_payload_json -> '$.value'))
+            ))
+          )
+        BEGIN SELECT RAISE(ABORT, 'accepted patch result does not match Canon provenance'); END;
+      `);
+
+      /* Re-install the complete Phase 2 Canon-result fence after the
+       * pending_patches CHECK-table rebuild. State commands are guarded by
+       * the add_state-specific trigger above; these clauses preserve the
+       * v11 Fact/Inference lifecycle and supersede invariants verbatim. */
+      database.exec(`
+        CREATE TRIGGER IF NOT EXISTS pending_patches_accepted_fact_provenance_guard
+        BEFORE UPDATE OF status ON pending_patches
+        WHEN NEW.status = 'accepted' AND NEW.operation <> 'add_state'
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM scene_revisions sr JOIN script_documents d ON d.id = sr.document_id AND d.project_id = sr.project_id
+              WHERE sr.id = NEW.source_revision_id AND sr.project_id = NEW.project_id AND d.current_revision_id = sr.document_revision_id
+                AND (NEW.operation = 'retract_fact' OR sr.status = 'active')
+            )
+            OR (NEW.operation = 'retract_fact' AND NEW.inference_id IS NOT NULL)
+            OR (NEW.inference_id IS NOT NULL AND NOT EXISTS (
+              SELECT 1 FROM inferences i WHERE i.id = NEW.inference_id AND i.project_id = NEW.project_id
+                AND i.model_run_id = NEW.model_run_id AND i.status = 'promoted'
+            ))
+            OR (
+              NEW.operation IN ('add_fact', 'replace_fact')
+              AND NOT EXISTS (
+                SELECT 1 FROM patch_applications pa JOIN facts f ON f.id = pa.resulting_fact_id AND f.project_id = NEW.project_id
+                WHERE pa.project_id = NEW.project_id AND pa.patch_id = NEW.id AND pa.operation = NEW.operation
+                  AND f.status = 'active' AND f.truth_class = 'canon'
+                  AND f.subject_entity_id = NEW.target_entity_id
+                  AND json_extract(pa.applied_payload_json, '$.subjectEntityId') = NEW.target_entity_id
+                  AND f.predicate = json_extract(pa.applied_payload_json, '$.predicate')
+                  AND f.value_type = json_extract(pa.applied_payload_json, '$.valueType')
+                  AND f.value_json = json(pa.applied_payload_json -> '$.value')
+                  AND f.scope = json_extract(pa.applied_payload_json, '$.scope')
+                  AND f.scene_id IS json_extract(pa.applied_payload_json, '$.sceneId')
+                  AND f.valid_from_scene_id IS json_extract(pa.applied_payload_json, '$.validFromSceneId')
+                  AND f.valid_to_scene_id IS json_extract(pa.applied_payload_json, '$.validToSceneId')
+                  AND f.promoted_from_inference_id IS NEW.inference_id
+                  AND (NEW.inference_id IS NULL OR EXISTS (
+                    SELECT 1 FROM inferences i WHERE i.id = NEW.inference_id AND i.project_id = NEW.project_id
+                      AND i.model_run_id = NEW.model_run_id AND i.subject_entity_id = f.subject_entity_id
+                      AND i.predicate = f.predicate AND i.value_type = f.value_type AND i.scope = f.scope
+                      AND i.scene_id IS f.scene_id AND i.valid_from_scene_id IS f.valid_from_scene_id AND i.valid_to_scene_id IS f.valid_to_scene_id
+                  ))
+                  AND (NEW.inference_id IS NULL OR (
+                    EXISTS (SELECT 1 FROM inference_evidence ie JOIN patch_evidence pe ON pe.project_id = ie.project_id AND pe.patch_id = NEW.id AND pe.evidence_source_id = ie.evidence_source_id WHERE ie.project_id = NEW.project_id AND ie.inference_id = NEW.inference_id)
+                    AND NOT EXISTS (SELECT 1 FROM inference_evidence ie WHERE ie.project_id = NEW.project_id AND ie.inference_id = NEW.inference_id AND NOT EXISTS (SELECT 1 FROM patch_evidence pe WHERE pe.project_id = NEW.project_id AND pe.patch_id = NEW.id AND pe.evidence_source_id = ie.evidence_source_id))
+                  ))
+                  AND EXISTS (
+                    SELECT 1 FROM patch_evidence pe JOIN evidence_sources es ON es.id = pe.evidence_source_id AND es.project_id = pe.project_id
+                    WHERE pe.project_id = NEW.project_id AND pe.patch_id = NEW.id AND es.id = f.source_id
+                      AND es.scene_revision_id = NEW.source_revision_id AND (NEW.model_run_id IS NULL OR es.model_run_id = NEW.model_run_id)
+                  )
+                  AND (
+                    (NEW.operation = 'add_fact' AND NEW.target_fact_id IS NULL AND f.supersedes_fact_id IS NULL
+                      AND EXISTS (SELECT 1 FROM entities e WHERE e.id = NEW.target_entity_id AND e.project_id = NEW.project_id AND e.version = NEW.base_version))
+                    OR (NEW.operation = 'replace_fact' AND f.supersedes_fact_id = NEW.target_fact_id
+                      AND EXISTS (SELECT 1 FROM facts previous WHERE previous.id = NEW.target_fact_id AND previous.project_id = NEW.project_id AND previous.status = 'superseded' AND previous.version = NEW.base_version + 1 AND previous.subject_entity_id = f.subject_entity_id AND previous.predicate = f.predicate AND previous.scope = f.scope AND previous.scene_id IS f.scene_id AND previous.valid_from_scene_id IS f.valid_from_scene_id AND previous.valid_to_scene_id IS f.valid_to_scene_id))
+                  )
+              )
+            )
+            OR (
+              NEW.operation = 'retract_fact' AND NOT EXISTS (
+                SELECT 1 FROM patch_applications pa JOIN facts f ON f.id = pa.resulting_fact_id AND f.project_id = NEW.project_id
+                WHERE pa.project_id = NEW.project_id AND pa.patch_id = NEW.id AND pa.operation = 'retract_fact' AND pa.resulting_fact_id = NEW.target_fact_id
+                  AND json(pa.applied_payload_json) = '{}' AND f.status = 'retracted' AND f.truth_class = 'canon' AND f.version = NEW.base_version + 1
+                  AND EXISTS (SELECT 1 FROM patch_evidence pe JOIN evidence_sources es ON es.id = pe.evidence_source_id AND es.project_id = pe.project_id WHERE pe.project_id = NEW.project_id AND pe.patch_id = NEW.id AND es.scene_revision_id = NEW.source_revision_id AND (NEW.model_run_id IS NULL OR es.model_run_id = NEW.model_run_id))
+              )
+            )
+          )
+        BEGIN SELECT RAISE(ABORT, 'accepted patch result does not match Canon provenance'); END;
+
+        CREATE TRIGGER IF NOT EXISTS pending_patches_accepted_model_provenance_guard
+        BEFORE UPDATE OF status ON pending_patches
+        WHEN NEW.status = 'accepted'
+          AND (
+            (NEW.model_run_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM model_runs mr WHERE mr.id = NEW.model_run_id AND mr.project_id = NEW.project_id AND mr.status = 'succeeded' AND mr.source_revision_id = NEW.source_revision_id))
+            OR EXISTS (SELECT 1 FROM patch_evidence pe JOIN evidence_sources es ON es.id = pe.evidence_source_id AND es.project_id = pe.project_id WHERE pe.project_id = NEW.project_id AND pe.patch_id = NEW.id AND (es.scene_revision_id IS NOT NEW.source_revision_id OR es.model_run_id IS NOT NEW.model_run_id))
+            OR (NEW.inference_id IS NOT NULL AND EXISTS (SELECT 1 FROM inference_evidence ie JOIN evidence_sources es ON es.id = ie.evidence_source_id AND es.project_id = ie.project_id WHERE ie.project_id = NEW.project_id AND ie.inference_id = NEW.inference_id AND (es.scene_revision_id IS NOT NEW.source_revision_id OR es.model_run_id IS NOT NEW.model_run_id)))
+          )
+        BEGIN SELECT RAISE(ABORT, 'accepted patch model/evidence provenance is invalid'); END;
+      `);
+    });
   }
 }

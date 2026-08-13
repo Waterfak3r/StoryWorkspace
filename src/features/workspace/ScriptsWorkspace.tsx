@@ -4,15 +4,16 @@ import * as React from "react";
 import { ArrowDown, ArrowUp, Check, Play, Plus, Trash, X } from "@phosphor-icons/react";
 import type { DocumentRevision, SceneRevision, ScriptDocument } from "@/domain/document";
 import type { AnalysisRun, AnalysisRunStatus, EntityMention } from "@/domain/analysis";
-import type { AcceptEditedPatchInput, AcceptPatchInput, Patch, PatchApplication, RejectPatchInput } from "@/domain/canon-patch";
+import type { AcceptEditedPatchInput, AcceptPatchInput, RejectPatchInput } from "@/domain/canon-patch";
 import type { SceneEntityLink } from "@/domain/scene-link";
 import { predicateSchemaRegistry } from "@/domain/story-bible";
-import type { CreateEntityInput, Entity, EvidenceSource, Fact, FactScope, FactValueType } from "@/domain/story-bible";
+import type { CreateEntityInput, Entity, EntityState, EvidenceSource, Fact, FactScope, FactValueType } from "@/domain/story-bible";
 import {
   WorkspaceApiError,
   acceptEditedPatch,
   acceptPatch,
   createDocumentRevision,
+  createContinuityGroup,
   createEntity,
   createEntityAlias,
   enqueueAnalysis,
@@ -21,12 +22,25 @@ import {
   getSceneEntityReview,
   getScriptDocument,
   getDocumentRevision,
+  getResolvedState,
+  listContinuityGroups,
   listEntities,
   proposeFactPatch,
+  proposeStatePatch,
   rejectPatch,
   reviewSceneEntityLink,
 } from "./workspace-api";
-import type { PatchProposalResult, SceneEntityReview, ScenePatchReview as ApiScenePatchReview } from "./workspace-api";
+import type {
+  ContinuityGroup,
+  ContinuityGroupKind,
+  PatchProposalResult,
+  ResolvedState,
+  SceneEntityReview,
+  ScenePatchReview as ApiScenePatchReview,
+  StatePatchProposalInput,
+  WorkspacePatch,
+  WorkspacePatchApplication,
+} from "./workspace-api";
 import {
   analysisSelectionKey,
   candidateValueFromInput,
@@ -42,6 +56,11 @@ import {
   replaceCanonicalEntity,
   replaceCanonicalPatch,
   replaceCanonicalRecord,
+  isCurrentWorkspaceRevisionResponse,
+  isFactPredicate,
+  statePredicateLabel,
+  stateTierLabel,
+  workspaceRevisionSelectionKey,
 } from "./scripts-workspace-helpers";
 
 type ScriptsWorkspaceProps = {
@@ -58,6 +77,7 @@ type EditableScene = {
   content: string;
   narrativeRank: number;
   status: SceneRevision["status"];
+  continuityGroupId: string;
   persisted: boolean;
 };
 
@@ -77,7 +97,7 @@ type PatchReviewState = {
   review: ScenePatchReview | null;
   error: string | null;
   action: "reviewing" | "proposing" | "accepting" | "rejecting" | "refreshing" | null;
-  latestConflict: Patch | null;
+  latestConflict: WorkspacePatch | null;
 };
 
 type FactCandidateDraft = {
@@ -86,6 +106,16 @@ type FactCandidateDraft = {
   value: unknown;
   valueType: FactValueType;
   scope: FactScope;
+  evidenceQuote: string;
+};
+
+type StateCandidateDraft = {
+  entityId: string;
+  predicate: "wardrobe.current" | "state.injury" | "state.held_prop";
+  value: string;
+  valueType: "string" | "entity_ref";
+  carryForward: boolean;
+  priority: number;
   evidenceQuote: string;
 };
 
@@ -98,9 +128,9 @@ export type PatchActionRequest = {
 };
 
 export type PatchReviewActionHandlers = {
-  onAccept?: (patch: Patch, request: PatchActionRequest) => void;
-  onAcceptEdited?: (patch: Patch, payload: Record<string, unknown>, request: PatchActionRequest) => void;
-  onReject?: (patch: Patch, reason: string | null, request: PatchActionRequest) => void;
+  onAccept?: (patch: WorkspacePatch, request: PatchActionRequest) => void;
+  onAcceptEdited?: (patch: WorkspacePatch, payload: Record<string, unknown>, request: PatchActionRequest) => void;
+  onReject?: (patch: WorkspacePatch, reason: string | null, request: PatchActionRequest) => void;
 };
 
 type EntityType = Extract<CreateEntityInput["type"], "character" | "location" | "prop">;
@@ -136,6 +166,7 @@ function sceneDraftsFromRevision(revision: DocumentRevision | null): EditableSce
       content: scene.content,
       narrativeRank: scene.narrativeRank,
       status: scene.status,
+      continuityGroupId: scene.continuityGroupId,
       persisted: true,
     }));
 }
@@ -201,6 +232,18 @@ function associatedEntitiesForReview(review: SceneEntityReview | null, entities:
   return associated;
 }
 
+function confirmedEntitiesForReview(review: SceneEntityReview | null, entities: readonly Entity[]) {
+  if (!review) return [] as Entity[];
+  const available = [...review.entities, ...entities];
+  const confirmed: Entity[] = [];
+  for (const link of review.links) {
+    if (link.status !== "confirmed") continue;
+    const entity = entityForLink(link, available);
+    if (entity && !confirmed.some((candidate) => candidate.id === entity.id)) confirmed.push(entity);
+  }
+  return confirmed;
+}
+
 function mentionSnippet(mention: string, link: SceneEntityLink, mentions: readonly EntityMention[], content: string) {
   const sourceMention = link.mentionIds
     .map((mentionId) => mentions.find((item) => item.id === mentionId))
@@ -235,10 +278,19 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const [revisionSaving, setRevisionSaving] = React.useState(false);
   const [revisionDirty, setRevisionDirty] = React.useState(false);
   const [revisionError, setRevisionError] = React.useState<string | null>(null);
+  const [continuityGroups, setContinuityGroups] = React.useState<ContinuityGroup[]>([]);
+  const [continuityGroupsLoading, setContinuityGroupsLoading] = React.useState(false);
+  const [continuityGroupsError, setContinuityGroupsError] = React.useState<string | null>(null);
+  const [groupFormOpen, setGroupFormOpen] = React.useState(false);
+  const [groupKind, setGroupKind] = React.useState<ContinuityGroupKind>("flashback");
+  const [groupName, setGroupName] = React.useState("");
+  const [groupSaving, setGroupSaving] = React.useState(false);
   const [analysisByKey, setAnalysisByKey] = React.useState<Record<string, AnalysisState>>({});
   // Keep patch review keyed by Scene + immutable SceneRevision so a late
   // response cannot bleed into another selection.
   const [patchReviewByKey, setPatchReviewByKey] = React.useState<Record<string, PatchReviewState>>({});
+  const [resolvedStateByKey, setResolvedStateByKey] = React.useState<Record<string, { selection: { projectId: string; documentId: string; sceneId: string; sceneRevisionId: string }; loading: boolean; state: ResolvedState | null; error: string | null }>>({});
+  const [resolvedStateRefreshToken, setResolvedStateRefreshToken] = React.useState(0);
   const [entities, setEntities] = React.useState<Entity[]>([]);
   const [entityLoading, setEntityLoading] = React.useState(false);
   const [entityFormOpen, setEntityFormOpen] = React.useState(false);
@@ -251,8 +303,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const documentRequestRef = React.useRef(0);
   const analysisSelectionRef = React.useRef<AnalysisState["selection"] | null>(null);
   const patchSelectionRef = React.useRef<PatchReviewState["selection"] | null>(null);
+  const resolvedStateSelectionRef = React.useRef<{ projectId: string; documentId: string; sceneId: string; sceneRevisionId: string } | null>(null);
   const analysisByKeyRef = React.useRef<Record<string, AnalysisState>>({});
   const patchReviewByKeyRef = React.useRef<Record<string, PatchReviewState>>({});
+  const resolvedStateByKeyRef = React.useRef<typeof resolvedStateByKey>({});
   const documentId = document?.id ?? null;
   const documentVersion = document?.version ?? null;
   const documentRevisionId = document?.currentRevisionId ?? null;
@@ -268,6 +322,12 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const selectedPatchState = selectedAnalysisKey ? patchReviewByKey[selectedAnalysisKey] ?? null : null;
   const selectedPatchReview = selectedPatchState?.review ?? null;
   const associatedEntities = associatedEntitiesForReview(selectedAnalysis?.review ?? null, entities);
+  const confirmedCharacters = confirmedEntitiesForReview(selectedAnalysis?.review ?? null, entities).filter((entity) => entity.type === "character");
+  const stateProps = entities.filter((entity) => entity.type === "prop" && (entity.status === "active" || entity.status === "draft"));
+  const selectedResolvedStateKey = documentId && selectedScene && selectedRevisionId
+    ? workspaceRevisionSelectionKey({ projectId, documentId, sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId })
+    : null;
+  const selectedResolvedState = selectedResolvedStateKey ? resolvedStateByKey[selectedResolvedStateKey] ?? null : null;
 
   React.useEffect(() => {
     setFreshDocument(document);
@@ -285,6 +345,11 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     setRevision(null);
     setScenes([]);
     setSelectedSceneId(null);
+    setContinuityGroups([]);
+    setContinuityGroupsError(null);
+    setGroupFormOpen(false);
+    resolvedStateSelectionRef.current = null;
+    setResolvedStateByKey({});
     analysisSelectionRef.current = null;
     patchSelectionRef.current = null;
     setAnalysisByKey({});
@@ -292,6 +357,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
 
     if (!documentId) {
       setDocumentLoading(false);
+      setContinuityGroupsLoading(false);
       setFreshDocument(null);
       return () => { cancelled = true; };
     }
@@ -302,6 +368,20 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
         if (cancelled || documentRequestRef.current !== requestNumber) return;
         setFreshDocument(canonical);
         onDocumentChanged(canonical);
+        setContinuityGroupsLoading(true);
+        void listContinuityGroups(projectId, canonical.id)
+          .then((groups) => {
+            if (cancelled || documentRequestRef.current !== requestNumber) return;
+            setContinuityGroups(groups);
+            setContinuityGroupsError(null);
+          })
+          .catch((error: unknown) => {
+            if (cancelled || documentRequestRef.current !== requestNumber) return;
+            setContinuityGroupsError(humanError(error, "Continuity groups could not be loaded."));
+          })
+          .finally(() => {
+            if (!cancelled && documentRequestRef.current === requestNumber) setContinuityGroupsLoading(false);
+          });
         if (!canonical.currentRevisionId) {
           setDocumentLoading(false);
           setStatusMessage("No saved revision yet. Add a scene, then save the script.");
@@ -349,6 +429,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   React.useEffect(() => {
     patchReviewByKeyRef.current = patchReviewByKey;
   }, [patchReviewByKey]);
+
+  React.useEffect(() => {
+    resolvedStateByKeyRef.current = resolvedStateByKey;
+  }, [resolvedStateByKey]);
 
   React.useEffect(() => {
     if (!selectedSceneAnalysisId || !selectedRevisionId || !revision) {
@@ -453,7 +537,39 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     return () => { cancelled = true; };
   }, [projectId, revision, selectedRevisionId, selectedSceneAnalysisId]);
 
-  const updateScene = React.useCallback((sceneId: string, update: Partial<Pick<EditableScene, "title" | "content">>) => {
+  React.useEffect(() => {
+    if (!documentId || !selectedSceneAnalysisId || !selectedRevisionId || !revision) {
+      resolvedStateSelectionRef.current = null;
+      return;
+    }
+    const selection = {
+      projectId,
+      documentId,
+      sceneId: selectedSceneAnalysisId,
+      sceneRevisionId: selectedRevisionId,
+    };
+    resolvedStateSelectionRef.current = selection;
+    const key = workspaceRevisionSelectionKey(selection);
+    const existing = resolvedStateByKeyRef.current[key];
+    if (existing?.loading || existing?.state || existing?.error) return;
+    let cancelled = false;
+    setResolvedStateByKey((current) => ({
+      ...current,
+      [key]: { selection, loading: true, state: current[key]?.state ?? null, error: null },
+    }));
+    void getResolvedState(projectId, selectedSceneAnalysisId, { sceneRevisionId: selectedRevisionId })
+      .then((state) => {
+        if (cancelled || !isCurrentWorkspaceRevisionResponse(resolvedStateSelectionRef.current, selection)) return;
+        setResolvedStateByKey((current) => ({ ...current, [key]: { selection, loading: false, state, error: null } }));
+      })
+      .catch((error: unknown) => {
+        if (cancelled || !isCurrentWorkspaceRevisionResponse(resolvedStateSelectionRef.current, selection)) return;
+        setResolvedStateByKey((current) => ({ ...current, [key]: { selection, loading: false, state: current[key]?.state ?? null, error: humanError(error, "Resolved Scene State could not be loaded.") } }));
+      });
+    return () => { cancelled = true; };
+  }, [documentId, projectId, resolvedStateRefreshToken, revision, selectedRevisionId, selectedSceneAnalysisId]);
+
+  const updateScene = React.useCallback((sceneId: string, update: Partial<Pick<EditableScene, "title" | "content" | "continuityGroupId">>) => {
     setScenes((current) => current.map((scene) => scene.id === sceneId ? { ...scene, ...update } : scene));
     setRevisionDirty(true);
     onDirtyChange(true);
@@ -476,14 +592,14 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     patchSelectionRef.current = null;
     setScenes((current) => [
       ...current,
-      { id, title: "", content: "", narrativeRank: current.length, status: "active", persisted: false },
+      { id, title: "", content: "", narrativeRank: current.length, status: "active", continuityGroupId: continuityGroups.find((group) => group.isDefault)?.id ?? continuityGroups[0]?.id ?? "", persisted: false },
     ]);
     setSelectedSceneId(id);
     setRevisionDirty(true);
     onDirtyChange(true);
     setRevisionError(null);
     setStatusMessage("New scene added. Save the revision when ready.");
-  }, [onDirtyChange]);
+  }, [continuityGroups, onDirtyChange]);
 
   const removeScene = React.useCallback((sceneId: string) => {
     analysisSelectionRef.current = null;
@@ -537,15 +653,19 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
           if (left.status !== "deleted" && right.status === "deleted") return -1;
           return left.narrativeRank - right.narrativeRank || left.id.localeCompare(right.id);
         })
-        .map((scene, index) => ({
+        .map((scene, index) => {
           // New scenes receive a server UUID on first save. Persisted scenes
           // retain their IDs so links and analysis remain attached.
-          ...(scene.persisted ? { id: scene.id } : {}),
-          title: scene.title,
-          content: scene.content,
-          narrativeRank: index,
-          status: scene.status,
-        }));
+          const continuityGroupId = scene.continuityGroupId || continuityGroups.find((group) => group.isDefault)?.id || continuityGroups[0]?.id;
+          return {
+            ...(scene.persisted ? { id: scene.id } : {}),
+            title: scene.title,
+            content: scene.content,
+            narrativeRank: index,
+            ...(continuityGroupId ? { continuityGroupId } : {}),
+            status: scene.status,
+          };
+        });
       const saved = await createDocumentRevision(projectId, saveDocumentId, {
         baseVersion,
         expectedVersion: baseVersion,
@@ -578,7 +698,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     } finally {
       setRevisionSaving(false);
     }
-  }, [freshDocument, onDirtyChange, onDocumentChanged, projectId, revisionDirty, revisionSaving, scenes, selectedSceneId]);
+  }, [continuityGroups, freshDocument, onDirtyChange, onDocumentChanged, projectId, revisionDirty, revisionSaving, scenes, selectedSceneId]);
 
   const setAnalysisState = React.useCallback((selection: AnalysisState["selection"], update: Partial<AnalysisState>) => {
     const key = analysisSelectionKey(selection);
@@ -662,7 +782,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     }
   }, [projectId, setPatchState]);
 
-  const mergePatchMutationResult = React.useCallback((selection: PatchReviewState["selection"], updatedPatch: Patch, fact: Fact | null, application: PatchApplication | null) => {
+  const mergePatchMutationResult = React.useCallback((selection: PatchReviewState["selection"], updatedPatch: WorkspacePatch, fact: Fact | null, resultingState: EntityState | null, application: WorkspacePatchApplication | null) => {
     const key = patchSelectionKey(selection);
     setPatchReviewByKey((current) => {
       const state = current[key];
@@ -671,6 +791,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
         ...state.review,
         patches: replaceCanonicalPatch(state.review.patches, updatedPatch),
         facts: fact ? replaceCanonicalRecord(state.review.facts, fact) : state.review.facts,
+        states: resultingState ? replaceCanonicalRecord(state.review.states, resultingState) : state.review.states,
         applications: application ? replaceCanonicalRecord(state.review.applications, application) : state.review.applications,
       };
       return { ...current, [key]: { ...state, review, loading: false, action: null, error: null } };
@@ -694,35 +815,52 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
 
   const runPatchMutation = React.useCallback(async (
     selection: PatchReviewState["selection"],
-    patch: Patch,
+    patch: WorkspacePatch,
     kind: "accept" | "accept-edited" | "reject",
     request: PatchActionRequest,
     payload?: Record<string, unknown>,
     reason?: string | null,
   ) => {
     if (!isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
+    if (revisionDirty) {
+      setPatchState(selection, { error: "Save this Scene revision before reviewing its revision-bound Patch." });
+      setStatusMessage("Save the revision before reviewing Canon or Scene State.");
+      return;
+    }
     setPatchState(selection, { loading: true, action: kind === "reject" ? "rejecting" : "accepting", error: null, latestConflict: null });
     try {
       let acceptedFact = false;
+      let acceptedState = false;
       if (kind === "accept") {
         const input: AcceptPatchInput = { expectedVersion: request.expectedVersion, requestId: request.requestId, actorId: "local-user" };
         const result = await acceptPatch(projectId, patch.id, input);
         acceptedFact = Boolean(result.fact);
-        mergePatchMutationResult(selection, result.patch, result.fact, result.application);
+        acceptedState = Boolean(result.state);
+        mergePatchMutationResult(selection, result.patch, result.fact, result.state ?? null, result.application);
       } else if (kind === "accept-edited") {
         const input: AcceptEditedPatchInput = { expectedVersion: request.expectedVersion, requestId: request.requestId, actorId: "local-user", payload: payload ?? patch.payload };
         const result = await acceptEditedPatch(projectId, patch.id, input);
         acceptedFact = Boolean(result.fact);
-        mergePatchMutationResult(selection, result.patch, result.fact, result.application);
+        acceptedState = Boolean(result.state);
+        mergePatchMutationResult(selection, result.patch, result.fact, result.state ?? null, result.application);
       } else {
         const input: RejectPatchInput = { expectedVersion: request.expectedVersion, requestId: request.requestId, actorId: "local-user", reason: reason ?? null };
         const result = await rejectPatch(projectId, patch.id, input);
-        mergePatchMutationResult(selection, result.patch, null, null);
+        mergePatchMutationResult(selection, result.patch, null, null, null);
       }
       if (!isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
       await loadPatchReview(selection, "refreshing");
+      if (documentId) {
+        const resolvedKey = workspaceRevisionSelectionKey({ projectId, documentId, sceneId: selection.sceneId, sceneRevisionId: selection.sceneRevisionId });
+        setResolvedStateByKey((current) => {
+          const next = { ...current };
+          delete next[resolvedKey];
+          return next;
+        });
+        setResolvedStateRefreshToken((current) => current + 1);
+      }
       if (isCurrentPatchResponse(patchSelectionRef.current, selection)) {
-        setStatusMessage(kind === "reject" ? "Patch rejected; Canon was not changed." : acceptedFact ? "Patch accepted; Canon fact is now visible." : "Patch accepted; Canon review refreshed.");
+        setStatusMessage(kind === "reject" ? "Patch rejected; Canon and Scene State were not changed." : acceptedState ? "State Patch accepted; Scene State is now visible." : acceptedFact ? "Patch accepted; Canon fact is now visible." : "Patch accepted; Canon review refreshed.");
       }
     } catch (error) {
       if (!isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
@@ -737,10 +875,15 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
       });
       setStatusMessage(latestPatch ? "Patch conflict: the latest server Patch is shown for comparison." : "Patch update failed; the script remains saved.");
     }
-  }, [loadPatchReview, mergePatchMutationResult, projectId, setPatchState]);
+  }, [documentId, loadPatchReview, mergePatchMutationResult, projectId, revisionDirty, setPatchState]);
 
   const proposeCandidate = React.useCallback(async (selection: PatchReviewState["selection"], draft: FactCandidateDraft) => {
     if (!freshDocument || !revision || !isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
+    if (revisionDirty) {
+      setPatchState(selection, { error: "Save this Scene revision before proposing a revision-bound Canon Patch." });
+      setStatusMessage("Save the revision before proposing Canon changes.");
+      return;
+    }
     const sceneRevision = revision.sceneRevisions.find((item) => item.id === selection.sceneRevisionId && item.sceneId === selection.sceneId);
     if (!sceneRevision) return;
     const quote = draft.evidenceQuote.trim();
@@ -781,7 +924,54 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
       setPatchState(selection, { loading: false, action: null, error: humanError(error, "The fact candidate could not be proposed."), latestConflict: null });
       setStatusMessage("Fact proposal failed; the script remains saved.");
     }
-  }, [freshDocument, loadPatchReview, mergePatchProposalResult, projectId, revision, setPatchState]);
+  }, [freshDocument, loadPatchReview, mergePatchProposalResult, projectId, revision, revisionDirty, setPatchState]);
+
+  const proposeStateCandidate = React.useCallback(async (selection: PatchReviewState["selection"], draft: StateCandidateDraft) => {
+    if (!freshDocument || !revision || !documentId || !isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
+    if (revisionDirty) {
+      setPatchState(selection, { error: "Save this Scene revision before proposing State so its continuity group is frozen." });
+      setStatusMessage("Save the revision before proposing Scene State.");
+      return;
+    }
+    const sceneRevision = revision.sceneRevisions.find((item) => item.id === selection.sceneRevisionId && item.sceneId === selection.sceneId);
+    const entity = confirmedCharacters.find((candidate) => candidate.id === draft.entityId);
+    if (!sceneRevision || !entity || entity.type !== "character") return;
+    const quote = draft.evidenceQuote.trim();
+    const anchorStart = quote ? sceneRevision.content.indexOf(quote) : -1;
+    if (anchorStart < 0 || anchorStart + quote.length > sceneRevision.content.length) {
+      setPatchState(selection, { error: "Evidence quote must be present in the current Scene text." });
+      setStatusMessage("State Patch proposal needs evidence from this Scene revision.");
+      return;
+    }
+    const input: StatePatchProposalInput = {
+      documentId,
+      sceneId: selection.sceneId,
+      sceneRevisionId: selection.sceneRevisionId,
+      subjectEntityId: entity.id,
+      predicate: draft.predicate,
+      value: draft.value,
+      valueType: draft.valueType,
+      carryForward: draft.carryForward,
+      priority: draft.priority,
+      validToSceneId: null,
+      baseVersion: entity.version,
+      evidence: [{ anchorStart, anchorEnd: anchorStart + quote.length, quotedText: quote }],
+      requestId: requestId("state-patch-propose"),
+      actorId: "local-user",
+    };
+    setPatchState(selection, { loading: true, action: "proposing", error: null, latestConflict: null });
+    try {
+      const result = await proposeStatePatch(projectId, selection.sceneId, input);
+      mergePatchProposalResult(selection, result);
+      if (!isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
+      await loadPatchReview(selection, "refreshing");
+      if (isCurrentPatchResponse(patchSelectionRef.current, selection)) setStatusMessage("Scene State Patch proposed for review.");
+    } catch (error) {
+      if (!isCurrentPatchResponse(patchSelectionRef.current, selection)) return;
+      setPatchState(selection, { loading: false, action: null, error: humanError(error, "The Scene State Patch could not be proposed."), latestConflict: null });
+      setStatusMessage("State proposal failed; the script remains saved.");
+    }
+  }, [confirmedCharacters, documentId, freshDocument, loadPatchReview, mergePatchProposalResult, projectId, revision, revisionDirty, setPatchState]);
 
   const runAnalysis = React.useCallback(async () => {
     if (!freshDocument || !selectedScene || !selectedRevisionId || !revision || selectedAnalysis?.action === "running") return;
@@ -897,6 +1087,33 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     }
   }, [alias, canonicalName, entitySaving, entityType, projectId]);
 
+  const createProjectContinuityGroup = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!freshDocument || groupSaving) return;
+    const name = groupName.trim();
+    if (!name) return;
+    setGroupSaving(true);
+    setContinuityGroupsError(null);
+    try {
+      const created = await createContinuityGroup(projectId, freshDocument.id, {
+        name,
+        kind: groupKind,
+        requestId: requestId("continuity-group-create"),
+        actorId: "local-user",
+      });
+      setContinuityGroups((current) => replaceCanonicalRecord(current, created));
+      if (selectedSceneId) updateScene(selectedSceneId, { continuityGroupId: created.id });
+      setGroupName("");
+      setGroupFormOpen(false);
+      setStatusMessage(`Continuity group “${created.name}” created and selected.`);
+    } catch (error) {
+      setContinuityGroupsError(humanError(error, "The continuity group could not be created."));
+      setStatusMessage("Continuity group creation failed.");
+    } finally {
+      setGroupSaving(false);
+    }
+  }, [freshDocument, groupKind, groupName, groupSaving, projectId, selectedSceneId, updateScene]);
+
   if (!document) {
     return (
       <ScriptsEmptySection onCreate={onCreateDocument} />
@@ -965,6 +1182,34 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                 </div>
                 <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="scene-title">Title</label>
                 <input id="scene-title" value={selectedScene.title} onChange={(event) => updateScene(selectedScene.id, { title: event.target.value })} className="mt-2 min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink" maxLength={300} />
+                <div className="mt-5 min-w-0 rounded-lg border border-line bg-surface-raised p-3">
+                  <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <label className="block text-sm font-semibold text-ink" htmlFor="scene-continuity-group">Continuity group</label>
+                      <p className="mt-1 text-xs leading-5 text-ink-faint">State carries only within this lane. Flashbacks and dreams stay isolated.</p>
+                    </div>
+                    <button type="button" onClick={() => setGroupFormOpen((open) => !open)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-md border border-line px-2 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent"><Plus size={14} aria-hidden="true" /> {groupFormOpen ? "Close" : "New group"}</button>
+                  </div>
+                  <select id="scene-continuity-group" aria-label="Continuity group" value={selectedScene.continuityGroupId} onChange={(event) => updateScene(selectedScene.id, { continuityGroupId: event.target.value })} disabled={continuityGroupsLoading || continuityGroups.length === 0} className="mt-3 min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface px-3 text-sm text-ink">
+                    {continuityGroups.length === 0 ? <option value="">{continuityGroupsLoading ? "Loading groups…" : "No groups available"}</option> : continuityGroups.map((group) => <option key={group.id} value={group.id}>{group.name}{group.isDefault ? " · main" : ` · ${group.kind}`}</option>)}
+                  </select>
+                  {continuityGroupsError ? <p role="alert" className="mt-2 break-words text-xs leading-5 text-danger">{continuityGroupsError}</p> : null}
+                  {groupFormOpen ? (
+                    <form onSubmit={(event) => void createProjectContinuityGroup(event)} className="mt-3 min-w-0 border-t border-line pt-3">
+                      <label className="block text-xs font-semibold text-ink" htmlFor="continuity-group-kind">Group type</label>
+                      <select id="continuity-group-kind" value={groupKind} onChange={(event) => setGroupKind(event.target.value as ContinuityGroupKind)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
+                        <option value="main" disabled>Main (the default group already exists)</option>
+                        <option value="flashback">Flashback</option>
+                        <option value="dream">Dream</option>
+                        <option value="parallel">Parallel</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                      <label className="mt-3 block text-xs font-semibold text-ink" htmlFor="continuity-group-name">Group name</label>
+                      <input id="continuity-group-name" value={groupName} onChange={(event) => setGroupName(event.target.value)} required maxLength={200} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink" placeholder="e.g. Main timeline" />
+                      <button type="submit" disabled={groupSaving || !groupName.trim()} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent disabled:cursor-not-allowed disabled:opacity-50">{groupSaving ? "Creating group" : "Create and use group"}</button>
+                    </form>
+                  ) : null}
+                </div>
                 <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="scene-content">Content</label>
                 <textarea id="scene-content" value={selectedScene.content} onChange={(event) => updateScene(selectedScene.id, { content: event.target.value })} className="mt-2 min-h-56 w-full min-w-0 resize-y rounded-lg border border-line bg-surface-raised px-3 py-3 text-sm leading-6 text-ink" maxLength={200000} />
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-ink-faint"><span>{revisionDirty ? "Unsaved changes" : "Saved"}</span><span>{selectedScene.content.length.toLocaleString()} characters</span></div>
@@ -991,15 +1236,22 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                   review={selectedPatchReview}
                   sceneContent={selectedScene.content}
                   entities={associatedEntities}
+                  confirmedCharacters={confirmedCharacters}
+                  stateProps={stateProps}
                   loading={selectedPatchState?.loading ?? false}
                   error={selectedPatchState?.error ?? null}
                   latestConflict={selectedPatchState?.latestConflict ?? null}
-                  actions={selectedPatchState ? {
+                  resolvedState={selectedResolvedState?.state ?? null}
+                  resolvedStateLoading={selectedResolvedState?.loading ?? false}
+                  resolvedStateError={selectedResolvedState?.error ?? null}
+                  actions={selectedPatchState && !revisionDirty ? {
                     onAccept: (patch, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept", request),
                     onAcceptEdited: (patch, payload, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept-edited", request, payload),
                     onReject: (patch, reason, request) => void runPatchMutation(selectedPatchState.selection, patch, "reject", request, undefined, reason),
                   } : undefined}
-                  onPropose={selectedPatchState ? (draft) => void proposeCandidate(selectedPatchState.selection, draft) : undefined}
+                  onPropose={selectedPatchState && !revisionDirty ? (draft) => void proposeCandidate(selectedPatchState.selection, draft) : undefined}
+                  onProposeState={selectedPatchState && !revisionDirty ? (draft) => void proposeStateCandidate(selectedPatchState.selection, draft) : undefined}
+                  stateProposalBlocked={revisionDirty}
                 />
               </div>
             ) : (
@@ -1099,26 +1351,40 @@ function CanonPatchReviewPanel({
   review,
   sceneContent,
   entities,
+  confirmedCharacters,
+  stateProps,
   loading,
   error,
   latestConflict,
   actions,
   onPropose,
+  onProposeState,
+  stateProposalBlocked,
+  resolvedState,
+  resolvedStateLoading,
+  resolvedStateError,
 }: {
   review: ScenePatchReview | null;
   sceneContent: string;
   entities: readonly Entity[];
+  confirmedCharacters: readonly Entity[];
+  stateProps: readonly Entity[];
   loading: boolean;
   error: string | null;
-  latestConflict: Patch | null;
+  latestConflict: WorkspacePatch | null;
   actions?: PatchReviewActionHandlers;
   onPropose?: (draft: FactCandidateDraft) => void;
+  onProposeState?: (draft: StateCandidateDraft) => void;
+  stateProposalBlocked: boolean;
+  resolvedState: ResolvedState | null;
+  resolvedStateLoading: boolean;
+  resolvedStateError: string | null;
 }) {
   return (
     <section className="mt-8 min-w-0 border-t border-line pt-6" aria-labelledby="canon-patch-review-heading" data-testid="canon-patch-review">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 2</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 2–3</p>
           <h3 id="canon-patch-review-heading" className="mt-2 break-words text-base font-semibold text-ink">Canon review</h3>
           <p className="mt-1 max-w-[48ch] text-sm leading-6 text-ink-muted">Inference evidence and a Pending Canon Patch stay separate from active Canon until review.</p>
         </div>
@@ -1145,6 +1411,10 @@ function CanonPatchReviewPanel({
               const application = review.applications.find((candidate) => candidate.patchId === patch.id);
               return application?.resultingFactId ? review.facts.find((fact) => fact.id === application.resultingFactId) ?? null : null;
             })()}
+            resultingState={(() => {
+              const application = review.applications.find((candidate) => candidate.patchId === patch.id);
+              return application?.resultingStateId ? review.states.find((state) => state.id === application.resultingStateId) ?? null : null;
+            })()}
             sceneContent={sceneContent}
             actions={actions}
           />)}
@@ -1157,11 +1427,13 @@ function CanonPatchReviewPanel({
       )}
 
       <FactCandidateComposer entities={entities} sceneContent={sceneContent} onPropose={onPropose} />
+      <StatePatchComposer characters={confirmedCharacters} props={stateProps} sceneContent={sceneContent} onPropose={onProposeState} blockedByUnsavedRevision={stateProposalBlocked} />
+      <ResolvedStateInspector entities={entities} state={resolvedState} loading={resolvedStateLoading} error={resolvedStateError} />
     </section>
   );
 }
 
-function PatchConflictPreview({ patch }: { patch: Patch }) {
+function PatchConflictPreview({ patch }: { patch: WorkspacePatch }) {
   return (
     <div className="mt-4 rounded-md border border-danger/40 bg-danger/5 p-3" data-testid={`patch-conflict-${patch.id}`}>
       <p className="text-xs font-semibold text-danger">Latest server Patch · version {patch.version}</p>
@@ -1180,7 +1452,8 @@ function FactCandidateComposer({ entities, sceneContent, onPropose }: { entities
   const definition = predicateSchemaRegistry[predicate];
   const selectedEntityId = entities.some((entity) => entity.id === entityId) ? entityId : entities[0]?.id ?? "";
   const effectiveScope = definition?.scopes.some((candidateScope) => candidateScope === scope) ? scope : definition?.scopes[0] ?? "base";
-  const compatiblePredicates = Object.entries(predicateSchemaRegistry).filter(([, candidate]) => {
+  const compatiblePredicates = Object.entries(predicateSchemaRegistry).filter(([candidatePredicate, candidate]) => {
+    if (!isFactPredicate(candidatePredicate)) return false;
     const entity = entities.find((item) => item.id === selectedEntityId);
     return !candidate.entityTypes || !entity || candidate.entityTypes.includes(entity.type);
   });
@@ -1226,20 +1499,158 @@ function FactCandidateComposer({ entities, sceneContent, onPropose }: { entities
   );
 }
 
+function StatePatchComposer({
+  characters,
+  props,
+  sceneContent,
+  onPropose,
+  blockedByUnsavedRevision,
+}: {
+  characters: readonly Entity[];
+  props: readonly Entity[];
+  sceneContent: string;
+  onPropose?: (draft: StateCandidateDraft) => void;
+  blockedByUnsavedRevision: boolean;
+}) {
+  const [characterId, setCharacterId] = React.useState(characters[0]?.id ?? "");
+  const [predicate, setPredicate] = React.useState<StateCandidateDraft["predicate"]>("wardrobe.current");
+  const [value, setValue] = React.useState("");
+  const [carryForward, setCarryForward] = React.useState(false);
+  const [evidenceQuote, setEvidenceQuote] = React.useState("");
+  const selectedCharacterId = characters.some((entity) => entity.id === characterId) ? characterId : characters[0]?.id ?? "";
+  const selectedPropId = predicate === "state.held_prop" && props.some((entity) => entity.id === value) ? value : props[0]?.id ?? "";
+  const effectiveValue = predicate === "state.held_prop" ? selectedPropId : value;
+  const valueType = predicate === "state.held_prop" ? "entity_ref" as const : "string" as const;
+  return (
+    <form className="mt-6 min-w-0 rounded-lg border border-accent/30 bg-accent/5 p-4" onSubmit={(event) => {
+      event.preventDefault();
+      if (!onPropose || !selectedCharacterId || !effectiveValue || !evidenceQuote.trim()) return;
+      onPropose({ entityId: selectedCharacterId, predicate, value: effectiveValue, valueType, carryForward, priority: 100, evidenceQuote });
+    }} data-testid="state-patch-composer">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="break-words text-sm font-semibold text-ink">Propose Scene State</h4>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">State is temporary, revision-bound, and separate from Character Base, Inference, and Canon Fact.</p>
+        </div>
+        <span className="rounded-md border border-accent/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">State · pending review</span>
+      </div>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-entity">Confirmed character</label>
+      <select id="state-entity" value={selectedCharacterId} onChange={(event) => setCharacterId(event.target.value)} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
+        {characters.length === 0 ? <option value="">Confirm a character link in this Scene first</option> : characters.map((entity) => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}
+      </select>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-predicate">State predicate</label>
+      <select id="state-predicate" value={predicate} onChange={(event) => { const next = event.target.value as StateCandidateDraft["predicate"]; setPredicate(next); if (next === "state.held_prop") setValue(""); }} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
+        <option value="wardrobe.current">wardrobe.current · Current wardrobe</option>
+        <option value="state.injury">state.injury · Injury</option>
+        <option value="state.held_prop">state.held_prop · Held prop</option>
+      </select>
+      {predicate === "state.held_prop" ? (
+        <>
+          <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-prop">Active or draft Prop</label>
+          <select id="state-prop" value={selectedPropId} onChange={(event) => setValue(event.target.value)} disabled={props.length === 0 || characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
+            {props.length === 0 ? <option value="">Create an active or draft Prop first</option> : props.map((prop) => <option key={prop.id} value={prop.id}>{prop.canonicalName} · {prop.status}</option>)}
+          </select>
+        </>
+      ) : (
+        <>
+          <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-value">State value</label>
+          <input id="state-value" value={value} onChange={(event) => setValue(event.target.value)} maxLength={2000} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink" placeholder={predicate === "wardrobe.current" ? "e.g. faded black coat" : "e.g. left shoulder is bandaged"} />
+        </>
+      )}
+      <label className="mt-4 flex min-w-0 items-start gap-2 text-xs text-ink" htmlFor="state-carry-forward"><input id="state-carry-forward" type="checkbox" checked={carryForward} onChange={(event) => setCarryForward(event.target.checked)} className="mt-0.5 size-4 shrink-0 accent-accent" /> <span><span className="font-semibold">Carry forward within this group</span><span className="mt-1 block text-ink-faint">Never crosses into another continuity group.</span></span></label>
+      <p className="mt-3 text-[11px] text-ink-faint">Priority: 100 (explicit author state default)</p>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-evidence">Exact evidence quote</label>
+      <textarea id="state-evidence" value={evidenceQuote} onChange={(event) => setEvidenceQuote(event.target.value)} maxLength={20000} disabled={characters.length === 0} className="mt-2 min-h-16 w-full min-w-0 resize-y rounded-md border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink" placeholder={sceneContent ? "Paste the exact phrase from this Scene revision" : "No Scene text available"} />
+      <button type="submit" disabled={!onPropose || blockedByUnsavedRevision || characters.length === 0 || !selectedCharacterId || !effectiveValue || !evidenceQuote.trim() || (predicate === "state.held_prop" && props.length === 0)} className="mt-4 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45">Propose State Patch</button>
+      <p className={`mt-2 text-[11px] leading-5 ${blockedByUnsavedRevision ? "font-semibold text-danger" : "text-ink-faint"}`}>{blockedByUnsavedRevision ? "Save this revision first so the selected continuity group is frozen before State review." : "The current Scene revision and confirmed character version are sent with this reviewable State Patch."}</p>
+    </form>
+  );
+}
+
+function ResolvedStateInspector({ entities, state, loading, error }: { entities: readonly Entity[]; state: ResolvedState | null; loading: boolean; error: string | null }) {
+  const entityName = (entityId: string) => entities.find((entity) => entity.id === entityId)?.canonicalName ?? entityId;
+  return (
+    <section className="mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-4" aria-labelledby="resolved-state-heading" data-testid="resolved-state-inspector">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 3</p>
+          <h4 id="resolved-state-heading" className="mt-2 break-words text-sm font-semibold text-ink">Resolved Scene State</h4>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">Explicit → carried → Base fallback → missing. Conflicts remain blocking and are never auto-selected.</p>
+        </div>
+        {state?.continuityGroupId ? <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">group {state.continuityGroupId}</span> : null}
+      </div>
+      {loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">Resolving current Scene State…</p> : null}
+      {error ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{error}</p> : null}
+      {state?.hasBlockingConflicts ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">Blocking continuity conflict: review the conflicting state sources before downstream generation.</p> : null}
+      {state && state.entities.length > 0 ? (
+        <div aria-label="Resolved state entities" className="mt-4 space-y-4">
+          {state.entities.map((entity) => (
+            <section key={entity.entityId} className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby={`resolved-state-entity-${entity.entityId}`}>
+              <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                <h5 id={`resolved-state-entity-${entity.entityId}`} className="break-words text-xs font-semibold text-ink">{entityName(entity.entityId)}</h5>
+                <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">{entity.entityId}</span>
+              </div>
+              {entity.hasBlockingConflicts ? <p role="alert" className="mt-2 break-words text-[11px] leading-5 text-danger">This entity has a blocking state conflict; no value was auto-selected.</p> : null}
+              {entity.fields.length > 0 ? (
+                <ul aria-label={`Resolved state fields for ${entityName(entity.entityId)}`} className="mt-3 space-y-3">
+                  {entity.fields.map((field) => {
+                    const conflict = field.tier === "conflict" || field.blockingConflict;
+                    const displayedValue = field.tier === "missing"
+                      ? "No explicit, carried, or mapped Base value."
+                      : field.tier === "conflict"
+                        ? `Conflicting values: ${stringifyPatchValue(field.conflictValues)}`
+                        : stringifyPatchValue(field.value);
+                    return (
+                      <li key={field.predicate} className={`min-w-0 rounded-md border p-3 ${conflict ? "border-danger/50 bg-danger/5" : "border-line bg-surface-raised"}`}>
+                        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                          <p className="break-words text-xs font-semibold text-ink">{statePredicateLabel(field.predicate)}</p>
+                          <span className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${conflict ? "border-danger/40 text-danger" : field.tier === "missing" ? "border-line text-ink-faint" : field.tier === "base" ? "border-line text-ink-muted" : "border-accent/40 text-accent"}`}>{stateTierLabel(field.tier)}</span>
+                        </div>
+                        <p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink">{displayedValue}</p>
+                        <p className="mt-1 break-words text-[11px] leading-5 text-ink-faint">{field.valueType} · {field.cardinality} · priority {field.priority ?? "—"}</p>
+                        {field.sources.length > 0 ? (
+                          <ul aria-label={`Sources for ${field.predicate}`} className="mt-3 space-y-2">
+                            {field.sources.map((source, index) => (
+                              <li key={`${source.kind}-${source.recordId}-${index}`} className="min-w-0 break-words border-l-2 border-line pl-2 text-[11px] leading-5 text-ink-muted">
+                                <p className="font-semibold text-ink-muted">{source.kind} record <span className="break-all font-mono">{source.recordId}</span></p>
+                                <p className="mt-1 break-words">Tier {stateTierLabel(source.tier)} · priority {source.priority} · applies at <span className="break-all font-mono">{source.appliesAtSceneId ?? "—"}</span> · revision <span className="break-all font-mono">{source.sourceRevisionId ?? "—"}</span></p>
+                                <p className="mt-1 break-words">Evidence source: <span className="break-all font-mono">{source.evidenceSourceId}</span></p>
+                                <p className="mt-1 break-words">Value: {stringifyPatchValue(source.value)}</p>
+                                {source.quotedText ? <p className="mt-1 break-words whitespace-pre-wrap">Quote: “{source.quotedText}”</p> : <p className="mt-1 text-ink-faint">No quoted evidence attached.</p>}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {conflict ? <p role="alert" className="mt-2 break-words text-[11px] leading-5 text-danger">All same-tier values are shown; choose explicitly before using this state.</p> : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : <p className="mt-3 border-l-2 border-line pl-2 text-[11px] leading-5 text-ink-faint">No resolved fields returned for this entity.</p>}
+            </section>
+          ))}
+        </div>
+      ) : !loading && !error ? <p className="mt-4 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No confirmed linked entities or resolved fields returned.</p> : null}
+    </section>
+  );
+}
+
 function CanonPatchCard({
   patch,
   evidenceSources,
   application,
   targetFact,
   resultingFact,
+  resultingState,
   sceneContent,
   actions,
 }: {
-  patch: Patch;
+  patch: WorkspacePatch;
   evidenceSources: readonly EvidenceSource[];
-  application: PatchApplication | null;
+  application: WorkspacePatchApplication | null;
   targetFact: Fact | null;
   resultingFact: Fact | null;
+  resultingState: EntityState | null;
   sceneContent: string;
   actions?: PatchReviewActionHandlers;
 }) {
@@ -1248,8 +1659,11 @@ function CanonPatchCard({
   const [rejectReason, setRejectReason] = React.useState("");
   const payload = patch.payload;
   const predicate = typeof payload.predicate === "string" ? payload.predicate : "Unspecified predicate";
-  const scope = typeof payload.scope === "string" ? payload.scope : null;
-  const displayValues = patchReviewValues(patch, application, targetFact, resultingFact);
+  const scope = typeof (payload as Record<string, unknown>).scope === "string" ? (payload as Record<string, unknown>).scope as string : null;
+  const isStatePatch = patch.operation === "add_state";
+  const displayValues = isStatePatch && resultingState
+    ? { before: undefined, after: resultingState.value }
+    : patchReviewValues(patch, application, targetFact, resultingFact);
   const before = stringifyPatchValue(displayValues.before);
   const after = stringifyPatchValue(displayValues.after);
   const evidence = evidenceSources.filter((source) => patch.evidenceSourceIds.includes(source.id));
@@ -1264,10 +1678,10 @@ function CanonPatchCard({
             <p className="break-words text-sm font-semibold text-ink">{predicate}</p>
             {scope ? <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-ink-faint">{scope}</span> : null}
           </div>
-          <p className="mt-1 text-xs text-ink-faint">{patch.operation.replaceAll("_", " ")} · {patchStatusLabel(patch.status)}</p>
+          <p className="mt-1 text-xs text-ink-faint">{isStatePatch ? "Scene State" : patch.operation.replaceAll("_", " ")} · {patchStatusLabel(patch.status)}</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.08em]">
-          <span className="rounded-md border border-success/40 px-2 py-1 text-success">Canon</span>
+          <span className={isStatePatch ? "rounded-md border border-accent/40 px-2 py-1 text-accent" : "rounded-md border border-success/40 px-2 py-1 text-success"}>{isStatePatch ? "Scene State" : "Canon"}</span>
           <span className={hardConflict ? "rounded-md border border-danger/40 px-2 py-1 text-danger" : patch.conflictKind === "possible" ? "rounded-md border border-accent/40 px-2 py-1 text-accent" : "rounded-md border border-line px-2 py-1 text-ink-faint"}>{patchConflictLabel(patch.conflictKind)}</span>
         </div>
       </div>
@@ -1287,6 +1701,8 @@ function CanonPatchCard({
         <div className="min-w-0"><dt className="inline text-ink-faint">Confidence: </dt><dd className="inline text-ink-muted">{patch.confidence === null ? "—" : `${Math.round(patch.confidence * 100)}%`}</dd></div>
         <div className="min-w-0"><dt className="inline text-ink-faint">Proposed by: </dt><dd className="inline break-words text-ink-muted">{patch.proposedBy}{patch.modelRunId ? ` · model ${patch.modelRunId}` : ""}</dd></div>
         <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">Evidence: </dt><dd className="inline text-ink-muted">{evidence.length > 0 ? `${evidence.length} source${evidence.length === 1 ? "" : "s"}` : "source unavailable"} · Scene revision {patch.sourceRevisionId}</dd></div>
+        {isStatePatch ? <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">Boundary: </dt><dd className="inline text-ink-muted">Temporary Scene State only; Character Base and Inference remain unchanged until review.</dd></div> : null}
+        {isStatePatch && resultingState ? <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">Applied EntityState: </dt><dd className="inline break-words text-ink-muted">{resultingState.id} · {resultingState.continuityGroupId} · source revision {resultingState.sourceRevisionId}</dd></div> : null}
       </dl>
 
       {evidence.length > 0 ? (
@@ -1303,7 +1719,7 @@ function CanonPatchCard({
         <button type="button" disabled={!canAcceptPatch(patch) || !actions?.onAccept} aria-disabled={!canAcceptPatch(patch) || !actions?.onAccept} title={hardConflict ? "Resolve the hard conflict before accepting" : undefined} onClick={() => actions?.onAccept?.(patch, { expectedVersion: patch.version, requestId: requestId("patch-accept") })} className="inline-flex min-h-10 items-center rounded-md border border-success px-3 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid={`accept-patch-${patch.id}`}>Accept</button>
         <button type="button" disabled={!canAcceptPatch(patch) || !actions?.onAcceptEdited} aria-disabled={!canAcceptPatch(patch) || !actions?.onAcceptEdited} onClick={() => setEditing((current) => !current)} className="inline-flex min-h-10 items-center rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45" data-testid={`edit-patch-${patch.id}`}>{editing ? "Close edit" : "Edit then accept"}</button>
         <button type="button" disabled={patch.status !== "pending" || !actions?.onReject} aria-disabled={patch.status !== "pending" || !actions?.onReject} onClick={() => actions?.onReject?.(patch, rejectReason.trim() || null, { expectedVersion: patch.version, requestId: requestId("patch-reject") })} className="inline-flex min-h-10 items-center rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:opacity-45" data-testid={`reject-patch-${patch.id}`}>Reject</button>
-        {!accepted ? <span className="text-[11px] text-ink-faint">Review actions require the patch API.</span> : <span className="text-[11px] font-semibold text-success">Canon is visible after acceptance.</span>}
+        {!accepted ? <span className="text-[11px] text-ink-faint">Review actions require the patch API.</span> : <span className="text-[11px] font-semibold text-success">{isStatePatch ? "Scene State is visible after acceptance." : "Canon is visible after acceptance."}</span>}
       </div>
       {editing ? (
         <div className="mt-4 rounded-md border border-accent/30 bg-surface-raised p-3">

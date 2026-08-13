@@ -20,11 +20,18 @@ import {
   type ScriptDocument,
   type UpdateScriptDocumentInput,
 } from "@/domain/document";
+import {
+  continuityGroupSchema,
+  createContinuityGroupInputSchema,
+  type ContinuityGroup,
+  type CreateContinuityGroupInput,
+} from "@/domain/scene-state";
 import { getDatabase } from "./connection";
 import { revalidateSceneFactPatches } from "./canon-patch";
 import {
   StoryBibleConflictError,
   StoryBibleDataIntegrityError,
+  StoryBibleIdempotencyConflictError,
   StoryBibleNotFoundError,
   StoryBibleValidationError,
 } from "./story-bible-errors";
@@ -45,6 +52,7 @@ type SceneRow = {
   id: string;
   project_id: string;
   document_id: string;
+  continuity_group_id: string;
   narrative_rank: number;
   status: Scene["status"];
   version: number;
@@ -70,6 +78,7 @@ type SceneRevisionRow = {
   project_id: string;
   document_id: string;
   scene_id: string;
+  continuity_group_id: string;
   document_revision_id: string;
   narrative_rank: number;
   title: string;
@@ -80,6 +89,17 @@ type SceneRevisionRow = {
 };
 
 type ProjectRow = { id: string };
+type ContinuityGroupRow = {
+  id: string;
+  project_id: string;
+  document_id: string;
+  name: string;
+  kind: ContinuityGroup["kind"];
+  is_default: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
 
 function resolveDatabase(database?: DatabaseSync) {
   return database ?? getDatabase();
@@ -121,6 +141,7 @@ function toScene(row: SceneRow): Scene {
     id: row.id,
     projectId: row.project_id,
     documentId: row.document_id,
+    continuityGroupId: row.continuity_group_id,
     narrativeRank: row.narrative_rank,
     status: row.status,
     version: row.version,
@@ -136,6 +157,7 @@ function toSceneRevision(row: SceneRevisionRow): SceneRevision {
     projectId: row.project_id,
     documentId: row.document_id,
     sceneId: row.scene_id,
+    continuityGroupId: row.continuity_group_id,
     documentRevisionId: row.document_revision_id,
     narrativeRank: row.narrative_rank,
     title: row.title,
@@ -149,6 +171,36 @@ function toSceneRevision(row: SceneRevisionRow): SceneRevision {
 function getProject(database: DatabaseSync, projectId: string) {
   const row = database.prepare("SELECT id FROM projects WHERE id = :projectId").get({ projectId }) as unknown as ProjectRow | undefined;
   if (!row) throw new StoryBibleNotFoundError("Project not found");
+}
+
+function toContinuityGroup(row: ContinuityGroupRow): ContinuityGroup {
+  return continuityGroupSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    documentId: row.document_id,
+    name: row.name,
+    kind: row.kind,
+    isDefault: row.is_default === 1,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
+function getDefaultContinuityGroup(database: DatabaseSync, projectId: string, documentId: string) {
+  const row = database.prepare(
+    "SELECT id, project_id, document_id, name, kind, is_default, version, created_at, updated_at FROM continuity_groups WHERE project_id = :projectId AND document_id = :documentId AND is_default = 1 LIMIT 1",
+  ).get({ projectId, documentId }) as unknown as ContinuityGroupRow | undefined;
+  if (!row) throw new StoryBibleDataIntegrityError("Document default continuity group is missing");
+  return toContinuityGroup(row);
+}
+
+function getContinuityGroupForDocument(database: DatabaseSync, projectId: string, documentId: string, groupId: string) {
+  const row = database.prepare(
+    "SELECT id, project_id, document_id, name, kind, is_default, version, created_at, updated_at FROM continuity_groups WHERE id = :groupId AND project_id = :projectId AND document_id = :documentId",
+  ).get({ groupId, projectId, documentId }) as unknown as ContinuityGroupRow | undefined;
+  if (!row) throw new StoryBibleValidationError("Continuity group must belong to the same project and document", ["scenes"]);
+  return toContinuityGroup(row);
 }
 
 function getDocumentWithDatabase(documentId: string, database: DatabaseSync) {
@@ -166,19 +218,19 @@ function getDocumentInProject(documentId: string, projectId: string, database: D
 
 function getSceneRow(sceneId: string, database: DatabaseSync) {
   return database.prepare(
-    "SELECT id, project_id, document_id, narrative_rank, status, version, created_at, updated_at, deleted_at FROM scenes WHERE id = :sceneId",
+    "SELECT id, project_id, document_id, continuity_group_id, narrative_rank, status, version, created_at, updated_at, deleted_at FROM scenes WHERE id = :sceneId",
   ).get({ sceneId }) as unknown as SceneRow | undefined;
 }
 
 function listSceneRows(documentId: string, database: DatabaseSync) {
   return database.prepare(
-    "SELECT id, project_id, document_id, narrative_rank, status, version, created_at, updated_at, deleted_at FROM scenes WHERE document_id = :documentId ORDER BY narrative_rank ASC, id ASC",
+    "SELECT id, project_id, document_id, continuity_group_id, narrative_rank, status, version, created_at, updated_at, deleted_at FROM scenes WHERE document_id = :documentId ORDER BY narrative_rank ASC, id ASC",
   ).all({ documentId }) as unknown as SceneRow[];
 }
 
 function listSceneRevisionRows(documentRevisionId: string, database: DatabaseSync) {
   return database.prepare(
-    "SELECT id, project_id, document_id, scene_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at FROM scene_revisions WHERE document_revision_id = :documentRevisionId ORDER BY narrative_rank ASC, scene_id ASC",
+    "SELECT id, project_id, document_id, scene_id, continuity_group_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at FROM scene_revisions WHERE document_revision_id = :documentRevisionId ORDER BY narrative_rank ASC, scene_id ASC",
   ).all({ documentRevisionId }) as unknown as SceneRevisionRow[];
 }
 
@@ -188,10 +240,48 @@ function getIdempotentResponse(database: DatabaseSync, projectId: string, operat
   ).get({ projectId, operation, requestId }) as { response_json?: string } | undefined;
   if (!row) return null;
   try {
-    return JSON.parse(row.response_json ?? "null") as { documentId?: string; revisionId?: string };
+    return JSON.parse(row.response_json ?? "null") as { documentId?: string; revisionId?: string; groupId?: string; inputFingerprint?: string };
   } catch {
     throw new StoryBibleDataIntegrityError("Stored idempotency response is invalid");
   }
+}
+
+export function listContinuityGroups(documentId: string, projectId: string, database?: DatabaseSync): ContinuityGroup[] {
+  const db = resolveDatabase(database);
+  getDocumentInProject(documentId, projectId, db);
+  const rows = db.prepare(
+    "SELECT id, project_id, document_id, name, kind, is_default, version, created_at, updated_at FROM continuity_groups WHERE project_id = :projectId AND document_id = :documentId ORDER BY is_default DESC, created_at ASC, id ASC",
+  ).all({ projectId, documentId }) as unknown as ContinuityGroupRow[];
+  return rows.map(toContinuityGroup);
+}
+
+export type ContinuityGroupCommandResult = { continuityGroup: ContinuityGroup; idempotent: boolean };
+
+export function createContinuityGroup(projectId: string, documentId: string, input: CreateContinuityGroupInput, database?: DatabaseSync): ContinuityGroupCommandResult {
+  const values = createContinuityGroupInputSchema.parse(input);
+  const db = resolveDatabase(database);
+  getDocumentInProject(documentId, projectId, db);
+  const requestId = values.requestId.trim();
+  const actorId = values.actorId.trim();
+  const inputFingerprint = hashValue({ projectId, documentId, name: values.name, kind: values.kind, actorId });
+  return withTransaction(db, () => {
+    const duplicate = getIdempotentResponse(db, projectId, "continuity-group.create", requestId);
+    if (duplicate?.groupId) {
+      if (duplicate.inputFingerprint && duplicate.inputFingerprint !== inputFingerprint) throw new StoryBibleIdempotencyConflictError("This request ID was already used for a different continuity group");
+      const existing = db.prepare("SELECT id, project_id, document_id, name, kind, is_default, version, created_at, updated_at FROM continuity_groups WHERE id = :groupId AND project_id = :projectId AND document_id = :documentId").get({ groupId: duplicate.groupId, projectId, documentId }) as unknown as ContinuityGroupRow | undefined;
+      if (!existing) throw new StoryBibleDataIntegrityError("Idempotent continuity group is missing");
+      return { continuityGroup: toContinuityGroup(existing), idempotent: true };
+    }
+    const id = randomUUID();
+    const createdAt = now();
+    db.prepare("INSERT INTO continuity_groups (id, project_id, document_id, name, kind, is_default, version, created_at, updated_at) VALUES (:id, :projectId, :documentId, :name, :kind, 0, 1, :createdAt, :updatedAt)").run({ id, projectId, documentId, name: values.name, kind: values.kind, createdAt, updatedAt: createdAt });
+    const row = db.prepare("SELECT id, project_id, document_id, name, kind, is_default, version, created_at, updated_at FROM continuity_groups WHERE id = :id").get({ id }) as unknown as ContinuityGroupRow | undefined;
+    if (!row) throw new StoryBibleDataIntegrityError("Continuity group could not be read after insertion");
+    const group = toContinuityGroup(row);
+    storeIdempotentResponse(db, { projectId, operation: "continuity-group.create", requestId, resourceType: "continuity_group", resourceId: id, response: { groupId: id, inputFingerprint } });
+    writeEvent(db, { projectId, eventType: "continuity_group.created", aggregateType: "continuity_group", aggregateId: id, aggregateVersion: group.version, payload: { documentId, kind: group.kind }, actorId, requestId });
+    return { continuityGroup: group, idempotent: false };
+  });
 }
 
 function storeIdempotentResponse(database: DatabaseSync, values: { projectId: string; operation: string; requestId: string; resourceType: string; resourceId: string; response: unknown }) {
@@ -246,7 +336,8 @@ function revisionSceneRows(documentId: string, projectId: string, scenes: Revisi
   const existing = listSceneRows(documentId, database);
   const existingById = new Map(existing.map((row) => [row.id, row]));
   const seen = new Set<string>();
-  const rows: Array<{ sceneId: string; narrativeRank: number; title: string; content: string; status: Scene["status"] }> = [];
+  const defaultGroup = getDefaultContinuityGroup(database, projectId, documentId);
+  const rows: Array<{ sceneId: string; continuityGroupId: string; narrativeRank: number; title: string; content: string; status: Scene["status"] }> = [];
 
   scenes.forEach((scene, index) => {
     const sceneId = scene.id ?? scene.sceneId ?? randomUUID();
@@ -256,8 +347,14 @@ function revisionSceneRows(documentId: string, projectId: string, scenes: Revisi
     if (scene.id && (!previous || previous.project_id !== projectId || previous.document_id !== documentId)) {
       throw new StoryBibleValidationError("Scene does not belong to this document", ["scenes"]);
     }
+    const latest = database.prepare(
+      "SELECT continuity_group_id FROM scene_revisions WHERE scene_id = :sceneId ORDER BY created_at DESC, id DESC LIMIT 1",
+    ).get({ sceneId }) as { continuity_group_id?: string } | undefined;
+    const continuityGroupId = scene.continuityGroupId ?? latest?.continuity_group_id ?? defaultGroup.id;
+    getContinuityGroupForDocument(database, projectId, documentId, continuityGroupId);
     rows.push({
       sceneId,
+      continuityGroupId,
       narrativeRank: scene.narrativeRank ?? index,
       title: scene.title,
       content: scene.content,
@@ -271,10 +368,11 @@ function revisionSceneRows(documentId: string, projectId: string, scenes: Revisi
   for (const previous of existing) {
     if (seen.has(previous.id)) continue;
     const latest = database.prepare(
-      "SELECT title, content FROM scene_revisions WHERE scene_id = :sceneId ORDER BY created_at DESC, id DESC LIMIT 1",
-    ).get({ sceneId: previous.id }) as { title?: string; content?: string } | undefined;
+      "SELECT title, content, continuity_group_id FROM scene_revisions WHERE scene_id = :sceneId ORDER BY created_at DESC, id DESC LIMIT 1",
+    ).get({ sceneId: previous.id }) as { title?: string; content?: string; continuity_group_id?: string } | undefined;
     rows.push({
       sceneId: previous.id,
+      continuityGroupId: latest?.continuity_group_id ?? defaultGroup.id,
       narrativeRank: previous.narrative_rank,
       title: latest?.title ?? "",
       content: latest?.content ?? "",
@@ -323,22 +421,22 @@ function insertDocumentRevision(database: DatabaseSync, document: ScriptDocument
 
   for (const row of rows) {
     const previous = getSceneRow(row.sceneId, database);
-    const sceneContentHash = hashValue({ title: row.title, content: row.content, status: row.status });
+    const sceneContentHash = hashValue({ title: row.title, content: row.content, status: row.status, continuityGroupId: row.continuityGroupId });
     if (!previous) {
       database.prepare(
-        "INSERT INTO scenes (id, project_id, document_id, narrative_rank, status, version, created_at, updated_at, deleted_at) VALUES (:id, :projectId, :documentId, :narrativeRank, :status, 1, :createdAt, :updatedAt, :deletedAt)",
-      ).run({ id: row.sceneId, projectId: document.projectId, documentId: document.id, narrativeRank: row.narrativeRank, status: row.status, createdAt: timestamp, updatedAt: timestamp, deletedAt: row.status === "deleted" ? timestamp : null });
+        "INSERT INTO scenes (id, project_id, document_id, continuity_group_id, narrative_rank, status, version, created_at, updated_at, deleted_at) VALUES (:id, :projectId, :documentId, :continuityGroupId, :narrativeRank, :status, 1, :createdAt, :updatedAt, :deletedAt)",
+      ).run({ id: row.sceneId, projectId: document.projectId, documentId: document.id, continuityGroupId: row.continuityGroupId, narrativeRank: row.narrativeRank, status: row.status, createdAt: timestamp, updatedAt: timestamp, deletedAt: row.status === "deleted" ? timestamp : null });
     } else {
       if (previous.project_id !== document.projectId || previous.document_id !== document.id) {
         throw new StoryBibleValidationError("Scene does not belong to this document", ["scenes"]);
       }
       database.prepare(
-        "UPDATE scenes SET narrative_rank = :narrativeRank, status = :status, version = version + 1, updated_at = :updatedAt, deleted_at = :deletedAt WHERE id = :id AND project_id = :projectId AND document_id = :documentId",
-      ).run({ id: row.sceneId, projectId: document.projectId, documentId: document.id, narrativeRank: row.narrativeRank, status: row.status, updatedAt: timestamp, deletedAt: row.status === "deleted" ? timestamp : null });
+        "UPDATE scenes SET continuity_group_id = :continuityGroupId, narrative_rank = :narrativeRank, status = :status, version = version + 1, updated_at = :updatedAt, deleted_at = :deletedAt WHERE id = :id AND project_id = :projectId AND document_id = :documentId",
+      ).run({ id: row.sceneId, projectId: document.projectId, documentId: document.id, continuityGroupId: row.continuityGroupId, narrativeRank: row.narrativeRank, status: row.status, updatedAt: timestamp, deletedAt: row.status === "deleted" ? timestamp : null });
     }
     database.prepare(
-      "INSERT INTO scene_revisions (id, project_id, document_id, scene_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at) VALUES (:id, :projectId, :documentId, :sceneId, :documentRevisionId, :narrativeRank, :title, :content, :contentHash, :status, :createdAt)",
-    ).run({ id: randomUUID(), projectId: document.projectId, documentId: document.id, sceneId: row.sceneId, documentRevisionId: revisionId, narrativeRank: row.narrativeRank, title: row.title, content: row.content, contentHash: sceneContentHash, status: row.status, createdAt: timestamp });
+      "INSERT INTO scene_revisions (id, project_id, document_id, scene_id, continuity_group_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at) VALUES (:id, :projectId, :documentId, :sceneId, :continuityGroupId, :documentRevisionId, :narrativeRank, :title, :content, :contentHash, :status, :createdAt)",
+    ).run({ id: randomUUID(), projectId: document.projectId, documentId: document.id, sceneId: row.sceneId, continuityGroupId: row.continuityGroupId, documentRevisionId: revisionId, narrativeRank: row.narrativeRank, title: row.title, content: row.content, contentHash: sceneContentHash, status: row.status, createdAt: timestamp });
   }
 
   const updateResult = database.prepare(
@@ -420,6 +518,7 @@ export function createDocument(projectId: string, input: CreateScriptDocumentInp
     db.prepare(
       "INSERT INTO script_documents (id, project_id, title, kind, status, version, current_revision_id, created_at, updated_at) VALUES (:id, :projectId, :title, :kind, 'active', 0, NULL, :createdAt, :updatedAt)",
     ).run({ id, projectId, title: values.title, kind: (values.kind ?? values.documentType ?? "screenplay") as string, createdAt: timestamp, updatedAt: timestamp });
+    db.prepare("INSERT INTO continuity_groups (id, project_id, document_id, name, kind, is_default, version, created_at, updated_at) VALUES (:id, :projectId, :documentId, 'Main', 'main', 1, 1, :createdAt, :updatedAt)").run({ id, projectId, documentId: id, createdAt: timestamp, updatedAt: timestamp });
     const document = getDocumentInProject(id, projectId, db);
     const revision = insertDocumentRevision(db, document, { baseVersion: 0, requestId, actorId, scenes: values.scenes });
     const finalDocument = getDocumentInProject(id, projectId, db);
@@ -508,7 +607,7 @@ export function getDocumentRevision(revisionId: string, projectId?: string, data
 export function getSceneRevision(sceneRevisionId: string, projectId?: string, database?: DatabaseSync) {
   const db = resolveDatabase(database);
   const row = db.prepare(
-    "SELECT id, project_id, document_id, scene_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at FROM scene_revisions WHERE id = :sceneRevisionId",
+    "SELECT id, project_id, document_id, scene_id, continuity_group_id, document_revision_id, narrative_rank, title, content, content_hash, status, created_at FROM scene_revisions WHERE id = :sceneRevisionId",
   ).get({ sceneRevisionId }) as unknown as SceneRevisionRow | undefined;
   if (!row || (projectId !== undefined && row.project_id !== projectId)) return null;
   return toSceneRevision(row);
@@ -518,7 +617,7 @@ export function getSceneRevision(sceneRevisionId: string, projectId?: string, da
 export function getCurrentSceneRevision(sceneId: string, projectId: string, database?: DatabaseSync) {
   const db = resolveDatabase(database);
   const row = db.prepare(
-    "SELECT sr.id, sr.project_id, sr.document_id, sr.scene_id, sr.document_revision_id, sr.narrative_rank, sr.title, sr.content, sr.content_hash, sr.status, sr.created_at FROM scenes s JOIN script_documents d ON d.id = s.document_id AND d.project_id = s.project_id JOIN scene_revisions sr ON sr.document_revision_id = d.current_revision_id AND sr.scene_id = s.id WHERE s.id = :sceneId AND s.project_id = :projectId",
+    "SELECT sr.id, sr.project_id, sr.document_id, sr.scene_id, sr.continuity_group_id, sr.document_revision_id, sr.narrative_rank, sr.title, sr.content, sr.content_hash, sr.status, sr.created_at FROM scenes s JOIN script_documents d ON d.id = s.document_id AND d.project_id = s.project_id JOIN scene_revisions sr ON sr.document_revision_id = d.current_revision_id AND sr.scene_id = s.id WHERE s.id = :sceneId AND s.project_id = :projectId",
   ).get({ sceneId, projectId }) as unknown as SceneRevisionRow | undefined;
   return row ? toSceneRevision(row) : null;
 }
@@ -553,6 +652,8 @@ export function createDocumentRepository(database: DatabaseSync = getDatabase())
     listScriptDocuments: (projectId: string) => listDocuments(projectId, database),
     getDocument: (documentId: string) => getDocument(documentId, database),
     getDocumentForProject: (projectId: string, documentId: string) => getDocumentForProject(projectId, documentId, database),
+    listContinuityGroups: (projectId: string, documentId: string) => listContinuityGroups(documentId, projectId, database),
+    createContinuityGroup: (projectId: string, documentId: string, input: CreateContinuityGroupInput) => createContinuityGroup(projectId, documentId, input, database),
     createDocument: (projectId: string, input: CreateScriptDocumentInput) => createDocument(projectId, input, database),
     createScriptDocument: (projectId: string, input: CreateScriptDocumentInput) => createDocument(projectId, input, database),
     updateDocument: (documentId: string, input: UpdateScriptDocumentInput) => updateDocument(documentId, input, database),

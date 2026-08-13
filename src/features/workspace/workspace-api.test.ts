@@ -29,6 +29,7 @@ import {
   safeDownloadFilename,
   updateChapter,
   createDocumentRevision,
+  createContinuityGroup,
   createEntity,
   createEntityAlias,
   createScriptDocument,
@@ -39,13 +40,19 @@ import {
   getScenePatchReview,
   getDocumentRevision,
   getSceneEntityReview,
+  getResolvedState,
   getScriptDocument,
   listEntities,
+  listContinuityGroups,
   listPatches,
   listScriptDocuments,
   proposeFactPatch,
   rejectPatch,
   parseScenePatchReview,
+  parseContinuityGroup,
+  parseContinuityGroupList,
+  parseResolvedState,
+  proposeStatePatch,
   reviewSceneEntityLink,
 } from "./workspace-api";
 
@@ -113,6 +120,7 @@ const documentId = "77777777-7777-4777-8777-777777777777";
 const revisionId = "88888888-8888-4888-8888-888888888888";
 const sceneId = "99999999-9999-4999-8999-999999999999";
 const sceneRevisionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const continuityGroupId = "abababab-abab-4aba-8aba-abababababab";
 const entityId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const aliasId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const runId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -153,6 +161,7 @@ const documentRevision: DocumentRevision = {
     projectId,
     documentId,
     sceneId,
+    continuityGroupId,
     documentRevisionId: revisionId,
     narrativeRank: 0,
     title: "Opening",
@@ -525,7 +534,7 @@ describe("chapter workspace API", () => {
       baseVersion: 1,
       expectedVersion: 1,
       requestId: "revision-1",
-      scenes: [{ id: sceneId, title: "Opening", content: "Lin Mo enters.", narrativeRank: 0 }],
+      scenes: [{ id: sceneId, title: "Opening", content: "Lin Mo enters.", narrativeRank: 0, continuityGroupId }],
     })).resolves.toEqual(documentRevision);
     expect(fetchMock).toHaveBeenNthCalledWith(3, `/api/documents/${documentId}?projectId=${projectId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
     expect(fetchMock).toHaveBeenNthCalledWith(4, `/api/documents/${documentId}/revisions/${revisionId}?projectId=${projectId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
@@ -533,7 +542,7 @@ describe("chapter workspace API", () => {
       baseVersion: 1,
       expectedVersion: 1,
       requestId: "revision-1",
-      scenes: [{ id: sceneId, title: "Opening", content: "Lin Mo enters.", narrativeRank: 0 }],
+      scenes: [{ id: sceneId, title: "Opening", content: "Lin Mo enters.", narrativeRank: 0, continuityGroupId }],
     });
   });
 
@@ -631,6 +640,7 @@ describe("chapter workspace API", () => {
       confidence: 0.98,
       conflictKind: "none",
       conflictingFactIds: [],
+      conflictingStateIds: [],
       conflictMessage: null,
       sourceRevisionId: sceneRevisionId,
       inferenceId,
@@ -648,6 +658,7 @@ describe("chapter workspace API", () => {
       patchId,
       operation: "add_fact",
       resultingFactId: patchFactId,
+      resultingStateId: null,
       appliedPayload: patch.payload,
       requestId: "patch-accept-1",
       createdAt: updatedAt,
@@ -672,13 +683,14 @@ describe("chapter workspace API", () => {
       createdAt,
     };
 
-    expect(parseScenePatchReview({ review: { pendingPatches: [patch], inferences: [inference], modelRuns: [modelRun], evidence: [source], applications: [application], facts: [fact] } })).toEqual({
+    expect(parseScenePatchReview({ review: { pendingPatches: [patch], inferences: [inference], modelRuns: [modelRun], evidence: [source], applications: [application], facts: [fact], states: [] } })).toEqual({
       patches: [patch],
       inferences: [inference],
       modelRuns: [modelRun],
       evidenceSources: [source],
       applications: [application],
       facts: [fact],
+      states: [],
     });
     expect(() => parseScenePatchReview({ review: { pendingPatches: [{ ...patch, version: 0 }] } })).toThrowError(/invalid scene patch review/i);
   });
@@ -697,6 +709,7 @@ describe("chapter workspace API", () => {
       confidence: 0.98,
       conflictKind: "none",
       conflictingFactIds: [],
+      conflictingStateIds: [],
       conflictMessage: null,
       sourceRevisionId: sceneRevisionId,
       inferenceId: inferenceId,
@@ -726,7 +739,7 @@ describe("chapter workspace API", () => {
     const editedInput: AcceptEditedPatchInput = { expectedVersion: 1, requestId: "patch-edit-1", payload: { ...patch.payload, value: ["silver earring", "left ear"] } };
     const rejectInput: RejectPatchInput = { expectedVersion: 1, requestId: "patch-reject-1", reason: "Not stable enough" };
     const fetchMock = mockFetch(
-      jsonResponse({ data: { patches: [patch], inferences: [], modelRuns: [], evidenceSources: [] } }),
+      jsonResponse({ data: { patches: [patch], inferences: [], modelRuns: [], evidenceSources: [], states: [] } }),
       jsonResponse({ data: { patches: [patch] } }),
       jsonResponse({ data: { patch, inference: null, modelRun: null, idempotent: false } }, 201),
       jsonResponse({ data: { patch: { ...patch, status: "accepted", version: 2 }, fact: null, application: null, idempotent: false } }),
@@ -740,6 +753,8 @@ describe("chapter workspace API", () => {
     await expect(acceptPatch(projectId, patchId, acceptInput)).resolves.toMatchObject({ patch: { status: "accepted", version: 2 } });
     await expect(acceptEditedPatch(projectId, patchId, editedInput)).resolves.toMatchObject({ patch: { status: "accepted", version: 2 } });
     await expect(rejectPatch(projectId, patchId, rejectInput)).resolves.toMatchObject({ patch: { status: "rejected", version: 2 } });
+    mockFetch(jsonResponse({ data: { patch: { ...patch, status: "rejected", version: 2 }, idempotent: false, state: null } }));
+    await expect(rejectPatch(projectId, patchId, rejectInput)).rejects.toMatchObject({ message: expect.stringMatching(/invalid patch rejection response/i) });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/projects/${projectId}/scenes/${sceneId}/patch-review?sceneRevisionId=${sceneRevisionId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/projects/${projectId}/patches?status=pending&sceneRevisionId=${sceneRevisionId}`, expect.objectContaining({ headers: { "content-type": "application/json" } }));
@@ -763,6 +778,7 @@ describe("chapter workspace API", () => {
       confidence: 0.8,
       conflictKind: "hard",
       conflictingFactIds: ["56565656-5656-4565-8565-565656565656"],
+      conflictingStateIds: [],
       conflictMessage: "Canon changed on the server.",
       sourceRevisionId: sceneRevisionId,
       inferenceId: inferenceId,
@@ -778,5 +794,203 @@ describe("chapter workspace API", () => {
     const rejection = listPatches(projectId);
     await expect(rejection).rejects.toMatchObject({ status: 409, code: "PATCH_CONFLICT", currentPatch });
     await expect(rejection).rejects.toMatchObject({ details: { currentPatch } });
+  });
+
+  it("strictly parses continuity groups and rejects presentation aliases", () => {
+    const group = {
+      id: continuityGroupId,
+      projectId,
+      documentId,
+      name: "Main timeline",
+      kind: "main" as const,
+      isDefault: true,
+      version: 1,
+      createdAt,
+      updatedAt,
+    };
+    expect(parseContinuityGroup(group)).toEqual(group);
+    expect(parseContinuityGroupList({ continuityGroups: [group] })).toEqual([group]);
+    expect(() => parseContinuityGroupList({ groups: [group] })).toThrowError(/invalid continuity group list/i);
+    expect(() => parseContinuityGroup({ ...group, label: "Main timeline" })).toThrowError(/invalid continuity group/i);
+  });
+
+  it("parses State Patch applications and resolved explicit/missing/conflict tiers", () => {
+    const statePatch = {
+      id: patchId,
+      projectId,
+      operation: "add_state" as const,
+      targetEntityId: entityId,
+      targetFactId: null,
+      baseVersion: 1,
+      payload: {
+        subjectEntityId: entityId,
+        predicate: "wardrobe.current" as const,
+        value: "black coat",
+        valueType: "string" as const,
+        appliesAtSceneId: sceneId,
+        validToSceneId: null,
+        continuityGroupId,
+        carryForward: true,
+        priority: 100,
+      },
+      truthClass: "canon" as const,
+      evidenceSourceIds: [patchEvidenceId],
+      confidence: null,
+      conflictKind: "none" as const,
+      conflictingFactIds: [],
+      conflictingStateIds: [],
+      conflictMessage: null,
+      sourceRevisionId: sceneRevisionId,
+      inferenceId: null,
+      modelRunId: null,
+      status: "pending" as const,
+      proposedBy: "user" as const,
+      version: 1,
+      createdAt,
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    const application = {
+      id: patchApplicationId,
+      projectId,
+      patchId,
+      operation: "add_state" as const,
+      resultingFactId: null,
+      resultingStateId: patchFactId,
+      appliedPayload: statePatch.payload,
+      requestId: "state-accept-1",
+      createdAt: updatedAt,
+    };
+    const entityState = {
+      id: patchFactId,
+      projectId,
+      entityId,
+      predicate: "wardrobe.current" as const,
+      value: "black coat",
+      valueType: "string" as const,
+      appliesAtSceneId: sceneId,
+      sourceRevisionId: sceneRevisionId,
+      continuityGroupId,
+      carryForward: true,
+      priority: 100,
+      validToSceneId: null,
+      sourceId: patchEvidenceId,
+      truthClass: "canon" as const,
+      status: "active" as const,
+      version: 1,
+      createdAt,
+    };
+    const review = parseScenePatchReview({ review: { patches: [statePatch], inferences: [], modelRuns: [], evidenceSources: [], applications: [application], facts: [], states: [entityState] } });
+    expect(review.patches[0]).toMatchObject({ operation: "add_state", payload: { predicate: "wardrobe.current", priority: 100 } });
+    expect(review.applications[0]).toMatchObject({ operation: "add_state", resultingStateId: patchFactId });
+    expect(review.states[0]).toMatchObject({ id: patchFactId, predicate: "wardrobe.current", sourceRevisionId: sceneRevisionId });
+
+    const resolved = parseResolvedState({
+      sceneId,
+      sceneRevisionId,
+      continuityGroupId,
+      hasBlockingConflicts: true,
+      entities: [{
+        entityId,
+        hasBlockingConflicts: true,
+        fields: [
+          {
+            predicate: "wardrobe.current",
+            tier: "explicit",
+            value: "black coat",
+            valueType: "string",
+            cardinality: "single",
+            priority: 100,
+            blockingConflict: false,
+            conflictValues: [],
+            sources: [{ kind: "state", recordId: patchFactId, evidenceSourceId: patchEvidenceId, value: "black coat", tier: "explicit", priority: 100, appliesAtSceneId: sceneId, sourceRevisionId: sceneRevisionId, quotedText: "silver earring" }],
+          },
+          {
+            predicate: "state.injury",
+            tier: "missing",
+            value: null,
+            valueType: "string",
+            cardinality: "single",
+            priority: null,
+            blockingConflict: false,
+            conflictValues: [],
+            sources: [],
+          },
+          {
+            predicate: "state.held_prop",
+            tier: "conflict",
+            value: [patchFactId, patchEvidenceId],
+            valueType: "entity_ref",
+            cardinality: "multi",
+            priority: 100,
+            blockingConflict: true,
+            conflictValues: [patchFactId, patchEvidenceId],
+            sources: [],
+          },
+        ],
+      }],
+    });
+    expect(resolved.entities[0].fields.map((field) => field.tier)).toEqual(["explicit", "missing", "conflict"]);
+    expect(resolved.hasBlockingConflicts).toBe(true);
+    expect(() => parseResolvedState({ sceneId, sceneRevisionId, continuityGroupId, hasBlockingConflicts: false, fields: {} })).toThrowError(/invalid resolved state/i);
+  });
+
+  it("uses project/document scoped Phase 3 routes", async () => {
+    const group = { id: continuityGroupId, projectId, documentId, name: "Flashback", kind: "flashback" as const, isDefault: false, version: 1, createdAt, updatedAt };
+    const stateInput = {
+      documentId,
+      sceneId,
+      sceneRevisionId,
+      subjectEntityId: entityId,
+      predicate: "wardrobe.current" as const,
+      value: "black coat",
+      valueType: "string" as const,
+      carryForward: true,
+      priority: 100,
+      validToSceneId: null,
+      baseVersion: 1,
+      evidence: [{ anchorStart: 0, anchorEnd: 14, quotedText: "silver earring" }],
+      requestId: "state-propose-1",
+      actorId: "local-user",
+    };
+    const statePatch = {
+      id: patchId,
+      projectId,
+      operation: "add_state" as const,
+      targetEntityId: entityId,
+      targetFactId: null,
+      baseVersion: 1,
+      payload: { subjectEntityId: entityId, predicate: "wardrobe.current" as const, value: "black coat", valueType: "string" as const, appliesAtSceneId: sceneId, validToSceneId: null, continuityGroupId, carryForward: true, priority: 100 },
+      truthClass: "canon" as const,
+      evidenceSourceIds: [patchEvidenceId],
+      confidence: null,
+      conflictKind: "none" as const,
+      conflictingFactIds: [],
+      conflictingStateIds: [],
+      conflictMessage: null,
+      sourceRevisionId: sceneRevisionId,
+      inferenceId: null,
+      modelRunId: null,
+      status: "pending" as const,
+      proposedBy: "user" as const,
+      version: 1,
+      createdAt,
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { continuityGroups: [group] } }),
+      jsonResponse({ data: { continuityGroup: group } }, 201),
+      jsonResponse({ data: { patch: statePatch, inference: null, modelRun: null, idempotent: false } }, 201),
+      jsonResponse({ data: { sceneId, sceneRevisionId, continuityGroupId, entities: [], hasBlockingConflicts: false } }),
+    );
+    await expect(listContinuityGroups(projectId, documentId)).resolves.toEqual([group]);
+    await expect(createContinuityGroup(projectId, documentId, { name: "Flashback", kind: "flashback", requestId: "group-1" })).resolves.toEqual(group);
+    await expect(proposeStatePatch(projectId, sceneId, stateInput)).resolves.toMatchObject({ patch: { operation: "add_state" } });
+    await expect(getResolvedState(projectId, sceneId, { sceneRevisionId, entityId })).resolves.toMatchObject({ sceneId, hasBlockingConflicts: false });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/projects/${projectId}/documents/${documentId}/continuity-groups`, expect.anything());
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/documents/${documentId}/continuity-groups`, "POST", { name: "Flashback", kind: "flashback", requestId: "group-1" });
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/scenes/${sceneId}/state-patches`, "POST", stateInput);
+    expect(fetchMock).toHaveBeenNthCalledWith(4, `/api/projects/${projectId}/scenes/${sceneId}/resolved-state?sceneRevisionId=${sceneRevisionId}&entityId=${entityId}`, expect.anything());
   });
 });

@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { factScopeSchema, factValueTypeSchema } from "./story-bible";
+import { statePatchPayloadSchema, type StatePatchPayload as SceneStatePatchPayload } from "./scene-state";
 
 const uuidSchema = z.string().uuid();
 const timestampSchema = z.string().datetime({ offset: true });
 
-export const patchOperationSchema = z.enum(["add_fact", "replace_fact", "retract_fact"]);
+export const patchOperationSchema = z.enum(["add_fact", "replace_fact", "retract_fact", "add_state"]);
 /* A Phase 2 Patch is a review command for a Canon mutation. Inferred model
  * output is represented by Inference and is intentionally a different DTO. */
 export const patchTruthClassSchema = z.literal("canon");
@@ -25,6 +26,8 @@ export const factPatchPayloadSchema = z.object({
   validToSceneId: uuidSchema.nullable().default(null),
 }).strict();
 
+export { statePatchPayloadSchema } from "./scene-state";
+
 export const retractFactPatchPayloadSchema = z.object({}).strict();
 
 const patchShape = {
@@ -40,6 +43,7 @@ const patchShape = {
   confidence: z.number().min(0).max(1).nullable(),
   conflictKind: patchConflictKindSchema,
   conflictingFactIds: z.array(uuidSchema),
+  conflictingStateIds: z.array(uuidSchema).default([]),
   conflictMessage: z.string().nullable(),
   sourceRevisionId: uuidSchema,
   inferenceId: uuidSchema.nullable(),
@@ -61,6 +65,13 @@ function enforcePendingPatchShape(patch: z.infer<z.ZodObject<typeof patchShape>>
   }
   if (patch.operation === "replace_fact" && patch.targetEntityId === null) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["targetEntityId"], message: "replace_fact requires targetEntityId" });
+  }
+  if (patch.operation === "add_state" && (!patch.targetEntityId || patch.targetFactId !== null || patch.baseVersion === null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["operation"], message: "add_state requires targetEntityId/baseVersion and no targetFactId" });
+  }
+  if (patch.operation === "add_state") {
+    const parsed = statePatchPayloadSchema.safeParse(patch.payload);
+    if (!parsed.success) context.addIssue({ code: z.ZodIssueCode.custom, path: ["payload"], message: "add_state payload is invalid" });
   }
 }
 
@@ -84,10 +95,19 @@ export const patchApplicationSchema = z.object({
   projectId: uuidSchema,
   patchId: uuidSchema,
   operation: patchOperationSchema,
-  resultingFactId: uuidSchema.nullable(),
+  resultingFactId: uuidSchema.nullable().default(null),
+  resultingStateId: uuidSchema.nullable(),
   appliedPayload: z.record(z.string(), z.unknown()),
   requestId: z.string().min(1),
   createdAt: timestampSchema,
+}).superRefine((application, context) => {
+  const factResult = application.operation === "add_fact" || application.operation === "replace_fact" || application.operation === "retract_fact";
+  if (factResult && (application.resultingFactId === null || application.resultingStateId !== null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["operation"], message: `${application.operation} requires one Fact result and no State result` });
+  }
+  if (application.operation === "add_state" && (application.resultingFactId !== null || application.resultingStateId === null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["operation"], message: "add_state requires one State result and no Fact result" });
+  }
 });
 
 export const evidenceAnchorSchema = z.object({
@@ -124,6 +144,10 @@ export const proposeFactPatchInputSchema = z.object({
   actorId: z.string().trim().min(1).max(200).optional().default("local-user"),
 }).strict();
 
+/** Explicit user command for a temporary Scene State. It intentionally has no
+ * model/modelVersion fields and never creates ModelRun or Inference rows. */
+export { proposeStatePatchInputSchema } from "./scene-state";
+
 export const acceptPatchInputSchema = z.object({
   expectedVersion: z.number().int().positive(),
   requestId: requestIdSchema,
@@ -146,11 +170,13 @@ export type PatchStatus = z.infer<typeof patchStatusSchema>;
 export type PatchConflictKind = z.infer<typeof patchConflictKindSchema>;
 export type PatchProposedBy = z.infer<typeof patchProposedBySchema>;
 export type FactPatchPayload = z.infer<typeof factPatchPayloadSchema>;
+export type StatePatchPayload = SceneStatePatchPayload;
 export type Patch = z.infer<typeof patchSchema>;
 export type PatchEvidence = z.infer<typeof patchEvidenceSchema>;
 export type PatchApplication = z.infer<typeof patchApplicationSchema>;
 export type EvidenceAnchor = z.infer<typeof evidenceAnchorSchema>;
 export type ProposeFactPatchInput = z.input<typeof proposeFactPatchInputSchema>;
+export type ProposeStatePatchInput = import("./scene-state").ProposeStatePatchInput;
 export type AcceptPatchInput = z.input<typeof acceptPatchInputSchema>;
 export type AcceptEditedPatchInput = z.input<typeof acceptEditedPatchInputSchema>;
 export type RejectPatchInput = z.input<typeof rejectPatchInputSchema>;

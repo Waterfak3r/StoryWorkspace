@@ -9,6 +9,7 @@ export const aliasStatusSchema = z.enum(["active", "archived"]);
 export const factValueTypeSchema = z.enum(["string", "number", "boolean", "enum", "entity_ref", "json"]);
 export const factScopeSchema = z.enum(["base", "scene", "range"]);
 export const factStatusSchema = z.enum(["active", "superseded", "retracted"]);
+export const entityStateStatusSchema = z.enum(["active", "superseded", "retracted"]);
 export const evidenceSourceKindSchema = z.enum(["text_span", "user_input", "import", "asset", "model_output"]);
 
 const attributesSchema = z.record(z.string(), z.unknown());
@@ -78,6 +79,40 @@ export const factSchema = z.object({
   createdAt: timestampSchema,
 });
 
+/**
+ * Canonical, revision-bound temporary state. EntityState is deliberately
+ * separate from Fact: accepting one never changes a character's Base canon.
+ * A held-prop value is one Prop reference. The multi-valued predicate is
+ * represented by multiple EntityState rows and the resolver aggregates them.
+ */
+export const entityStateSchema = z.object({
+  id: uuidSchema,
+  projectId: uuidSchema,
+  entityId: uuidSchema,
+  predicate: z.enum(["wardrobe.current", "state.injury", "state.held_prop"]),
+  value: z.string(),
+  valueType: z.enum(["string", "entity_ref"]),
+  appliesAtSceneId: uuidSchema,
+  sourceRevisionId: uuidSchema,
+  continuityGroupId: uuidSchema,
+  carryForward: z.boolean(),
+  priority: z.number().int(),
+  validToSceneId: uuidSchema.nullable(),
+  sourceId: uuidSchema,
+  truthClass: z.literal("canon"),
+  status: entityStateStatusSchema,
+  version: z.number().int().positive(),
+  createdAt: timestampSchema,
+}).superRefine((value, context) => {
+  if (value.predicate === "state.held_prop") {
+    if (value.valueType !== "entity_ref" || !uuidSchema.safeParse(value.value).success) {
+      context.addIssue({ code: "custom", path: ["value"], message: "held_prop state must contain exactly one Prop entity reference" });
+    }
+  } else if (value.valueType !== "string" || typeof value.value !== "string") {
+    context.addIssue({ code: "custom", path: ["value"], message: "This state predicate requires a string value" });
+  }
+});
+
 export const auditEventSchema = z.object({
   id: uuidSchema,
   projectId: uuidSchema,
@@ -115,9 +150,11 @@ export type EntityAlias = z.infer<typeof entityAliasSchema>;
 export type Alias = EntityAlias;
 export type EvidenceSource = z.infer<typeof evidenceSourceSchema>;
 export type Fact = z.infer<typeof factSchema>;
+export type EntityState = z.infer<typeof entityStateSchema>;
 export type FactValueType = z.infer<typeof factValueTypeSchema>;
 export type FactScope = z.infer<typeof factScopeSchema>;
 export type FactStatus = z.infer<typeof factStatusSchema>;
+export type EntityStateStatus = z.infer<typeof entityStateStatusSchema>;
 export type EvidenceSourceKind = z.infer<typeof evidenceSourceKindSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 export type OutboxEvent = z.infer<typeof outboxEventSchema>;
@@ -157,6 +194,18 @@ export const predicateSchemaRegistry: Readonly<Record<string, PredicateDefinitio
   "state.location": { valueType: "entity_ref", scopes: ["scene", "range"], cardinality: "single" },
   "state.held_prop": { valueType: "entity_ref", scopes: ["scene", "range"], entityTypes: ["character"], cardinality: "multi" },
 };
+
+export const sceneStatePredicateSchema = z.enum(["wardrobe.current", "state.injury", "state.held_prop"]);
+export type SceneStatePredicate = z.infer<typeof sceneStatePredicateSchema>;
+export const sceneStatePredicateDefinitions: Readonly<Record<SceneStatePredicate, PredicateDefinition>> = {
+  "wardrobe.current": { valueType: "string", scopes: ["scene", "range"], entityTypes: ["character"], cardinality: "single" },
+  "state.injury": { valueType: "string", scopes: ["scene", "range"], entityTypes: ["character"], cardinality: "single" },
+  "state.held_prop": { valueType: "entity_ref", scopes: ["scene", "range"], entityTypes: ["character"], cardinality: "multi" },
+};
+
+export function isSceneStatePredicate(predicate: string): predicate is SceneStatePredicate {
+  return sceneStatePredicateSchema.safeParse(predicate).success;
+}
 
 // Upper-case alias makes the registry easy to discover for non-UI callers.
 export const PREDICATE_SCHEMA_REGISTRY = predicateSchemaRegistry;

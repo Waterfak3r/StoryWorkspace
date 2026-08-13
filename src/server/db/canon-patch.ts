@@ -20,10 +20,20 @@ import {
   type ProposeFactPatchInput,
   type RejectPatchInput,
 } from "@/domain/canon-patch";
+import {
+  proposeStatePatchInputSchema,
+  statePatchPayloadSchema,
+  type ProposeStatePatchInput,
+  type ParsedProposeStatePatchInput,
+  type StatePatchPayload,
+} from "@/domain/scene-state";
 import { inferenceSchema, modelRunSchema, type Inference, type ModelRun } from "@/domain/inference";
 import {
   factSchema,
   getPredicateDefinition,
+  entityStateSchema,
+  isSceneStatePredicate,
+  type EntityState,
   validatePredicateValue,
   type Fact,
 } from "@/domain/story-bible";
@@ -100,6 +110,7 @@ type PatchRow = {
   confidence: number | null;
   conflict_kind: Patch["conflictKind"];
   conflicting_fact_ids_json: string;
+  conflicting_state_ids_json: string;
   conflict_message: string | null;
   source_revision_id: string;
   inference_id: string | null;
@@ -132,6 +143,26 @@ type FactRow = {
   created_at: string;
 };
 
+type EntityStateRow = {
+  id: string;
+  project_id: string;
+  entity_id: string;
+  predicate: EntityState["predicate"];
+  value_json: string;
+  value_type: EntityState["valueType"];
+  applies_at_scene_id: string;
+  source_revision_id: string;
+  continuity_group_id: string;
+  carry_forward: number;
+  priority: number;
+  valid_to_scene_id: string | null;
+  source_id: string;
+  truth_class: "canon";
+  status: EntityState["status"];
+  version: number;
+  created_at: string;
+};
+
 type ConflictResult = {
   kind: Patch["conflictKind"];
   ids: string[];
@@ -139,7 +170,7 @@ type ConflictResult = {
 };
 
 type PreparedProposal = {
-  payload: FactPatchPayload | Record<string, never>;
+  payload: FactPatchPayload | StatePatchPayload | Record<string, never>;
   targetEntityId: string | null;
   targetFactId: string | null;
   baseVersion: number | null;
@@ -259,23 +290,50 @@ function selectFact(database: DatabaseSync, factId: string, projectId: string) {
   return row ? toFact(row) : null;
 }
 
+function toEntityState(row: EntityStateRow): EntityState {
+  return entityStateSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    entityId: row.entity_id,
+    predicate: row.predicate,
+    value: parseJson(row.value_json, `Invalid entity state value ${row.id}`),
+    valueType: row.value_type,
+    appliesAtSceneId: row.applies_at_scene_id,
+    sourceRevisionId: row.source_revision_id,
+    continuityGroupId: row.continuity_group_id,
+    carryForward: row.carry_forward === 1,
+    priority: row.priority,
+    validToSceneId: row.valid_to_scene_id,
+    sourceId: row.source_id,
+    truthClass: row.truth_class,
+    status: row.status,
+    version: row.version,
+    createdAt: row.created_at,
+  });
+}
+
+function selectEntityState(database: DatabaseSync, stateId: string, projectId: string) {
+  const row = database.prepare("SELECT id, project_id, entity_id, predicate, value_json, value_type, applies_at_scene_id, source_revision_id, continuity_group_id, carry_forward, priority, valid_to_scene_id, source_id, truth_class, status, version, created_at FROM entity_states WHERE id = :stateId AND project_id = :projectId").get({ stateId, projectId }) as unknown as EntityStateRow | undefined;
+  return row ? toEntityState(row) : null;
+}
+
 function patchEvidenceIds(database: DatabaseSync, projectId: string, patchId: string) {
   return (database.prepare("SELECT evidence_source_id FROM patch_evidence WHERE project_id = :projectId AND patch_id = :patchId ORDER BY evidence_source_id").all({ projectId, patchId }) as Array<{ evidence_source_id: string }>).map((item) => item.evidence_source_id);
 }
 
 function selectApplication(database: DatabaseSync, projectId: string, patchId: string, requestId?: string) {
-  const row = database.prepare(`SELECT id, project_id, patch_id, operation, resulting_fact_id, applied_payload_json, request_id, created_at FROM patch_applications WHERE project_id = :projectId AND patch_id = :patchId${requestId ? " AND request_id = :requestId" : ""} ORDER BY created_at DESC, id DESC LIMIT 1`).get(requestId ? { projectId, patchId, requestId } : { projectId, patchId }) as { id?: string; project_id?: string; patch_id?: string; operation?: Patch["operation"]; resulting_fact_id?: string | null; applied_payload_json?: string; request_id?: string; created_at?: string } | undefined;
+  const row = database.prepare(`SELECT id, project_id, patch_id, operation, resulting_fact_id, resulting_state_id, applied_payload_json, request_id, created_at FROM patch_applications WHERE project_id = :projectId AND patch_id = :patchId${requestId ? " AND request_id = :requestId" : ""} ORDER BY created_at DESC, id DESC LIMIT 1`).get(requestId ? { projectId, patchId, requestId } : { projectId, patchId }) as { id?: string; project_id?: string; patch_id?: string; operation?: Patch["operation"]; resulting_fact_id?: string | null; resulting_state_id?: string | null; applied_payload_json?: string; request_id?: string; created_at?: string } | undefined;
   if (!row?.id || !row.project_id || !row.patch_id || !row.operation || !row.request_id || !row.created_at) return null;
   const appliedPayload = parseJson(row.applied_payload_json ?? "{}", `Invalid patch application payload ${row.id}`);
   if (appliedPayload === null || typeof appliedPayload !== "object" || Array.isArray(appliedPayload)) throw new StoryBibleDataIntegrityError(`Invalid patch application payload ${row.id}`);
-  return patchApplicationSchema.parse({ id: row.id, projectId: row.project_id, patchId: row.patch_id, operation: row.operation, resultingFactId: row.resulting_fact_id ?? null, appliedPayload: appliedPayload as Record<string, unknown>, requestId: row.request_id, createdAt: row.created_at });
+  return patchApplicationSchema.parse({ id: row.id, projectId: row.project_id, patchId: row.patch_id, operation: row.operation, resultingFactId: row.resulting_fact_id ?? null, resultingStateId: row.resulting_state_id ?? null, appliedPayload: appliedPayload as Record<string, unknown>, requestId: row.request_id, createdAt: row.created_at });
 }
 
-function applicationFromRow(row: { id?: string; project_id?: string; patch_id?: string; operation?: Patch["operation"]; resulting_fact_id?: string | null; applied_payload_json?: string; request_id?: string; created_at?: string }) {
+function applicationFromRow(row: { id?: string; project_id?: string; patch_id?: string; operation?: Patch["operation"]; resulting_fact_id?: string | null; resulting_state_id?: string | null; applied_payload_json?: string; request_id?: string; created_at?: string }) {
   if (!row.id || !row.project_id || !row.patch_id || !row.operation || !row.request_id || !row.created_at) return null;
   const appliedPayload = parseJson(row.applied_payload_json ?? "{}", `Invalid patch application payload ${row.id}`);
   if (appliedPayload === null || typeof appliedPayload !== "object" || Array.isArray(appliedPayload)) throw new StoryBibleDataIntegrityError(`Invalid patch application payload ${row.id}`);
-  return patchApplicationSchema.parse({ id: row.id, projectId: row.project_id, patchId: row.patch_id, operation: row.operation, resultingFactId: row.resulting_fact_id ?? null, appliedPayload: appliedPayload as Record<string, unknown>, requestId: row.request_id, createdAt: row.created_at });
+  return patchApplicationSchema.parse({ id: row.id, projectId: row.project_id, patchId: row.patch_id, operation: row.operation, resultingFactId: row.resulting_fact_id ?? null, resultingStateId: row.resulting_state_id ?? null, appliedPayload: appliedPayload as Record<string, unknown>, requestId: row.request_id, createdAt: row.created_at });
 }
 
 function toPatch(database: DatabaseSync, row: PatchRow): Patch {
@@ -284,18 +342,21 @@ function toPatch(database: DatabaseSync, row: PatchRow): Patch {
   }
   if ((row.operation === "add_fact" && (!row.target_entity_id || row.target_fact_id !== null || row.base_version === null))
     || (row.operation === "replace_fact" && (!row.target_entity_id || !row.target_fact_id || row.base_version === null))
-    || (row.operation === "retract_fact" && (!row.target_fact_id || row.base_version === null))) {
+    || (row.operation === "retract_fact" && (!row.target_fact_id || row.base_version === null))
+    || (row.operation === "add_state" && (!row.target_entity_id || row.target_fact_id !== null || row.base_version === null))) {
     throw new StoryBibleDataIntegrityError(`Pending Patch ${row.id} has an invalid command shape`);
   }
   const conflictingFactIds = parseJson(row.conflicting_fact_ids_json, `Invalid patch conflict payload ${row.id}`);
   if (!Array.isArray(conflictingFactIds) || !conflictingFactIds.every((value) => typeof value === "string")) throw new StoryBibleDataIntegrityError(`Invalid patch conflict payload ${row.id}`);
+  const conflictingStateIds = parseJson(row.conflicting_state_ids_json ?? "[]", `Invalid patch state conflict payload ${row.id}`);
+  if (!Array.isArray(conflictingStateIds) || !conflictingStateIds.every((value) => typeof value === "string")) throw new StoryBibleDataIntegrityError(`Invalid patch state conflict payload ${row.id}`);
   const payload = parseJson(row.payload_json, `Invalid patch payload ${row.id}`);
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new StoryBibleDataIntegrityError(`Invalid patch payload ${row.id}`);
-  return pendingPatchSchema.parse({ id: row.id, projectId: row.project_id, operation: row.operation, targetEntityId: row.target_entity_id, targetFactId: row.target_fact_id, baseVersion: row.base_version, payload: payload as Record<string, unknown>, truthClass: row.truth_class, evidenceSourceIds: patchEvidenceIds(database, row.project_id, row.id), confidence: row.confidence, conflictKind: row.conflict_kind, conflictingFactIds, conflictMessage: row.conflict_message, sourceRevisionId: row.source_revision_id, inferenceId: row.inference_id, modelRunId: row.model_run_id, status: row.status, proposedBy: row.proposed_by, version: row.version, createdAt: row.created_at, resolvedAt: row.resolved_at, resolvedByUserId: row.resolved_by_user_id });
+  return pendingPatchSchema.parse({ id: row.id, projectId: row.project_id, operation: row.operation, targetEntityId: row.target_entity_id, targetFactId: row.target_fact_id, baseVersion: row.base_version, payload: payload as Record<string, unknown>, truthClass: row.truth_class, evidenceSourceIds: patchEvidenceIds(database, row.project_id, row.id), confidence: row.confidence, conflictKind: row.conflict_kind, conflictingFactIds, conflictingStateIds, conflictMessage: row.conflict_message, sourceRevisionId: row.source_revision_id, inferenceId: row.inference_id, modelRunId: row.model_run_id, status: row.status, proposedBy: row.proposed_by, version: row.version, createdAt: row.created_at, resolvedAt: row.resolved_at, resolvedByUserId: row.resolved_by_user_id });
 }
 
 function selectPatch(database: DatabaseSync, patchId: string, projectId: string) {
-  const row = database.prepare("SELECT id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id FROM pending_patches WHERE id = :patchId AND project_id = :projectId").get({ patchId, projectId }) as unknown as PatchRow | undefined;
+  const row = database.prepare("SELECT id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflicting_state_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id FROM pending_patches WHERE id = :patchId AND project_id = :projectId").get({ patchId, projectId }) as unknown as PatchRow | undefined;
   return row ? toPatch(database, row) : null;
 }
 
@@ -418,7 +479,31 @@ function detectConflict(database: DatabaseSync, projectId: string, payload: Fact
   return { kind: "none", ids: [], message: null };
 }
 
-function insertEvidence(database: DatabaseSync, projectId: string, source: SourceRevision, anchor: { anchorStart: number; anchorEnd: number; quotedText?: string | null }, modelRunId: string, actorId: string) {
+type StateConflictResult = { kind: Patch["conflictKind"]; stateIds: string[]; factIds: string[]; message: string | null };
+
+function detectStateConflict(database: DatabaseSync, projectId: string, payload: StatePatchPayload, source: SourceRevision, excludedStateId?: string | null): StateConflictResult {
+  if (payload.predicate === "state.held_prop") return { kind: "none", stateIds: [], factIds: [], message: null };
+  const stateRows = database.prepare("SELECT id, value_json, priority FROM entity_states WHERE project_id = :projectId AND entity_id = :entityId AND predicate = :predicate AND applies_at_scene_id = :sceneId AND continuity_group_id = :continuityGroupId AND status = 'active' AND id IS NOT :excludedStateId").all({ projectId, entityId: payload.subjectEntityId, predicate: payload.predicate, sceneId: payload.appliesAtSceneId, continuityGroupId: payload.continuityGroupId, excludedStateId: excludedStateId ?? null }) as Array<{ id: string; value_json: string; priority: number }>;
+  const stateIds = stateRows.filter((row) => row.priority === payload.priority && row.value_json !== JSON.stringify(payload.value)).map((row) => row.id);
+  const sourceScene = getScenePosition(database, projectId, source.scene_id, ["sceneId"], source.document_id);
+  const factRows = database.prepare("SELECT f.id, f.value_json, f.scope, f.scene_id, f.valid_from_scene_id, f.valid_to_scene_id FROM facts f WHERE f.project_id = :projectId AND f.subject_entity_id = :entityId AND f.predicate = :predicate AND f.status = 'active'").all({ projectId, entityId: payload.subjectEntityId, predicate: payload.predicate }) as Array<{ id: string; value_json: string; scope: Fact["scope"]; scene_id: string | null; valid_from_scene_id: string | null; valid_to_scene_id: string | null }>;
+  const factIds = factRows.filter((row) => {
+    if (row.value_json === JSON.stringify(payload.value)) return false;
+    if (row.scope === "scene") return row.scene_id === source.scene_id;
+    if (row.scope !== "range" || !row.valid_from_scene_id) return false;
+    try {
+      const from = getScenePosition(database, projectId, row.valid_from_scene_id, ["validFromSceneId"], source.document_id);
+      const to = row.valid_to_scene_id ? getScenePosition(database, projectId, row.valid_to_scene_id, ["validToSceneId"], source.document_id) : null;
+      return from.narrative_rank <= sourceScene.narrative_rank && (!to || sourceScene.narrative_rank <= to.narrative_rank);
+    } catch {
+      return false;
+    }
+  }).map((row) => row.id);
+  const ids = [...stateIds, ...factIds];
+  return ids.length > 0 ? { kind: "hard", stateIds, factIds, message: "An active single-value state or legacy Canon Fact conflicts at this scene and priority." } : { kind: "none", stateIds: [], factIds: [], message: null };
+}
+
+function insertEvidence(database: DatabaseSync, projectId: string, source: SourceRevision, anchor: { anchorStart: number; anchorEnd: number; quotedText?: string | null }, modelRunId: string | null, actorId: string) {
   const parsed = evidenceAnchorSchema.parse(anchor);
   if (parsed.anchorEnd > source.content.length) throw new StoryBibleValidationError("Evidence anchor is outside the source revision", ["evidence"]);
   const quotedText = parsed.quotedText ?? source.content.slice(parsed.anchorStart, parsed.anchorEnd);
@@ -437,6 +522,15 @@ function insertFact(database: DatabaseSync, projectId: string, payload: FactPatc
   return fact;
 }
 
+function insertEntityState(database: DatabaseSync, projectId: string, payload: StatePatchPayload, sourceRevisionId: string, sourceId: string): EntityState {
+  const id = randomUUID();
+  const createdAt = now();
+  database.prepare("INSERT INTO entity_states (id, project_id, entity_id, predicate, value_json, value_type, applies_at_scene_id, source_revision_id, continuity_group_id, carry_forward, priority, valid_to_scene_id, source_id, truth_class, status, version, created_at) VALUES (:id, :projectId, :entityId, :predicate, :valueJson, :valueType, :appliesAtSceneId, :sourceRevisionId, :continuityGroupId, :carryForward, :priority, :validToSceneId, :sourceId, 'canon', 'active', 1, :createdAt)").run({ id, projectId, entityId: payload.subjectEntityId, predicate: payload.predicate, valueJson: JSON.stringify(payload.value), valueType: payload.valueType, appliesAtSceneId: payload.appliesAtSceneId, sourceRevisionId, continuityGroupId: payload.continuityGroupId, carryForward: payload.carryForward ? 1 : 0, priority: payload.priority, validToSceneId: payload.validToSceneId, sourceId, createdAt });
+  const state = selectEntityState(database, id, projectId);
+  if (!state) throw new StoryBibleDataIntegrityError("Accepted entity state could not be read after insertion");
+  return state;
+}
+
 function markPatchExpired(database: DatabaseSync, patch: Patch, actorId: string, requestId: string, reason: string) {
   const result = database.prepare("UPDATE pending_patches SET status = 'expired', version = version + 1, resolved_at = :resolvedAt, resolved_by_user_id = :resolvedByUserId WHERE project_id = :projectId AND id = :patchId AND status = 'pending' AND version = :version").run({ projectId: patch.projectId, patchId: patch.id, version: patch.version, resolvedAt: now(), resolvedByUserId: actorId });
   if (result.changes === 1) {
@@ -447,7 +541,7 @@ function markPatchExpired(database: DatabaseSync, patch: Patch, actorId: string,
 }
 
 function expireOlderPatches(database: DatabaseSync, projectId: string, sceneId: string, currentRevisionId: string, actorId: string, requestId: string) {
-  const rows = database.prepare("SELECT p.id, p.project_id, p.operation, p.target_entity_id, p.target_fact_id, p.base_version, p.payload_json, p.input_fingerprint, p.truth_class, p.confidence, p.conflict_kind, p.conflicting_fact_ids_json, p.conflict_message, p.source_revision_id, p.inference_id, p.model_run_id, p.status, p.proposed_by, p.version, p.created_at, p.resolved_at, p.resolved_by_user_id FROM pending_patches p JOIN scene_revisions sr ON sr.id = p.source_revision_id WHERE p.project_id = :projectId AND sr.scene_id = :sceneId AND p.source_revision_id <> :currentRevisionId AND p.status = 'pending'").all({ projectId, sceneId, currentRevisionId }) as unknown as PatchRow[];
+  const rows = database.prepare("SELECT p.id, p.project_id, p.operation, p.target_entity_id, p.target_fact_id, p.base_version, p.payload_json, p.input_fingerprint, p.truth_class, p.confidence, p.conflict_kind, p.conflicting_fact_ids_json, p.conflicting_state_ids_json, p.conflict_message, p.source_revision_id, p.inference_id, p.model_run_id, p.status, p.proposed_by, p.version, p.created_at, p.resolved_at, p.resolved_by_user_id FROM pending_patches p JOIN scene_revisions sr ON sr.id = p.source_revision_id WHERE p.project_id = :projectId AND sr.scene_id = :sceneId AND p.source_revision_id <> :currentRevisionId AND p.status = 'pending'").all({ projectId, sceneId, currentRevisionId }) as unknown as PatchRow[];
   for (const row of rows) markPatchExpired(database, toPatch(database, row), actorId, requestId, "A newer scene revision superseded the source text");
 }
 
@@ -486,7 +580,7 @@ export function revalidateSceneFactPatches(projectId: string, sceneId: string, s
     const evidenceSourceId = randomUUID();
     db.prepare("INSERT INTO evidence_sources (id, project_id, kind, document_id, scene_id, scene_revision_id, revision_id, anchor_start, anchor_end, quoted_text, created_by_user_id, model_run_id, created_at) VALUES (:id, :projectId, 'model_output', :documentId, :sceneId, :sceneRevisionId, :sceneRevisionId, '0', '0', '', :actorId, :modelRunId, :createdAt)").run({ id: evidenceSourceId, projectId, documentId: source.document_id, sceneId, sceneRevisionId, actorId, modelRunId, createdAt });
     const patchId = randomUUID();
-    db.prepare("INSERT INTO pending_patches (id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id) VALUES (:id, :projectId, 'retract_fact', :targetEntityId, :targetFactId, :baseVersion, '{}', :inputFingerprint, 'canon', 1, 'none', '[]', :conflictMessage, :sourceRevisionId, NULL, :modelRunId, 'pending', 'rule', 1, :createdAt, NULL, NULL)").run({ id: patchId, projectId, targetEntityId: row.subject_entity_id, targetFactId: row.id, baseVersion: row.version, inputFingerprint, conflictMessage: "Source evidence disappeared; review whether this Canon fact should be retracted.", sourceRevisionId: sceneRevisionId, modelRunId, createdAt });
+    db.prepare("INSERT INTO pending_patches (id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflicting_state_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id) VALUES (:id, :projectId, 'retract_fact', :targetEntityId, :targetFactId, :baseVersion, '{}', :inputFingerprint, 'canon', 1, 'none', '[]', '[]', :conflictMessage, :sourceRevisionId, NULL, :modelRunId, 'pending', 'rule', 1, :createdAt, NULL, NULL)").run({ id: patchId, projectId, targetEntityId: row.subject_entity_id, targetFactId: row.id, baseVersion: row.version, inputFingerprint, conflictMessage: "Source evidence disappeared; review whether this Canon fact should be retracted.", sourceRevisionId: sceneRevisionId, modelRunId, createdAt });
     db.prepare("INSERT INTO patch_evidence (project_id, patch_id, evidence_source_id, created_at) VALUES (:projectId, :patchId, :evidenceSourceId, :createdAt)").run({ projectId, patchId, evidenceSourceId, createdAt });
     const patch = selectPatch(db, patchId, projectId);
     if (!patch) throw new StoryBibleDataIntegrityError("Revalidation patch could not be read");
@@ -504,7 +598,7 @@ export function getPatch(patchId: string, projectId: string, database?: Database
 export function listPatchApplications(projectId: string, patchId?: string, database?: DatabaseSync) {
   const db = resolveDatabase(database);
   getProject(db, projectId);
-  const rows = db.prepare(`SELECT id, project_id, patch_id, operation, resulting_fact_id, applied_payload_json, request_id, created_at FROM patch_applications WHERE project_id = :projectId${patchId ? " AND patch_id = :patchId" : ""} ORDER BY created_at DESC, id DESC`).all(patchId ? { projectId, patchId } : { projectId }) as Array<{ id?: string; project_id?: string; patch_id?: string; operation?: Patch["operation"]; resulting_fact_id?: string | null; applied_payload_json?: string; request_id?: string; created_at?: string }>;
+  const rows = db.prepare(`SELECT id, project_id, patch_id, operation, resulting_fact_id, resulting_state_id, applied_payload_json, request_id, created_at FROM patch_applications WHERE project_id = :projectId${patchId ? " AND patch_id = :patchId" : ""} ORDER BY created_at DESC, id DESC`).all(patchId ? { projectId, patchId } : { projectId }) as Array<{ id?: string; project_id?: string; patch_id?: string; operation?: Patch["operation"]; resulting_fact_id?: string | null; resulting_state_id?: string | null; applied_payload_json?: string; request_id?: string; created_at?: string }>;
   return rows.flatMap((row) => { const application = applicationFromRow(row); return application ? [application] : []; });
 }
 
@@ -521,6 +615,13 @@ export function listPatchFacts(projectId: string, patchId?: string, database?: D
   return [...factIds].flatMap((factId) => { const fact = selectFact(db, factId, projectId); return fact ? [fact] : []; });
 }
 
+export function listPatchStates(projectId: string, patchId?: string, database?: DatabaseSync) {
+  const db = resolveDatabase(database);
+  getProject(db, projectId);
+  const rows = db.prepare(`SELECT es.id, es.project_id, es.entity_id, es.predicate, es.value_json, es.value_type, es.applies_at_scene_id, es.source_revision_id, es.continuity_group_id, es.carry_forward, es.priority, es.valid_to_scene_id, es.source_id, es.truth_class, es.status, es.version, es.created_at FROM patch_applications pa JOIN entity_states es ON es.id = pa.resulting_state_id AND es.project_id = pa.project_id WHERE pa.project_id = :projectId${patchId ? " AND pa.patch_id = :patchId" : ""} ORDER BY es.created_at DESC, es.id DESC`).all(patchId ? { projectId, patchId } : { projectId }) as unknown as EntityStateRow[];
+  return rows.map(toEntityState);
+}
+
 export function listPatches(projectId: string, options: { status?: Patch["status"]; sceneRevisionId?: string; targetEntityId?: string } = {}, database?: DatabaseSync) {
   const db = resolveDatabase(database);
   getProject(db, projectId);
@@ -529,7 +630,7 @@ export function listPatches(projectId: string, options: { status?: Patch["status
   if (options.status) { conditions.push("status = :status"); parameters.status = options.status; }
   if (options.sceneRevisionId) { conditions.push("source_revision_id = :sceneRevisionId"); parameters.sceneRevisionId = options.sceneRevisionId; }
   if (options.targetEntityId) { conditions.push("target_entity_id = :targetEntityId"); parameters.targetEntityId = options.targetEntityId; }
-  const rows = db.prepare(`SELECT id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id FROM pending_patches WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC`).all(parameters) as unknown as PatchRow[];
+  const rows = db.prepare(`SELECT id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflicting_state_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id FROM pending_patches WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC`).all(parameters) as unknown as PatchRow[];
   return rows.map((row) => toPatch(db, row));
 }
 
@@ -562,6 +663,7 @@ export function listModelRuns(projectId: string, options: { sourceRevisionId?: s
 
 export function proposeFactPatch(projectId: string, input: ProposeFactPatchInput, database?: DatabaseSync) {
   const values = proposeFactPatchInputSchema.parse(input);
+  if (values.predicate && isSceneStatePredicate(values.predicate)) throw new StoryBibleValidationError("Scene state predicates require an add_state proposal", ["predicate"]);
   const db = resolveDatabase(database);
   getProject(db, projectId);
   const result = withTransaction(db, () => {
@@ -609,7 +711,111 @@ export function proposeFactPatch(projectId: string, input: ProposeFactPatchInput
   return result;
 }
 
+function stateProposalFingerprint(values: ProposeStatePatchInput) {
+  return hashJson({
+    documentId: values.documentId,
+    sceneId: values.sceneId,
+    sceneRevisionId: values.sceneRevisionId,
+    subjectEntityId: values.subjectEntityId,
+    predicate: values.predicate,
+    value: values.value,
+    valueType: values.valueType ?? null,
+    carryForward: values.carryForward,
+    priority: values.priority,
+    validToSceneId: values.validToSceneId,
+    baseVersion: values.baseVersion,
+    evidence: values.evidence.map((anchor) => ({ anchorStart: anchor.anchorStart, anchorEnd: anchor.anchorEnd, quotedText: anchor.quotedText ?? null })),
+    actorId: values.actorId,
+  });
+}
+
+function validateStateValue(database: DatabaseSync, projectId: string, predicate: ProposeStatePatchInput["predicate"], value: string, subjectEntityId: string) {
+  const subject = getEntityForProject(projectId, subjectEntityId, database);
+  if (!subject) throw new StoryBibleNotFoundError("Subject entity not found");
+  if (subject.type !== "character" || !["active", "draft"].includes(subject.status) || subject.mergedIntoEntityId !== null) throw new StoryBibleValidationError("Scene state subject must be an active or draft character", ["subjectEntityId"]);
+  if (predicate === "state.held_prop") {
+    const prop = getEntityForProject(projectId, value, database);
+    if (!prop) throw new StoryBibleNotFoundError("Prop entity not found");
+    if (prop.type !== "prop" || !["active", "draft"].includes(prop.status) || prop.mergedIntoEntityId !== null) throw new StoryBibleValidationError("held_prop value must reference an active or draft Prop in the same project", ["value"]);
+    return { valueType: "entity_ref" as const };
+  }
+  return { valueType: "string" as const };
+}
+
+function prepareStateProposal(database: DatabaseSync, projectId: string, values: ParsedProposeStatePatchInput, source: SourceRevision) {
+  const group = database.prepare("SELECT continuity_group_id FROM scene_revisions WHERE id = :revisionId AND project_id = :projectId").get({ revisionId: source.id, projectId }) as { continuity_group_id?: string } | undefined;
+  if (!group?.continuity_group_id) throw new StoryBibleDataIntegrityError("Source revision continuity group is missing");
+  const subject = getEntityForProject(projectId, values.subjectEntityId, database);
+  if (!subject) throw new StoryBibleNotFoundError("Subject entity not found");
+  if (subject.version !== values.baseVersion) throw new StoryBibleConflictError("entity", subject);
+  const valueType = validateStateValue(database, projectId, values.predicate, values.value, values.subjectEntityId).valueType;
+  if (!values.carryForward && values.validToSceneId !== null) throw new StoryBibleValidationError("validToSceneId requires carryForward", ["validToSceneId"]);
+  if (values.validToSceneId !== null) {
+    const end = getScenePosition(database, projectId, values.validToSceneId, ["validToSceneId"], source.document_id);
+    const sourceScene = getScenePosition(database, projectId, source.scene_id, ["sceneId"], source.document_id);
+    if (end.narrative_rank < sourceScene.narrative_rank) throw new StoryBibleValidationError("validToSceneId must not precede the applies-at scene", ["validToSceneId"]);
+    const endGroup = database.prepare("SELECT continuity_group_id FROM scenes WHERE id = :sceneId AND project_id = :projectId").get({ sceneId: values.validToSceneId, projectId }) as { continuity_group_id?: string } | undefined;
+    if (endGroup?.continuity_group_id !== group.continuity_group_id) throw new StoryBibleValidationError("validToSceneId must belong to the source continuity group", ["validToSceneId"]);
+  }
+  const payload: StatePatchPayload = statePatchPayloadSchema.parse({
+    subjectEntityId: values.subjectEntityId,
+    predicate: values.predicate,
+    value: values.value,
+    valueType,
+    appliesAtSceneId: source.scene_id,
+    validToSceneId: values.validToSceneId,
+    continuityGroupId: group.continuity_group_id,
+    carryForward: values.carryForward,
+    priority: values.priority,
+  });
+  return { payload, subject };
+}
+
+/** Propose a user-authored add_state command. No ModelRun or Inference is
+ * created: state is explicit input and enters the same Patch review plane. */
+export function proposeStatePatch(projectId: string, input: ProposeStatePatchInput, database?: DatabaseSync) {
+  const values = proposeStatePatchInputSchema.parse(input);
+  const db = resolveDatabase(database);
+  getProject(db, projectId);
+  return withTransaction(db, () => {
+    const requestFingerprint = stateProposalFingerprint(values);
+    const existing = getIdempotency(db, projectId, "patch.propose-state", values.requestId);
+    if (existing) {
+      if (existing.response.requestFingerprint !== requestFingerprint) throw new StoryBibleIdempotencyConflictError("This request ID was already used for a different state proposal");
+      const patch = selectPatch(db, existing.resourceId, projectId);
+      if (!patch) throw new StoryBibleDataIntegrityError("Stored state proposal no longer exists");
+      return { patch, state: null as EntityState | null, inference: null, modelRun: null, idempotent: true };
+    }
+    const source = currentSourceRevision(db, { projectId, documentId: values.documentId, sceneId: values.sceneId, sceneRevisionId: values.sceneRevisionId });
+    const { payload, subject } = prepareStateProposal(db, projectId, values, source);
+    const semanticFingerprint = hashJson({ sourceRevisionId: source.id, operation: "add_state", targetEntityId: subject.id, baseVersion: subject.version, payload, evidence: values.evidence.map((anchor) => ({ anchorStart: anchor.anchorStart, anchorEnd: anchor.anchorEnd })) });
+    const semanticDuplicate = db.prepare("SELECT id FROM pending_patches WHERE project_id = :projectId AND source_revision_id = :sourceRevisionId AND input_fingerprint = :inputFingerprint ORDER BY created_at DESC, id DESC LIMIT 1").get({ projectId, sourceRevisionId: source.id, inputFingerprint: semanticFingerprint }) as { id?: string } | undefined;
+    if (semanticDuplicate?.id) {
+      const patch = selectPatch(db, semanticDuplicate.id, projectId);
+      if (!patch) throw new StoryBibleDataIntegrityError("Semantic duplicate state patch no longer exists");
+      storeIdempotency(db, { projectId, operation: "patch.propose-state", requestId: values.requestId, resourceType: "pending_patch", resourceId: patch.id, response: { patchId: patch.id, requestFingerprint, semanticFingerprint } });
+      return { patch, state: null as EntityState | null, inference: null, modelRun: null, idempotent: true };
+    }
+    expireOlderPatches(db, projectId, source.scene_id, source.id, values.actorId, values.requestId);
+    const conflict = detectStateConflict(db, projectId, payload, source);
+    const createdAt = now();
+    const evidenceSourceIds = values.evidence.map((anchor) => insertEvidence(db, projectId, source, anchor, null, values.actorId));
+    const patchId = randomUUID();
+    db.prepare("INSERT INTO pending_patches (id, project_id, operation, target_entity_id, target_fact_id, base_version, payload_json, input_fingerprint, truth_class, confidence, conflict_kind, conflicting_fact_ids_json, conflicting_state_ids_json, conflict_message, source_revision_id, inference_id, model_run_id, status, proposed_by, version, created_at, resolved_at, resolved_by_user_id) VALUES (:id, :projectId, 'add_state', :targetEntityId, NULL, :baseVersion, :payloadJson, :inputFingerprint, 'canon', NULL, :conflictKind, :conflictingFactIdsJson, :conflictingStateIdsJson, :conflictMessage, :sourceRevisionId, NULL, NULL, 'pending', 'user', 1, :createdAt, NULL, NULL)").run({ id: patchId, projectId, targetEntityId: subject.id, baseVersion: subject.version, payloadJson: JSON.stringify(payload), inputFingerprint: semanticFingerprint, conflictKind: conflict.kind, conflictingFactIdsJson: JSON.stringify(conflict.factIds), conflictingStateIdsJson: JSON.stringify(conflict.stateIds), conflictMessage: conflict.message, sourceRevisionId: source.id, createdAt });
+    for (const evidenceSourceId of evidenceSourceIds) db.prepare("INSERT INTO patch_evidence (project_id, patch_id, evidence_source_id, created_at) VALUES (:projectId, :patchId, :evidenceSourceId, :createdAt)").run({ projectId, patchId, evidenceSourceId, createdAt });
+    const patch = selectPatch(db, patchId, projectId);
+    if (!patch) throw new StoryBibleDataIntegrityError("State patch could not be read after proposal");
+    storeIdempotency(db, { projectId, operation: "patch.propose-state", requestId: values.requestId, resourceType: "pending_patch", resourceId: patch.id, response: { patchId: patch.id, requestFingerprint, semanticFingerprint } });
+    writeEvent(db, { projectId, eventType: "patch.proposed", aggregateType: "pending_patch", aggregateId: patch.id, aggregateVersion: patch.version, requestId: values.requestId, actorId: values.actorId, payload: { operation: patch.operation, explicitState: true } });
+    return { patch, state: null as EntityState | null, inference: null, modelRun: null, idempotent: false };
+  });
+}
+
 function resolveAcceptancePayload(database: DatabaseSync, projectId: string, patch: Patch, source: SourceRevision, editedPayload?: unknown) {
+  if (patch.operation === "add_state") {
+    const payload = editedPayload ?? patch.payload;
+    return statePatchPayloadSchema.parse(payload);
+  }
   if (patch.operation === "retract_fact") {
     if (editedPayload !== undefined) retractFactPatchPayloadSchema.parse(editedPayload);
     return {} as Record<string, never>;
@@ -618,12 +824,22 @@ function resolveAcceptancePayload(database: DatabaseSync, projectId: string, pat
   return validatePayload(database, projectId, patch.operation, payload, source, patch.targetFactId) as FactPatchPayload;
 }
 
-function assertEditedPayloadIdentity(patch: Patch, payload: FactPatchPayload) {
+function assertEditedPayloadIdentity(patch: Patch, payload: FactPatchPayload | StatePatchPayload) {
+  if (patch.operation === "add_state") {
+    const original = statePatchPayloadSchema.parse(patch.payload);
+    const edited = statePatchPayloadSchema.parse(payload);
+    const identityFields: Array<keyof StatePatchPayload> = ["subjectEntityId", "predicate", "valueType", "appliesAtSceneId", "validToSceneId", "continuityGroupId", "carryForward", "priority"];
+    for (const field of identityFields) {
+      if (JSON.stringify(original[field]) !== JSON.stringify(edited[field])) throw new StoryBibleValidationError("Edited state payload may change value only; subject, predicate, type, scene, group, carry-forward, priority, and range are immutable", ["payload", field]);
+    }
+    return;
+  }
   if (patch.operation === "retract_fact") return;
   const original = factPatchPayloadSchema.parse(patch.payload);
+  const factPayload = payload as FactPatchPayload;
   const identityFields: Array<keyof FactPatchPayload> = ["subjectEntityId", "predicate", "valueType", "scope", "sceneId", "validFromSceneId", "validToSceneId"];
   for (const field of identityFields) {
-    if (JSON.stringify(original[field]) !== JSON.stringify(payload[field])) throw new StoryBibleValidationError("Edited payload may change value only; subject, predicate, valueType, scope, and scene bounds are immutable", ["payload", field]);
+    if (JSON.stringify(original[field]) !== JSON.stringify(factPayload[field])) throw new StoryBibleValidationError("Edited payload may change value only; subject, predicate, valueType, scope, and scene bounds are immutable", ["payload", field]);
   }
 }
 
@@ -638,7 +854,7 @@ function assertEvidenceStillValid(database: DatabaseSync, patch: Patch, source: 
   }
 }
 
-type AcceptanceResult = { patch: Patch; fact: Fact | null; application: PatchApplication | null; idempotent: boolean };
+type AcceptanceResult = { patch: Patch; fact: Fact | null; state: EntityState | null; application: PatchApplication | null; idempotent: boolean };
 
 function acceptanceFingerprint(patchId: string, expectedVersion: number, payload: unknown, operation: string, actorId: string) {
   return hashJson({ patchId, expectedVersion, operation, payload, actorId });
@@ -667,7 +883,8 @@ function applyPatch(projectId: string, patchId: string, values: AcceptPatchInput
       if (idempotent.response.inputFingerprint !== inputFingerprint) throw new StoryBibleIdempotencyConflictError("This request ID was already used for a different patch acceptance");
       const patch = selectPatch(db, patchId, projectId) ?? existing;
       const resultFactId = typeof idempotent.response.resultFactId === "string" ? idempotent.response.resultFactId : null;
-      return { patch, fact: resultFactId ? selectFact(db, resultFactId, projectId) : null, application: selectApplication(db, projectId, patchId, values.requestId), idempotent: true };
+      const resultStateId = typeof idempotent.response.resultStateId === "string" ? idempotent.response.resultStateId : null;
+      return { patch, fact: resultFactId ? selectFact(db, resultFactId, projectId) : null, state: resultStateId ? selectEntityState(db, resultStateId, projectId) : null, application: selectApplication(db, projectId, patchId, values.requestId), idempotent: true };
     }
     if (existing.status !== "pending") throw new StoryBiblePatchResolvedError(existing);
     if (existing.version !== values.expectedVersion) throw new StoryBiblePatchConflictError(existing, "The pending patch changed on the server. Review it before accepting again.");
@@ -678,21 +895,35 @@ function applyPatch(projectId: string, patchId: string, values: AcceptPatchInput
     } catch (error) {
       const expired = markPatchExpired(db, existing, values.actorId ?? "local-user", values.requestId, error instanceof Error ? error.message : "Source revision is no longer valid");
       expiredError = new StoryBiblePatchConflictError(expired, "The patch source revision is stale; it was expired and needs revalidation.");
-      return { patch: expired, fact: null, application: null, idempotent: false };
+      return { patch: expired, fact: null, state: null, application: null, idempotent: false };
     }
     const payload = resolveAcceptancePayload(db, projectId, existing, source, editedPayload);
     if (editedPayload !== undefined) assertEditedPayloadIdentity(existing, payload as FactPatchPayload);
     if (existing.operation === "add_fact" && existing.targetEntityId && (payload as FactPatchPayload).subjectEntityId !== existing.targetEntityId) {
       throw new StoryBibleValidationError("Edited payload cannot change the target entity", ["payload", "subjectEntityId"]);
     }
+    if (existing.operation === "add_state") {
+      const statePayload = payload as StatePatchPayload;
+      if (!existing.targetEntityId || statePayload.subjectEntityId !== existing.targetEntityId) {
+        throw new StoryBibleValidationError("State payload subject must match the pending patch target", ["payload", "subjectEntityId"]);
+      }
+      const expectedValueType = validateStateValue(db, projectId, statePayload.predicate, statePayload.value, statePayload.subjectEntityId).valueType;
+      if (statePayload.valueType !== expectedValueType) {
+        throw new StoryBibleValidationError(`State predicate requires valueType ${expectedValueType}`, ["payload", "valueType"]);
+      }
+    }
     let targetFact = existing.targetFactId ? selectFact(db, existing.targetFactId, projectId) : null;
-    if ((existing.operation === "replace_fact" || existing.operation === "retract_fact") && (!targetFact || targetFact.status !== "active")) throw new StoryBiblePatchConflictError(existing, "The target Canon fact is no longer active.");
-    if (targetFact && existing.baseVersion !== targetFact.version) throw new StoryBiblePatchConflictError(existing, "The target Canon fact changed after this patch was proposed.");
-    if (existing.operation === "add_fact" && existing.targetEntityId) {
+    if (existing.operation !== "add_state" && (existing.operation === "replace_fact" || existing.operation === "retract_fact") && (!targetFact || targetFact.status !== "active")) throw new StoryBiblePatchConflictError(existing, "The target Canon fact is no longer active.");
+    if (existing.operation !== "add_state" && targetFact && existing.baseVersion !== targetFact.version) throw new StoryBiblePatchConflictError(existing, "The target Canon fact changed after this patch was proposed.");
+    if ((existing.operation === "add_fact" || existing.operation === "add_state") && existing.targetEntityId) {
       const entity = getEntityForProject(projectId, existing.targetEntityId, db);
       if (existing.baseVersion !== entity.version) throw new StoryBiblePatchConflictError(existing, "The target entity changed after this patch was proposed.");
     }
-    const conflict = existing.operation === "retract_fact" ? { kind: "none" as const, ids: [], message: null } : detectConflict(db, projectId, payload as FactPatchPayload, existing.targetFactId);
+    if (existing.operation === "add_state") {
+      const stateConflict = detectStateConflict(db, projectId, payload as StatePatchPayload, source);
+      if (stateConflict.kind === "hard") throw new StoryBiblePatchConflictError({ ...existing, conflictKind: stateConflict.kind, conflictingFactIds: stateConflict.factIds, conflictingStateIds: stateConflict.stateIds, conflictMessage: stateConflict.message }, stateConflict.message ?? "The state patch conflicts with Canon.");
+    }
+    const conflict = existing.operation === "retract_fact" || existing.operation === "add_state" ? { kind: "none" as const, ids: [], message: null } : detectConflict(db, projectId, payload as FactPatchPayload, existing.targetFactId);
     if (conflict.kind === "hard") throw new StoryBiblePatchConflictError({ ...existing, conflictKind: conflict.kind, conflictingFactIds: conflict.ids, conflictMessage: conflict.message }, conflict.message ?? "The patch conflicts with Canon.");
     const evidenceSourceId = existing.evidenceSourceIds[0];
     if (!evidenceSourceId) throw new StoryBibleValidationError("Patch has no evidence", ["evidenceSourceIds"]);
@@ -702,7 +933,9 @@ function applyPatch(projectId: string, patchId: string, values: AcceptPatchInput
       targetFact = selectFact(db, targetFact.id, projectId);
     }
     let fact: Fact | null = null;
+    let state: EntityState | null = null;
     if (existing.operation === "add_fact" || existing.operation === "replace_fact") fact = insertFact(db, projectId, payload as FactPatchPayload, evidenceSourceId, existing.operation === "replace_fact" ? existing.targetFactId : null, existing.inferenceId);
+    if (existing.operation === "add_state") state = insertEntityState(db, projectId, payload as StatePatchPayload, source.id, evidenceSourceId);
     if (existing.operation === "retract_fact" && targetFact) {
       const result = db.prepare("UPDATE facts SET status = 'retracted', version = version + 1 WHERE project_id = :projectId AND id = :factId AND status = 'active' AND version = :version").run({ projectId, factId: targetFact.id, version: targetFact.version });
       if (result.changes !== 1) throw new StoryBibleConflictError("fact", selectFact(db, targetFact.id, projectId) ?? targetFact);
@@ -711,16 +944,16 @@ function applyPatch(projectId: string, patchId: string, values: AcceptPatchInput
     if (existing.inferenceId) db.prepare("UPDATE inferences SET status = 'promoted', version = version + 1 WHERE id = :inferenceId AND project_id = :projectId AND status = 'active'").run({ inferenceId: existing.inferenceId, projectId });
     const applicationId = randomUUID();
     const applicationCreatedAt = now();
-    db.prepare("INSERT INTO patch_applications (id, project_id, patch_id, operation, resulting_fact_id, applied_payload_json, request_id, created_at) VALUES (:id, :projectId, :patchId, :operation, :resultingFactId, :appliedPayloadJson, :requestId, :createdAt)").run({ id: applicationId, projectId, patchId, operation: existing.operation, resultingFactId: fact?.id ?? null, appliedPayloadJson: JSON.stringify(payload), requestId: values.requestId, createdAt: applicationCreatedAt });
-    const application = patchApplicationSchema.parse({ id: applicationId, projectId, patchId, operation: existing.operation, resultingFactId: fact?.id ?? null, appliedPayload: payload, requestId: values.requestId, createdAt: applicationCreatedAt });
-    writeEvent(db, { projectId, eventType: "patch.accepted", aggregateType: "pending_patch", aggregateId: patchId, aggregateVersion: existing.version + 1, requestId: values.requestId, actorId: values.actorId, payload: { operation: existing.operation, resultingFactId: fact?.id ?? null, edited: editedPayload !== undefined } });
-    writeEvent(db, { projectId, eventType: "story_bible.changed", aggregateType: "story_bible", aggregateId: patchId, aggregateVersion: existing.version + 1, requestId: values.requestId, actorId: values.actorId, payload: { patchId, factId: fact?.id ?? null, operation: existing.operation } });
+    db.prepare("INSERT INTO patch_applications (id, project_id, patch_id, operation, resulting_fact_id, resulting_state_id, applied_payload_json, request_id, created_at) VALUES (:id, :projectId, :patchId, :operation, :resultingFactId, :resultingStateId, :appliedPayloadJson, :requestId, :createdAt)").run({ id: applicationId, projectId, patchId, operation: existing.operation, resultingFactId: fact?.id ?? null, resultingStateId: state?.id ?? null, appliedPayloadJson: JSON.stringify(payload), requestId: values.requestId, createdAt: applicationCreatedAt });
+    const application = patchApplicationSchema.parse({ id: applicationId, projectId, patchId, operation: existing.operation, resultingFactId: fact?.id ?? null, resultingStateId: state?.id ?? null, appliedPayload: payload, requestId: values.requestId, createdAt: applicationCreatedAt });
+    writeEvent(db, { projectId, eventType: "patch.accepted", aggregateType: "pending_patch", aggregateId: patchId, aggregateVersion: existing.version + 1, requestId: values.requestId, actorId: values.actorId, payload: { operation: existing.operation, resultingFactId: fact?.id ?? null, resultingStateId: state?.id ?? null, edited: editedPayload !== undefined } });
+    writeEvent(db, { projectId, eventType: "story_bible.changed", aggregateType: "story_bible", aggregateId: patchId, aggregateVersion: existing.version + 1, requestId: values.requestId, actorId: values.actorId, payload: { patchId, factId: fact?.id ?? null, stateId: state?.id ?? null, operation: existing.operation } });
     const patchUpdate = db.prepare("UPDATE pending_patches SET status = 'accepted', version = version + 1, resolved_at = :resolvedAt, resolved_by_user_id = :resolvedByUserId WHERE project_id = :projectId AND id = :patchId AND status = 'pending' AND version = :version").run({ projectId, patchId, version: existing.version, resolvedAt: now(), resolvedByUserId: values.actorId ?? "local-user" });
     if (patchUpdate.changes !== 1) throw new StoryBiblePatchConflictError(selectPatch(db, patchId, projectId) ?? existing, "The pending patch changed while it was being accepted.");
     const updatedPatch = selectPatch(db, patchId, projectId);
     if (!updatedPatch) throw new StoryBibleDataIntegrityError("Accepted patch could not be read");
-    storeIdempotency(db, { projectId, operation: "patch.accept", requestId: values.requestId, resourceType: "pending_patch", resourceId: patchId, response: { patchId, resultFactId: fact?.id ?? null, inputFingerprint } });
-    return { patch: updatedPatch, fact, application, idempotent: false };
+    storeIdempotency(db, { projectId, operation: "patch.accept", requestId: values.requestId, resourceType: "pending_patch", resourceId: patchId, response: { patchId, resultFactId: fact?.id ?? null, resultStateId: state?.id ?? null, inputFingerprint } });
+    return { patch: updatedPatch, fact, state, application, idempotent: false };
   }) as AcceptanceResult;
   if (expiredError) throw expiredError;
   return result;
@@ -757,12 +990,14 @@ export function createCanonPatchRepository(database: DatabaseSync = getDatabase(
     getPatch: (patchId: string, projectId: string) => getPatch(patchId, projectId, database),
     listPatchApplications: (projectId: string, patchId?: string) => listPatchApplications(projectId, patchId, database),
     listPatchFacts: (projectId: string, patchId?: string) => listPatchFacts(projectId, patchId, database),
+    listPatchStates: (projectId: string, patchId?: string) => listPatchStates(projectId, patchId, database),
     listPatches: (projectId: string, options?: { status?: Patch["status"]; sceneRevisionId?: string; targetEntityId?: string }) => listPatches(projectId, options, database),
     listInferences: (projectId: string, options?: { status?: Inference["status"]; subjectEntityId?: string }) => listInferences(projectId, options, database),
     getInference: (inferenceId: string, projectId: string) => getInference(inferenceId, projectId, database),
     getModelRun: (modelRunId: string, projectId: string) => getModelRun(modelRunId, projectId, database),
     listModelRuns: (projectId: string, options?: { sourceRevisionId?: string }) => listModelRuns(projectId, options, database),
     proposeFactPatch: (projectId: string, input: ProposeFactPatchInput) => proposeFactPatch(projectId, input, database),
+    proposeStatePatch: (projectId: string, input: ProposeStatePatchInput) => proposeStatePatch(projectId, input, database),
     acceptPatch: (projectId: string, patchId: string, input: AcceptPatchInput) => acceptPatch(projectId, patchId, input, database),
     acceptEditedPatch: (projectId: string, patchId: string, input: AcceptEditedPatchInput) => acceptEditedPatch(projectId, patchId, input, database),
     rejectPatch: (projectId: string, patchId: string, input: RejectPatchInput) => rejectPatch(projectId, patchId, input, database),

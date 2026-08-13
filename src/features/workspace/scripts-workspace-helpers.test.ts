@@ -18,6 +18,12 @@ import {
   replaceCanonicalPatch,
   replaceCanonicalRecord,
   stringifyPatchValue,
+  isCurrentWorkspaceRevisionResponse,
+  isFactPredicate,
+  isStaleWorkspaceRevisionResponse,
+  statePredicateLabel,
+  stateTierLabel,
+  workspaceRevisionSelectionKey,
 } from "./scripts-workspace-helpers";
 
 const scene = { sceneId: "scene-1", sceneRevisionId: "revision-1" };
@@ -86,6 +92,7 @@ describe("Phase 2 patch review helpers", () => {
     confidence: 0.98,
     conflictKind: "none" as const,
     conflictingFactIds: [],
+    conflictingStateIds: [],
     conflictMessage: null,
     sourceRevisionId: "00000000-0000-4000-8000-000000000003",
     inferenceId: null,
@@ -135,5 +142,45 @@ describe("Phase 2 patch review helpers", () => {
     expect(candidateValueFromInput("true", "boolean")).toBe(true);
     expect(candidateValueFromInput("silver earring", "json")).toEqual(["silver earring"]);
     expect(candidateValueFromInput('["silver earring"]', "json")).toEqual(["silver earring"]);
+  });
+});
+
+describe("Phase 3 continuity and resolved-state helpers", () => {
+  const selection = {
+    projectId: "project-1",
+    documentId: "document-1",
+    sceneId: "scene-1",
+    sceneRevisionId: "revision-1",
+    entityId: null,
+  };
+
+  it("keys resolved state by project, document, scene, revision, and entity", () => {
+    expect(workspaceRevisionSelectionKey(selection)).toBe("project-1:document-1:scene-1:revision-1:all");
+    expect(workspaceRevisionSelectionKey({ ...selection, sceneRevisionId: "revision-2" })).not.toBe(workspaceRevisionSelectionKey(selection));
+    expect(workspaceRevisionSelectionKey({ ...selection, entityId: "entity-1" })).not.toBe(workspaceRevisionSelectionKey(selection));
+  });
+
+  it("ignores stale responses after project/document/revision changes", () => {
+    expect(isCurrentWorkspaceRevisionResponse(selection, selection)).toBe(true);
+    expect(isStaleWorkspaceRevisionResponse({ ...selection, projectId: "project-2" }, selection)).toBe(true);
+    expect(isStaleWorkspaceRevisionResponse({ ...selection, documentId: "document-2" }, selection)).toBe(true);
+    expect(isStaleWorkspaceRevisionResponse({ ...selection, sceneRevisionId: "revision-2" }, selection)).toBe(true);
+    expect(isStaleWorkspaceRevisionResponse(null, selection)).toBe(true);
+  });
+
+  it("keeps state tiers explicit in labels", () => {
+    expect(stateTierLabel("explicit")).toBe("Explicit Scene State");
+    expect(stateTierLabel("carried")).toBe("Carried State");
+    expect(stateTierLabel("base")).toBe("Base Canon fallback");
+    expect(stateTierLabel("missing")).toBe("Missing");
+    expect(stateTierLabel("conflict")).toBe("Blocking conflict");
+    expect(statePredicateLabel("wardrobe.current")).toBe("Current wardrobe");
+  });
+
+  it("keeps Scene State predicates out of the Fact composer", () => {
+    expect(isFactPredicate("appearance.hair")).toBe(true);
+    expect(isFactPredicate("wardrobe.current")).toBe(false);
+    expect(isFactPredicate("state.injury")).toBe(false);
+    expect(isFactPredicate("state.held_prop")).toBe(false);
   });
 });
