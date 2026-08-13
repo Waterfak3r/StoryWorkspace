@@ -170,7 +170,7 @@ describe("Phase 4 context builder", () => {
     expect(buildContextSnapshot(values.projectId, input, database)).toMatchObject({ idempotent: true, snapshot: { id: original.snapshot.id } });
     expect(() => buildContextSnapshot(values.projectId, { ...input, purpose: "video", policyId: "video-default-v1", requestId: "collision" }, database)).toThrow(StoryBibleIdempotencyConflictError);
     expect(() => buildContextSnapshot(values.projectId, { ...input, actorId: "another-actor", requestId: "collision" }, database)).toThrow(StoryBibleIdempotencyConflictError);
-    expect(CURRENT_SCHEMA_VERSION).toBe(15);
+    expect(CURRENT_SCHEMA_VERSION).toBe(16);
     expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(CURRENT_SCHEMA_VERSION);
     database.exec("DROP TABLE context_snapshots; PRAGMA user_version = 13;");
     bootstrapDatabase(database);

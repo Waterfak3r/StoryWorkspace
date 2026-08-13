@@ -29,7 +29,7 @@
 - 新领域字段必须同步更新 schema、持久化迁移、API 类型、测试夹具和相关分卷。
 - 原规范中的数据不变量优先于临时实现便利；若确需改变，先更新规范和 ADR。
 - 首选演进起点是第 18 章的首个 Vertical Slice，但具体开工范围仍由当前任务决定。
-- 当前 Phase 0–5A 采用方式：在 SQLite/Next 本地单体内落地稳定 revision、deterministic scene analysis、Canon Patch review、document-scoped continuity group、独立 EntityState resolver、不调用 Provider 的 deterministic Context Snapshot/Inspector，以及绑定 Snapshot 的 immutable Storyboard/ShotSpec；这不是 PostgreSQL、托管队列、RAG、复杂故事时间线或媒体 Provider 已接入的声明。
+- 当前 Phase 0–5B 采用方式：在 SQLite/Next 本地单体内落地稳定 revision、deterministic scene analysis、Canon Patch review、document-scoped continuity group、独立 EntityState resolver、不调用 Provider 的 deterministic Context Snapshot/Inspector、绑定 Snapshot 的 immutable Storyboard/ShotSpec，以及 capability-aware Fake Video 编译预览；这不是 PostgreSQL、托管队列、RAG、复杂故事时间线、对象存储或真实媒体 Provider 已接入的声明。
 
 ## 维护规则
 

@@ -9,6 +9,7 @@ import type { AcceptEditedPatchInput, AcceptPatchInput, Patch, PatchApplication,
 import type { SceneEntityLink } from "@/domain/scene-link";
 import type { Entity, EntityAlias, EvidenceSource, Fact } from "@/domain/story-bible";
 import type { CreateStoryboardInput, Storyboard } from "@/domain/storyboard";
+import type { CompileShotResult, ReferenceAsset } from "@/domain/generation-compiler";
 import {
   WorkspaceApiError,
   createChapter,
@@ -70,6 +71,15 @@ import {
   createStoryboard,
   getStoryboard,
   listStoryboards,
+  parseReferenceAsset,
+  parseReferenceAssetList,
+  parseReferenceAssetMutationResult,
+  parseCompileShotResult,
+  parseCompiledRequestPreview,
+  listReferenceAssets,
+  createReferenceAsset,
+  compileShot,
+  getCompiledRequest,
 } from "./workspace-api";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -151,6 +161,9 @@ const patchFactId = "67676767-6767-4676-8676-676767676767";
 const hash = "a".repeat(64);
 const contextSnapshotId = "78787878-7878-4787-8787-787878787878";
 const contextPolicyVersion = "1";
+const referenceAssetId = "89898989-8989-4898-8898-898989898989";
+const shotSpecIdForCompile = "8b8b8b8b-8b8b-48b8-88b8-8b8b8b8b8b8b";
+const compiledRequestId = "8c8c8c8c-8c8c-48c8-88c8-8c8c8c8c8c8c";
 
 const contextContent = {
   scene: { id: sceneId, revisionId: sceneRevisionId, title: "Opening", text: "Lin Mo enters.", contentHash: hash },
@@ -182,6 +195,58 @@ const contextSnapshot = {
   contentHash: hash,
   isLatest: true,
   createdAt,
+};
+
+const referenceAsset: ReferenceAsset = {
+  id: referenceAssetId,
+  projectId,
+  entityId,
+  kind: "reference_image",
+  label: "Lin Mo blue coat metadata",
+  status: "approved",
+  version: 1,
+  metadataHash: hash,
+  createdBy: "local-user",
+  createdAt,
+};
+
+const compileResult: CompileShotResult = {
+  compiledRequest: {
+    id: compiledRequestId,
+    projectId,
+    sceneId,
+    shotSpecId: shotSpecIdForCompile,
+    contextSnapshotId,
+    provider: "fake-video",
+    model: "fake-video-model-v1",
+    capabilityProfileId: "fake-video-v1",
+    capabilityProfileVersion: "1",
+    compilerVersion: "fake-video-compiler-v1",
+    promptSegments: [{ role: "scene", text: "Lin Mo enters.", sourceIds: [sceneRevisionId] }],
+    negativePrompt: "blurry",
+    assetInputs: [{ assetId: referenceAssetId, entityId, purpose: "character", weight: 1 }],
+    providerBindings: [],
+    parameters: { durationSeconds: 6, aspectRatio: "16:9" },
+    warnings: ["duration normalized"],
+    omittedContext: ["fact omitted by policy"],
+    inputHash: hash,
+    compiledHash: hash,
+    createdAt,
+  },
+  preview: {
+    provider: "fake-video",
+    model: "fake-video-model-v1",
+    endpoint: "fake://video/generate",
+    body: {
+      prompt: "Lin Mo enters.",
+      negativePrompt: "blurry",
+      referenceAssetIds: [referenceAssetId],
+      durationSeconds: 6,
+      aspectRatio: "16:9",
+    },
+    requestHash: hash,
+  },
+  idempotent: false,
 };
 
 const scriptDocument: ScriptDocument = {
@@ -1205,6 +1270,54 @@ describe("chapter workspace API", () => {
       requestId: "storyboard-invalid",
     })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     await expect(approveStoryboard(projectId, "not-a-uuid", { expectedVersion: 0, requestId: "storyboard-invalid-approve" })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lists and creates approved reference metadata, then compiles and reads a strict preview", async () => {
+    const createInput = { entityId, label: referenceAsset.label, requestId: "reference-create-1", actorId: "local-user" };
+    const compileInput = {
+      capabilityProfileId: "fake-video-v1" as const,
+      referenceAssetIds: [referenceAssetId],
+      parameters: { durationSeconds: 5.5, aspectRatio: "cinematic" },
+      requestId: "compile-shot-1",
+      actorId: "local-user",
+    };
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { referenceAssets: [referenceAsset] } }),
+      jsonResponse({ data: { referenceAsset, idempotent: false } }, 201),
+      jsonResponse({ data: compileResult }, 201),
+      jsonResponse({ data: { compiledRequest: compileResult.compiledRequest, preview: compileResult.preview } }),
+    );
+
+    await expect(listReferenceAssets(projectId, entityId)).resolves.toEqual([referenceAsset]);
+    await expect(createReferenceAsset(projectId, createInput)).resolves.toEqual({ referenceAsset, idempotent: false });
+    await expect(compileShot(projectId, shotSpecIdForCompile, compileInput)).resolves.toEqual(compileResult);
+    await expect(getCompiledRequest(projectId, compiledRequestId)).resolves.toEqual({ compiledRequest: compileResult.compiledRequest, preview: compileResult.preview });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/projects/${projectId}/reference-assets?entityId=${entityId}`, expect.anything());
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/reference-assets`, "POST", createInput);
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/shots/${shotSpecIdForCompile}/compile`, "POST", compileInput);
+    expect(fetchMock).toHaveBeenNthCalledWith(4, `/api/projects/${projectId}/compiled-requests/${compiledRequestId}`, expect.anything());
+  });
+
+  it("strictly rejects aliases and extra fields in Phase 5B envelopes", () => {
+    expect(parseReferenceAsset(referenceAsset)).toEqual(referenceAsset);
+    expect(() => parseReferenceAsset({ ...referenceAsset, uploadUrl: "https://example.invalid" })).toThrowError(/invalid reference asset/i);
+    expect(() => parseReferenceAssetList({ referenceAssets: [referenceAsset], assets: [referenceAsset] })).toThrowError(/invalid reference asset list/i);
+    expect(() => parseReferenceAssetMutationResult({ referenceAsset, idempotent: false, asset: referenceAsset })).toThrowError(/invalid reference asset mutation/i);
+    expect(() => parseCompileShotResult({ ...compileResult, previewRequest: compileResult.preview })).toThrowError(/invalid compile shot/i);
+    expect(() => parseCompiledRequestPreview({ compiledRequest: compileResult.compiledRequest, preview: compileResult.preview, request: compileResult.preview })).toThrowError(/invalid compiled request/i);
+  });
+
+  it("validates Phase 5B inputs before issuing requests", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(createReferenceAsset(projectId, { entityId, label: "", requestId: "reference-invalid" })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(compileShot(projectId, shotSpecIdForCompile, {
+      capabilityProfileId: "fake-video-v1",
+      referenceAssetIds: ["not-a-uuid"],
+      parameters: { durationSeconds: 0, aspectRatio: "16:9" },
+      requestId: "compile-invalid",
+    })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

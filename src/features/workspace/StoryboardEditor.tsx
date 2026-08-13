@@ -3,7 +3,8 @@
 import * as React from "react";
 import { ArrowClockwise, Check, Plus } from "@phosphor-icons/react";
 import type { ContextEntity, ContextSnapshot } from "@/domain/context-builder";
-import { shotSpecContentSchema, type ShotSpecContent, type Storyboard } from "@/domain/storyboard";
+import { shotSpecContentSchema, type ShotSpecContent, type Storyboard, type StoryboardStatus } from "@/domain/storyboard";
+import { CompilationPreview } from "./CompilationPreview";
 
 export type StoryboardDraft = {
   title: string;
@@ -23,6 +24,7 @@ export type StoryboardEditorState = {
 };
 
 type StoryboardEditorProps = {
+  projectId: string;
   snapshot: ContextSnapshot | null;
   state: StoryboardEditorState | null;
   selectionValid: boolean;
@@ -61,18 +63,28 @@ function updateSubject(draft: StoryboardDraft, shotIndex: number, subjectIndex: 
 }
 
 function StoryboardShotEditor({
+  projectId,
   draft,
   shotIndex,
   snapshot,
   onChange,
   disabled,
+  boardStatus,
+  boardDirty,
+  storyboardId,
+  shotSpecId,
   onRemove,
 }: {
+  projectId: string;
   draft: StoryboardDraft;
   shotIndex: number;
   snapshot: ContextSnapshot;
   onChange: (next: StoryboardDraft) => void;
   disabled: boolean;
+  boardStatus: StoryboardStatus;
+  boardDirty: boolean;
+  storyboardId: string | null;
+  shotSpecId: string | null;
   onRemove: () => void;
 }) {
   const shot = draft.shots[shotIndex];
@@ -156,11 +168,22 @@ function StoryboardShotEditor({
       </div>
       <label className="mt-4 block text-xs font-semibold text-ink" htmlFor={`storyboard-shot-lens-${shotIndex}`}>Lens <span className="font-normal text-ink-faint">optional</span></label>
       <input id={`storyboard-shot-lens-${shotIndex}`} value={shot.lens ?? ""} onChange={(event) => onChange(updateShot(draft, shotIndex, { lens: event.target.value || null }))} disabled={disabled} maxLength={200} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink" placeholder="e.g. 50mm" />
+
+      <CompilationPreview
+        projectId={projectId}
+        snapshot={snapshot}
+        storyboardId={storyboardId}
+        shotSpecId={shotSpecId}
+        shot={shot}
+        shotIndex={shotIndex}
+        boardStatus={boardStatus}
+        boardDirty={boardDirty}
+      />
     </li>
   );
 }
 
-export function StoryboardEditor({ snapshot, state, selectionValid, onNew, onDraftChange, onLoad, onSave, onApprove, onReload }: StoryboardEditorProps) {
+export function StoryboardEditor({ projectId, snapshot, state, selectionValid, onNew, onDraftChange, onLoad, onSave, onApprove, onReload }: StoryboardEditorProps) {
   const draft = state?.draft ?? null;
   const characterEntities = characters(snapshot);
   const selectedBoard = state?.list.find((board) => board.id === state.selectedStoryboardId) ?? null;
@@ -197,7 +220,10 @@ export function StoryboardEditor({ snapshot, state, selectionValid, onNew, onDra
         <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="storyboard-title">Storyboard title</label><input id="storyboard-title" data-testid="storyboard-title" value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} disabled={!canEdit} maxLength={300} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink" />
         <div className="mt-5 flex min-w-0 flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold text-ink">ShotSpecs ({draft.shots.length})</p><p className="mt-1 text-[11px] text-ink-faint">At least one Shot with one included Character is required.</p></div><button type="button" onClick={() => onDraftChange({ ...draft, shots: [...draft.shots, { ordinal: draft.shots.length + 1, narrativePurpose: "", subjects: [{ entityId: characterEntities[0]?.entityId ?? "", action: "", expression: null, framingRole: "primary" }], locationEntityId: null, propEntityIds: [], framing: null, cameraMotion: null, lens: null, durationSeconds: null, dialogueLineIds: [], continuityConstraints: [], negativeConstraints: [] }] })} disabled={!canEdit || characterEntities.length === 0 || draft.shots.length >= 100} className="inline-flex min-h-9 items-center gap-1 rounded-md border border-line px-2 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} aria-hidden="true" /> Add shot</button></div>
         {characterEntities.length === 0 ? <p role="alert" className="mt-3 border-l-2 border-danger pl-3 text-xs leading-5 text-danger">This Snapshot includes no Character. Add or confirm a Character, build a new Snapshot, then create a Storyboard.</p> : null}
-        <ol className="mt-3 min-w-0 space-y-4" aria-label="Storyboard shots">{draft.shots.map((_, index) => <StoryboardShotEditor key={index} draft={draft} shotIndex={index} snapshot={snapshot} onChange={onDraftChange} disabled={!canEdit} onRemove={() => onDraftChange({ ...draft, shots: draft.shots.filter((__, shotIndex) => shotIndex !== index).map((shot, shotIndex) => ({ ...shot, ordinal: shotIndex + 1 })) })} />)}</ol>
+        <ol className="mt-3 min-w-0 space-y-4" aria-label="Storyboard shots">{draft.shots.map((_, index) => {
+          const persistedShot = selectedBoard?.shots[index] ?? null;
+          return <StoryboardShotEditor key={`${index}-${selectedBoard?.id ?? "draft"}-${persistedShot?.id ?? "new"}`} projectId={projectId} draft={draft} shotIndex={index} snapshot={snapshot} onChange={onDraftChange} disabled={!canEdit} boardStatus={selectedBoard?.status ?? "draft"} boardDirty={Boolean(state?.dirty)} storyboardId={selectedBoard?.id ?? null} shotSpecId={persistedShot?.id ?? null} onRemove={() => onDraftChange({ ...draft, shots: draft.shots.filter((__, shotIndex) => shotIndex !== index).map((shot, shotIndex) => ({ ...shot, ordinal: shotIndex + 1 })) })} />;
+        })}</ol>
         <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2"><button type="button" onClick={onSave} disabled={!canSave} className="inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="storyboard-save">{state?.saving ? "Saving draft…" : selectedBoard?.status === "superseded" ? "Superseded version" : selectedBoard ? "Save new version" : "Save draft"}</button>{selectedBoard?.status === "draft" ? <button type="button" onClick={onApprove} disabled={Boolean(state?.approving || state?.saving || state?.dirty) || !selectionValid} className="inline-flex min-h-10 items-center rounded-md border border-success px-3 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="storyboard-approve">{state?.approving ? "Approving…" : "Approve draft"}</button> : null}{selectedBoard?.status === "approved" ? <span className="text-xs font-semibold text-success">Approved · edit creates a replacement version.</span> : null}{selectedBoard?.status === "superseded" ? <span className="text-xs text-ink-faint">Historical version · read-only. Start a new board to reuse its ideas.</span> : null}<span className="text-[11px] text-ink-faint">{state?.saving || state?.approving ? "Waiting for the CAS-safe Storyboard operation…" : ""}</span></div>
       </div> : <p className="mt-5 text-xs text-ink-faint">Preparing a local Storyboard draft…</p>}
     </section>

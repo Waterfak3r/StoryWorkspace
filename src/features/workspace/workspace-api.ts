@@ -115,6 +115,20 @@ import {
   type Storyboard,
   type StoryboardStatus,
 } from "@/domain/storyboard";
+import {
+  compileShotInputSchema,
+  compileShotResultSchema,
+  compiledGenerationRequestSchema,
+  fakePreparedRequestSchema,
+  referenceAssetSchema,
+  createReferenceAssetInputSchema,
+  type CompileShotInput,
+  type CompileShotResult,
+  type CompiledGenerationRequest,
+  type CreateReferenceAssetInput,
+  type FakePreparedRequest,
+  type ReferenceAsset,
+} from "@/domain/generation-compiler";
 
 export type { ContinuityGroup, ContinuityGroupKind, CreateContinuityGroupInput, ProposeStatePatchInput, StatePatchPayload } from "@/domain/scene-state";
 export type { BuildContextInput, ContextContent, ContextEntity, ContextPolicyId, ContextPurpose, ContextSnapshot } from "@/domain/context-builder";
@@ -225,6 +239,16 @@ export type ContextBuildResult = {
 export type StoryboardMutationResult = {
   storyboard: Storyboard;
   idempotent: boolean;
+};
+
+export type ReferenceAssetMutationResult = {
+  referenceAsset: ReferenceAsset;
+  idempotent: boolean;
+};
+
+export type CompiledRequestPreview = {
+  compiledRequest: CompiledGenerationRequest;
+  preview: FakePreparedRequest;
 };
 
 export type ListStoryboardsOptions = {
@@ -1228,6 +1252,36 @@ export function parseStoryboardList(value: unknown): Storyboard[] {
   return parsed.data.storyboards;
 }
 
+export function parseReferenceAsset(value: unknown): ReferenceAsset {
+  const parsed = referenceAssetSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("reference asset response");
+  return parsed.data;
+}
+
+export function parseReferenceAssetList(value: unknown): ReferenceAsset[] {
+  const parsed = z.object({ referenceAssets: z.array(referenceAssetSchema) }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("reference asset list response");
+  return parsed.data.referenceAssets;
+}
+
+export function parseReferenceAssetMutationResult(value: unknown): ReferenceAssetMutationResult {
+  const parsed = z.object({ referenceAsset: referenceAssetSchema, idempotent: z.boolean() }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("reference asset mutation response");
+  return parsed.data;
+}
+
+export function parseCompileShotResult(value: unknown): CompileShotResult {
+  const parsed = compileShotResultSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("compile shot response");
+  return parsed.data;
+}
+
+export function parseCompiledRequestPreview(value: unknown): CompiledRequestPreview {
+  const parsed = z.object({ compiledRequest: compiledGenerationRequestSchema, preview: fakePreparedRequestSchema }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("compiled request response");
+  return parsed.data;
+}
+
 /** Build a provider-neutral, immutable Context Snapshot for one saved Scene revision. */
 export async function buildContextSnapshot(projectId: string, input: ContextBuildInput): Promise<ContextBuildResult> {
   const parsedInput = contextBuildInputSchema.safeParse(input);
@@ -1311,6 +1365,51 @@ export async function approveStoryboard(projectId: string, storyboardId: string,
     ...jsonBody(parsedInput.data),
   });
   return parseStoryboardMutationResult(result);
+}
+
+export async function listReferenceAssets(projectId: string, entityId?: string): Promise<ReferenceAsset[]> {
+  const query = entityId ? `?entityId=${encodeURIComponent(entityId)}` : "";
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/reference-assets${query}`);
+  return parseReferenceAssetList(result);
+}
+
+export async function createReferenceAsset(projectId: string, input: CreateReferenceAssetInput): Promise<ReferenceAssetMutationResult> {
+  const parsedInput = createReferenceAssetInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The reference asset request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/reference-assets`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseReferenceAssetMutationResult(result);
+}
+
+export async function compileShot(projectId: string, shotSpecId: string, input: CompileShotInput): Promise<CompileShotResult> {
+  const parsedInput = compileShotInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The compile request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotSpecId)}/compile`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseCompileShotResult(result);
+}
+
+export async function getCompiledRequest(projectId: string, compiledRequestId: string): Promise<CompiledRequestPreview> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/compiled-requests/${encodeURIComponent(compiledRequestId)}`);
+  return parseCompiledRequestPreview(result);
 }
 
 export async function getResolvedState(projectId: string, sceneId: string, options: { sceneRevisionId: string; entityId?: string }): Promise<ResolvedState> {

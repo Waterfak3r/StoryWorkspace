@@ -32,6 +32,11 @@ import {
   stateTierLabel,
   storyboardBoardSelectionKey,
   storyboardSelectionKey,
+  compilationSelectionKey,
+  compilationInputKey,
+  compilationInputDefaults,
+  isCurrentCompilationResponse,
+  isStaleCompilationResponse,
   workspaceRevisionSelectionKey,
 } from "./scripts-workspace-helpers";
 
@@ -240,5 +245,41 @@ describe("Phase 5A Storyboard selection helpers", () => {
     expect(isCurrentStoryboardBoardResponse(boardSelection, boardSelection)).toBe(true);
     expect(isCurrentStoryboardBoardResponse({ ...boardSelection, storyboardId: "storyboard-2" }, boardSelection)).toBe(false);
     expect(isStaleStoryboardBoardResponse(null, boardSelection)).toBe(true);
+  });
+});
+
+describe("Phase 5B compilation selection helpers", () => {
+  const selection = {
+    projectId: "project-1",
+    sceneId: "scene-1",
+    sceneRevisionId: "revision-1",
+    contextSnapshotId: "snapshot-1",
+    storyboardId: "storyboard-1",
+    shotSpecId: "shot-1",
+  };
+
+  it("keys a compile response by project, revision, snapshot, board, and ShotSpec", () => {
+    expect(compilationSelectionKey(selection)).toBe("project-1:scene-1:revision-1:snapshot-1:storyboard-1:shot-1");
+    expect(compilationSelectionKey({ ...selection, shotSpecId: "shot-2" })).not.toBe(compilationSelectionKey(selection));
+    expect(compilationSelectionKey({ ...selection, contextSnapshotId: "snapshot-2" })).not.toBe(compilationSelectionKey(selection));
+  });
+
+  it("rejects late compile responses after any immutable selection changes", () => {
+    expect(isCurrentCompilationResponse(selection, selection)).toBe(true);
+    expect(isCurrentCompilationResponse({ ...selection, storyboardId: "storyboard-2" }, selection)).toBe(false);
+    expect(isCurrentCompilationResponse({ ...selection, shotSpecId: "shot-2" }, selection)).toBe(false);
+    expect(isStaleCompilationResponse(null, selection)).toBe(true);
+  });
+
+  it("invalidates a rendered preview key when refreshed asset selection changes", () => {
+    const withFirstAsset = compilationInputKey(selection, ["asset-1"], "", "16:9");
+    const withSecondAsset = compilationInputKey(selection, ["asset-1", "asset-2"], "", "16:9");
+    expect(withFirstAsset).not.toBe(withSecondAsset);
+    expect(compilationInputKey(selection, ["asset-1"], "6", "16:9")).not.toBe(withFirstAsset);
+  });
+
+  it("derives fresh parameter defaults from the newly selected Shot", () => {
+    expect(compilationInputDefaults(8)).toEqual({ durationInput: "8", aspectInput: "16:9" });
+    expect(compilationInputDefaults(null)).toEqual({ durationInput: "", aspectInput: "16:9" });
   });
 });

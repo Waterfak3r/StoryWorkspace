@@ -1645,6 +1645,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                 {selectedAnalysis?.loading && selectedAnalysis.action ? <p className="mt-3 text-xs text-ink-faint">{selectedAnalysis.action === "running" ? "The worker is processing this revision." : "Refreshing evidence and candidate links."}</p> : null}
                 <EntityReviewList review={selectedAnalysis?.review ?? null} entities={entities} entityLoading={entityLoading} sceneContent={selectedScene.content} onReviewLink={(link, decision) => void reviewLink(link, decision)} disabled={selectedAnalysis?.loading ?? false} />
                 <CanonPatchReviewPanel
+                  projectId={projectId}
                   review={selectedPatchReview}
                   sceneContent={selectedScene.content}
                   entities={associatedEntities}
@@ -1776,6 +1777,7 @@ function EntityReviewList({
  * response cannot replace the current review.
  */
 function CanonPatchReviewPanel({
+  projectId,
   review,
   sceneContent,
   entities,
@@ -1808,6 +1810,7 @@ function CanonPatchReviewPanel({
   onApproveStoryboard,
   onReloadStoryboards,
 }: {
+  projectId: string;
   review: ScenePatchReview | null;
   sceneContent: string;
   entities: readonly Entity[];
@@ -1890,6 +1893,7 @@ function CanonPatchReviewPanel({
       <StatePatchComposer characters={confirmedCharacters} props={stateProps} sceneContent={sceneContent} onPropose={onProposeState} blockedByUnsavedRevision={stateProposalBlocked} />
       <ResolvedStateInspector entities={entities} state={resolvedState} loading={resolvedStateLoading} error={resolvedStateError} />
       <ContextInspector
+        projectId={projectId}
         state={contextState}
         purpose={contextPurpose}
         policyId={contextPolicyId}
@@ -2155,6 +2159,7 @@ function ContextEntityCard({ item, index }: { item: ContextEntity; index: number
 }
 
 function ContextInspector({
+  projectId,
   state,
   purpose,
   policyId,
@@ -2172,6 +2177,7 @@ function ContextInspector({
   onApprove,
   onReload,
 }: {
+  projectId: string;
   state: ContextState | null;
   purpose: ContextPurpose;
   policyId: ContextPolicyId;
@@ -2221,7 +2227,7 @@ function ContextInspector({
           <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-provenance-heading" data-testid="context-provenance"><h5 id="context-provenance-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Provenance</h5>{provenance.length > 0 ? <ul className="mt-3 min-w-0 space-y-2">{provenance.map((item) => <li key={`${item.kind}-${item.recordId}`} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{item.kind}</span> · <span className="break-all font-mono">{item.recordId}</span> · version {item.version ?? "—"}{item.sourceId ? <> · source <span className="break-all font-mono">{item.sourceId}</span></> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No provenance records included.</p>}</section>
         </div>
       ) : !state?.loading && !state?.error ? <p className="mt-5 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No Context Snapshot loaded for this purpose and saved revision. Build one to inspect its frozen input.</p> : null}
-      <StoryboardEditor snapshot={state?.snapshot?.purpose === "storyboard" ? state.snapshot : null} state={storyboardState} selectionValid={storyboardSelectionValid} onNew={onNew} onDraftChange={onDraftChange} onLoad={onLoad} onSave={onSave} onApprove={onApprove} onReload={onReload} />
+      <StoryboardEditor projectId={projectId} snapshot={state?.snapshot?.purpose === "storyboard" ? state.snapshot : null} state={storyboardState} selectionValid={storyboardSelectionValid} onNew={onNew} onDraftChange={onDraftChange} onLoad={onLoad} onSave={onSave} onApprove={onApprove} onReload={onReload} />
     </section>
   );
 }

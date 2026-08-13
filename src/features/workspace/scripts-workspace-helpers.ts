@@ -116,6 +116,52 @@ export function isStaleStoryboardBoardResponse(current: StoryboardBoardSelection
   return !isCurrentStoryboardBoardResponse(current, response);
 }
 
+/** Phase 5B compilation reads and mutations are bound to the exact ShotSpec. */
+export type CompilationSelection = StoryboardBoardSelection & {
+  shotSpecId: string;
+};
+
+export function compilationSelectionKey(selection: CompilationSelection) {
+  return `${storyboardBoardSelectionKey(selection)}:${selection.shotSpecId}`;
+}
+
+export const compileSelectionKey = compilationSelectionKey;
+
+export function sameCompilationSelection(left: CompilationSelection | null | undefined, right: CompilationSelection | null | undefined) {
+  return Boolean(left && right && compilationSelectionKey(left) === compilationSelectionKey(right));
+}
+
+export function isCurrentCompilationResponse(current: CompilationSelection | null | undefined, response: CompilationSelection) {
+  return sameCompilationSelection(current, response);
+}
+
+export function isStaleCompilationResponse(current: CompilationSelection | null | undefined, response: CompilationSelection) {
+  return !isCurrentCompilationResponse(current, response);
+}
+
+/**
+ * A compiled preview is only valid for the exact immutable Shot selection and
+ * the input values that produced it. Asset refreshes can auto-select metadata,
+ * so reference IDs belong in this render key too.
+ */
+export function compilationInputKey(
+  selection: CompilationSelection | null | undefined,
+  referenceAssetIds: readonly string[],
+  durationInput: string,
+  aspectInput: string,
+) {
+  const selectionKey = selection ? compilationSelectionKey(selection) : "none";
+  return [selectionKey, referenceAssetIds.join(","), durationInput, aspectInput].join("|");
+}
+
+/** Defaults for a newly selected immutable Shot; overrides never cross Shots. */
+export function compilationInputDefaults(durationSeconds: number | null | undefined) {
+  return {
+    durationInput: durationSeconds === null || durationSeconds === undefined ? "" : String(durationSeconds),
+    aspectInput: "16:9",
+  };
+}
+
 export function sameWorkspaceRevisionSelection(left: WorkspaceRevisionSelection | null | undefined, right: WorkspaceRevisionSelection | null | undefined) {
   return Boolean(left && right
     && left.projectId === right.projectId

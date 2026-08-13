@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 function runMigration(database: DatabaseSync, version: number, migration: () => void) {
   database.exec("BEGIN IMMEDIATE");
@@ -2486,6 +2486,179 @@ export function bootstrapDatabase(database: DatabaseSync) {
       CREATE TRIGGER IF NOT EXISTS shot_specs_delete_guard
       BEFORE DELETE ON shot_specs
       BEGIN SELECT RAISE(ABORT, 'shot spec content is immutable'); END;
+    `));
+  }
+
+  if (currentVersion < 16) {
+    runMigration(database, 16, () => database.exec(`
+      CREATE TABLE IF NOT EXISTS reference_assets (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind = 'reference_image'),
+        label TEXT NOT NULL CHECK (length(trim(label)) > 0),
+        status TEXT NOT NULL CHECK (status = 'approved'),
+        version INTEGER NOT NULL CHECK (version = 1),
+        metadata_hash TEXT NOT NULL CHECK (length(metadata_hash) = 64 AND metadata_hash NOT GLOB '*[^0-9a-f]*'),
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE RESTRICT,
+        UNIQUE (project_id, entity_id, kind, metadata_hash)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reference_assets_project_entity
+        ON reference_assets(project_id, entity_id, status, id);
+
+      CREATE TABLE IF NOT EXISTS compiled_generation_requests (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        shot_spec_id TEXT NOT NULL,
+        context_snapshot_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK (provider = 'fake-video'),
+        model TEXT NOT NULL CHECK (model = 'fake-video-model-v1'),
+        capability_profile_id TEXT NOT NULL CHECK (capability_profile_id = 'fake-video-v1'),
+        capability_profile_version TEXT NOT NULL CHECK (capability_profile_version = '1'),
+        compiler_version TEXT NOT NULL CHECK (compiler_version = 'fake-video-compiler-v1'),
+        compiled_json TEXT NOT NULL CHECK (json_valid(compiled_json) AND json_type(compiled_json) = 'object'),
+        prepared_json TEXT NOT NULL CHECK (json_valid(prepared_json) AND json_type(prepared_json) = 'object'),
+        input_hash TEXT NOT NULL CHECK (length(input_hash) = 64 AND input_hash NOT GLOB '*[^0-9a-f]*'),
+        compiled_hash TEXT NOT NULL CHECK (length(compiled_hash) = 64 AND compiled_hash NOT GLOB '*[^0-9a-f]*'),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE RESTRICT,
+        FOREIGN KEY (shot_spec_id) REFERENCES shot_specs(id) ON DELETE RESTRICT,
+        FOREIGN KEY (context_snapshot_id) REFERENCES context_snapshots(id) ON DELETE RESTRICT,
+        UNIQUE (project_id, input_hash)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_compiled_generation_requests_project_shot
+        ON compiled_generation_requests(project_id, shot_spec_id, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_compiled_generation_requests_project_hash
+        ON compiled_generation_requests(project_id, compiled_hash);
+
+      CREATE TRIGGER IF NOT EXISTS reference_assets_project_guard
+      BEFORE INSERT ON reference_assets
+      WHEN (SELECT id FROM projects WHERE id = NEW.project_id) IS NULL
+        OR (SELECT project_id FROM entities WHERE id = NEW.entity_id) IS NULL
+        OR (SELECT project_id FROM entities WHERE id = NEW.entity_id) <> NEW.project_id
+        OR (SELECT status FROM entities WHERE id = NEW.entity_id) NOT IN ('active', 'draft')
+        OR (SELECT merged_into_entity_id FROM entities WHERE id = NEW.entity_id) IS NOT NULL
+        OR NEW.kind <> 'reference_image'
+        OR NEW.status <> 'approved'
+        OR NEW.version <> 1
+      BEGIN SELECT RAISE(ABORT, 'reference asset project or lifecycle mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS reference_assets_immutable_guard
+      BEFORE UPDATE ON reference_assets
+      WHEN NEW.id IS NOT OLD.id
+        OR NEW.project_id IS NOT OLD.project_id
+        OR NEW.entity_id IS NOT OLD.entity_id
+        OR NEW.kind IS NOT OLD.kind
+        OR NEW.label IS NOT OLD.label
+        OR NEW.status IS NOT OLD.status
+        OR NEW.version IS NOT OLD.version
+        OR NEW.metadata_hash IS NOT OLD.metadata_hash
+        OR NEW.created_by IS NOT OLD.created_by
+        OR NEW.created_at IS NOT OLD.created_at
+      BEGIN SELECT RAISE(ABORT, 'reference asset identity or content is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS reference_assets_delete_guard
+      BEFORE DELETE ON reference_assets
+      BEGIN SELECT RAISE(ABORT, 'reference asset content is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS compiled_generation_requests_project_guard
+      BEFORE INSERT ON compiled_generation_requests
+      WHEN json_extract(NEW.compiled_json, '$.id') IS NOT NEW.id
+        OR json_extract(NEW.compiled_json, '$.projectId') IS NOT NEW.project_id
+        OR json_extract(NEW.compiled_json, '$.sceneId') IS NOT NEW.scene_id
+        OR json_extract(NEW.compiled_json, '$.shotSpecId') IS NOT NEW.shot_spec_id
+        OR json_extract(NEW.compiled_json, '$.contextSnapshotId') IS NOT NEW.context_snapshot_id
+        OR json_extract(NEW.compiled_json, '$.provider') IS NOT NEW.provider
+        OR json_extract(NEW.compiled_json, '$.model') IS NOT NEW.model
+        OR json_extract(NEW.compiled_json, '$.capabilityProfileId') IS NOT NEW.capability_profile_id
+        OR json_extract(NEW.compiled_json, '$.capabilityProfileVersion') IS NOT NEW.capability_profile_version
+        OR json_extract(NEW.compiled_json, '$.compilerVersion') IS NOT NEW.compiler_version
+        OR json_extract(NEW.compiled_json, '$.inputHash') IS NOT NEW.input_hash
+        OR json_extract(NEW.compiled_json, '$.compiledHash') IS NOT NEW.compiled_hash
+        OR json_extract(NEW.compiled_json, '$.createdAt') IS NOT NEW.created_at
+        OR json_extract(NEW.prepared_json, '$.provider') IS NOT NEW.provider
+        OR json_extract(NEW.prepared_json, '$.model') IS NOT NEW.model
+        OR json_extract(NEW.prepared_json, '$.endpoint') IS NOT 'fake://video/generate'
+        OR json_type(NEW.compiled_json, '$.promptSegments') IS NOT 'array'
+        OR json_array_length(NEW.compiled_json, '$.promptSegments') < 1
+        OR EXISTS (
+          SELECT 1 FROM json_each(NEW.compiled_json, '$.promptSegments') prompt
+          WHERE json_type(prompt.value, '$.role') IS NOT 'text'
+            OR json_type(prompt.value, '$.text') IS NOT 'text'
+            OR length(trim(json_extract(prompt.value, '$.text'))) = 0
+            OR json_type(prompt.value, '$.sourceIds') IS NOT 'array'
+            OR json_array_length(prompt.value, '$.sourceIds') < 1
+        )
+        OR json_array_length(NEW.compiled_json, '$.assetInputs') NOT BETWEEN 0 AND 2
+        OR json_extract(NEW.prepared_json, '$.body.prompt') IS NOT (
+          SELECT group_concat(json_extract(prompt.value, '$.text'), char(10))
+          FROM json_each(NEW.compiled_json, '$.promptSegments') prompt
+          ORDER BY prompt.key
+        )
+        OR json_extract(NEW.prepared_json, '$.body.negativePrompt') IS NOT json_extract(NEW.compiled_json, '$.negativePrompt')
+        OR json_type(NEW.prepared_json, '$.body.referenceAssetIds') IS NOT 'array'
+        OR json_array_length(NEW.prepared_json, '$.body.referenceAssetIds') <> json_array_length(NEW.compiled_json, '$.assetInputs')
+        OR json_extract(NEW.prepared_json, '$.body.durationSeconds') IS NOT json_extract(NEW.compiled_json, '$.parameters.durationSeconds')
+        OR json_extract(NEW.prepared_json, '$.body.aspectRatio') IS NOT json_extract(NEW.compiled_json, '$.parameters.aspectRatio')
+        OR EXISTS (
+          SELECT 1 FROM json_each(NEW.compiled_json, '$.assetInputs') asset
+          WHERE json_extract(NEW.prepared_json, '$.body.referenceAssetIds[' || asset.key || ']') IS NOT json_extract(asset.value, '$.assetId')
+        )
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) IS NULL
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) <> NEW.project_id
+        OR (SELECT status FROM scenes WHERE id = NEW.scene_id) <> 'active'
+        OR (SELECT project_id FROM shot_specs WHERE id = NEW.shot_spec_id) IS NULL
+        OR (SELECT project_id FROM shot_specs WHERE id = NEW.shot_spec_id) <> NEW.project_id
+        OR (SELECT scene_id FROM shot_specs WHERE id = NEW.shot_spec_id) <> NEW.scene_id
+        OR (SELECT project_id FROM storyboards WHERE id = (SELECT storyboard_id FROM shot_specs WHERE id = NEW.shot_spec_id)) IS NULL
+        OR (SELECT status FROM storyboards WHERE id = (SELECT storyboard_id FROM shot_specs WHERE id = NEW.shot_spec_id)) <> 'approved'
+        OR (SELECT sealed FROM storyboards WHERE id = (SELECT storyboard_id FROM shot_specs WHERE id = NEW.shot_spec_id)) <> 1
+        OR (SELECT context_snapshot_id FROM storyboards WHERE id = (SELECT storyboard_id FROM shot_specs WHERE id = NEW.shot_spec_id)) <> NEW.context_snapshot_id
+        OR (SELECT project_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) IS NULL
+        OR (SELECT project_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.project_id
+        OR (SELECT scene_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.scene_id
+        OR json_type(NEW.compiled_json, '$.assetInputs') IS NOT 'array'
+        OR EXISTS (
+          SELECT 1
+          FROM json_each(NEW.compiled_json, '$.assetInputs') asset
+          LEFT JOIN reference_assets ra
+            ON ra.id = json_extract(asset.value, '$.assetId')
+           AND ra.project_id = NEW.project_id
+           AND ra.status = 'approved'
+           AND ra.version = 1
+          WHERE json_type(asset.value, '$.assetId') IS NOT 'text'
+            OR json_type(asset.value, '$.entityId') IS NOT 'text'
+            OR json_type(asset.value, '$.purpose') IS NOT 'text'
+            OR ra.id IS NULL
+            OR json_extract(asset.value, '$.entityId') IS NOT ra.entity_id
+            OR NOT (
+              (json_extract(asset.value, '$.purpose') = 'character' AND EXISTS (
+                SELECT 1 FROM json_each((SELECT spec_json FROM shot_specs WHERE id = NEW.shot_spec_id), '$.subjects') subject
+                WHERE json_extract(subject.value, '$.entityId') IS ra.entity_id
+              ))
+              OR (json_extract(asset.value, '$.purpose') = 'location' AND json_extract((SELECT spec_json FROM shot_specs WHERE id = NEW.shot_spec_id), '$.locationEntityId') IS ra.entity_id)
+              OR (json_extract(asset.value, '$.purpose') = 'prop' AND EXISTS (
+                SELECT 1 FROM json_each((SELECT spec_json FROM shot_specs WHERE id = NEW.shot_spec_id), '$.propEntityIds') prop
+                WHERE prop.value IS ra.entity_id
+              ))
+            )
+        )
+      BEGIN SELECT RAISE(ABORT, 'compiled request project, board, context, or reference mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS compiled_generation_requests_immutable_guard
+      BEFORE UPDATE ON compiled_generation_requests
+      BEGIN SELECT RAISE(ABORT, 'compiled generation request is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS compiled_generation_requests_delete_guard
+      BEFORE DELETE ON compiled_generation_requests
+      BEGIN SELECT RAISE(ABORT, 'compiled generation request is immutable'); END;
     `));
   }
 }
