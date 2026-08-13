@@ -12,6 +12,7 @@ import {
   WorkspaceApiError,
   acceptEditedPatch,
   acceptPatch,
+  buildContextSnapshot,
   createDocumentRevision,
   createContinuityGroup,
   createEntity,
@@ -20,6 +21,7 @@ import {
   executeAnalysis,
   getScenePatchReview,
   getSceneEntityReview,
+  listContextSnapshots,
   getScriptDocument,
   getDocumentRevision,
   getResolvedState,
@@ -33,6 +35,11 @@ import {
 import type {
   ContinuityGroup,
   ContinuityGroupKind,
+  ContextPurpose,
+  ContextPolicyId,
+  ContextContent,
+  ContextEntity,
+  ContextSnapshot,
   PatchProposalResult,
   ResolvedState,
   SceneEntityReview,
@@ -45,7 +52,9 @@ import {
   analysisSelectionKey,
   candidateValueFromInput,
   canAcceptPatch,
+  contextSelectionKey,
   isCurrentAnalysisResponse,
+  isCurrentContextResponse,
   isCurrentPatchResponse,
   patchSelectionKey,
   patchConflictLabel,
@@ -98,6 +107,24 @@ type PatchReviewState = {
   error: string | null;
   action: "reviewing" | "proposing" | "accepting" | "rejecting" | "refreshing" | null;
   latestConflict: WorkspacePatch | null;
+};
+
+type ContextSelection = {
+  projectId: string;
+  documentId: string;
+  sceneId: string;
+  sceneRevisionId: string;
+  purpose: ContextPurpose;
+  policyId: ContextPolicyId;
+};
+
+type ContextState = {
+  selection: ContextSelection;
+  loading: boolean;
+  building: boolean;
+  loaded: boolean;
+  snapshot: ContextSnapshot | null;
+  error: string | null;
 };
 
 type FactCandidateDraft = {
@@ -290,6 +317,8 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   // response cannot bleed into another selection.
   const [patchReviewByKey, setPatchReviewByKey] = React.useState<Record<string, PatchReviewState>>({});
   const [resolvedStateByKey, setResolvedStateByKey] = React.useState<Record<string, { selection: { projectId: string; documentId: string; sceneId: string; sceneRevisionId: string }; loading: boolean; state: ResolvedState | null; error: string | null }>>({});
+  const [contextPurpose, setContextPurpose] = React.useState<ContextPurpose>("video");
+  const [contextByKey, setContextByKey] = React.useState<Record<string, ContextState>>({});
   const [resolvedStateRefreshToken, setResolvedStateRefreshToken] = React.useState(0);
   const [entities, setEntities] = React.useState<Entity[]>([]);
   const [entityLoading, setEntityLoading] = React.useState(false);
@@ -304,8 +333,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const analysisSelectionRef = React.useRef<AnalysisState["selection"] | null>(null);
   const patchSelectionRef = React.useRef<PatchReviewState["selection"] | null>(null);
   const resolvedStateSelectionRef = React.useRef<{ projectId: string; documentId: string; sceneId: string; sceneRevisionId: string } | null>(null);
+  const contextSelectionRef = React.useRef<ContextSelection | null>(null);
   const analysisByKeyRef = React.useRef<Record<string, AnalysisState>>({});
   const patchReviewByKeyRef = React.useRef<Record<string, PatchReviewState>>({});
+  const contextByKeyRef = React.useRef<Record<string, ContextState>>({});
   const resolvedStateByKeyRef = React.useRef<typeof resolvedStateByKey>({});
   const documentId = document?.id ?? null;
   const documentVersion = document?.version ?? null;
@@ -328,6 +359,12 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     ? workspaceRevisionSelectionKey({ projectId, documentId, sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId })
     : null;
   const selectedResolvedState = selectedResolvedStateKey ? resolvedStateByKey[selectedResolvedStateKey] ?? null : null;
+  const contextPolicyId: ContextPolicyId = contextPurpose === "storyboard" ? "storyboard-default-v1" : "video-default-v1";
+  const selectedContextSelection = React.useMemo<ContextSelection | null>(() => documentId && selectedScene && selectedRevisionId
+    ? { projectId, documentId, sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId, purpose: contextPurpose, policyId: contextPolicyId }
+    : null, [contextPolicyId, contextPurpose, documentId, projectId, selectedRevisionId, selectedScene]);
+  const selectedContextKey = selectedContextSelection ? contextSelectionKey(selectedContextSelection) : null;
+  const selectedContext = selectedContextKey ? contextByKey[selectedContextKey] ?? null : null;
 
   React.useEffect(() => {
     setFreshDocument(document);
@@ -350,6 +387,9 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     setGroupFormOpen(false);
     resolvedStateSelectionRef.current = null;
     setResolvedStateByKey({});
+    contextSelectionRef.current = null;
+    contextByKeyRef.current = {};
+    setContextByKey({});
     analysisSelectionRef.current = null;
     patchSelectionRef.current = null;
     setAnalysisByKey({});
@@ -433,6 +473,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   React.useEffect(() => {
     resolvedStateByKeyRef.current = resolvedStateByKey;
   }, [resolvedStateByKey]);
+
+  React.useEffect(() => {
+    contextByKeyRef.current = contextByKey;
+  }, [contextByKey]);
 
   React.useEffect(() => {
     if (!selectedSceneAnalysisId || !selectedRevisionId || !revision) {
@@ -568,6 +612,63 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
       });
     return () => { cancelled = true; };
   }, [documentId, projectId, resolvedStateRefreshToken, revision, selectedRevisionId, selectedSceneAnalysisId]);
+
+  React.useEffect(() => {
+    if (!documentId || !selectedSceneAnalysisId || !selectedRevisionId || !revision || revisionDirty) {
+      contextSelectionRef.current = null;
+      return;
+    }
+    const selection: ContextSelection = {
+      projectId,
+      documentId,
+      sceneId: selectedSceneAnalysisId,
+      sceneRevisionId: selectedRevisionId,
+      purpose: contextPurpose,
+      policyId: contextPolicyId,
+    };
+    contextSelectionRef.current = selection;
+    const key = contextSelectionKey(selection);
+    setContextByKey((current) => ({
+      ...current,
+      [key]: {
+        selection,
+        loading: true,
+        building: false,
+        loaded: false,
+        snapshot: current[key]?.snapshot ?? null,
+        error: null,
+      },
+    }));
+    void listContextSnapshots(projectId, {
+      sceneId: selection.sceneId,
+      sceneRevisionId: selection.sceneRevisionId,
+      purpose: selection.purpose,
+      policyId: selection.policyId,
+      latest: true,
+    })
+      .then((snapshots) => {
+        if (!isCurrentContextResponse(contextSelectionRef.current, selection)) return;
+        const snapshot = snapshots.find((candidate) => candidate.isLatest) ?? snapshots[0] ?? null;
+        setContextByKey((current) => ({
+          ...current,
+          [key]: { selection, loading: false, building: false, loaded: true, snapshot, error: null },
+        }));
+      })
+      .catch((error: unknown) => {
+        if (!isCurrentContextResponse(contextSelectionRef.current, selection)) return;
+        setContextByKey((current) => ({
+          ...current,
+          [key]: {
+            selection,
+            loading: false,
+            building: false,
+            loaded: true,
+            snapshot: current[key]?.snapshot ?? null,
+            error: humanError(error, "Context Snapshot could not be loaded."),
+          },
+        }));
+      });
+  }, [contextPolicyId, contextPurpose, documentId, projectId, revision, revisionDirty, selectedRevisionId, selectedSceneAnalysisId]);
 
   const updateScene = React.useCallback((sceneId: string, update: Partial<Pick<EditableScene, "title" | "content" | "continuityGroupId">>) => {
     setScenes((current) => current.map((scene) => scene.id === sceneId ? { ...scene, ...update } : scene));
@@ -1019,6 +1120,58 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     }
   }, [freshDocument, loadReview, projectId, revision, selectedAnalysis?.action, selectedRevisionId, selectedScene, setAnalysisState]);
 
+  const buildContext = React.useCallback(async () => {
+    const selection = selectedContextSelection;
+    if (!selection || revisionDirty) return;
+    const key = contextSelectionKey(selection);
+    const current = contextByKeyRef.current[key];
+    if (current?.building || current?.loading) return;
+    contextSelectionRef.current = selection;
+    setContextByKey((records) => ({
+      ...records,
+      [key]: {
+        selection,
+        loading: false,
+        building: true,
+        loaded: current?.loaded ?? false,
+        snapshot: current?.snapshot ?? null,
+        error: null,
+      },
+    }));
+    setStatusMessage(`Building ${selection.purpose} Context Snapshot…`);
+    try {
+      const result = await buildContextSnapshot(projectId, {
+        sceneId: selection.sceneId,
+        sceneRevisionId: selection.sceneRevisionId,
+        purpose: selection.purpose,
+        policyId: selection.policyId,
+        allowInferred: false,
+        requestId: requestId("context-build"),
+        actorId: "local-user",
+      });
+      if (!isCurrentContextResponse(contextSelectionRef.current, selection)) return;
+      setContextByKey((records) => ({
+        ...records,
+        [key]: { selection, loading: false, building: false, loaded: true, snapshot: result.snapshot, error: null },
+      }));
+      setStatusMessage(result.idempotent ? "Context Snapshot replayed." : "Context Snapshot built. No Provider submission was made.");
+    } catch (error) {
+      if (!isCurrentContextResponse(contextSelectionRef.current, selection)) return;
+      setContextByKey((records) => ({
+        ...records,
+        [key]: {
+          selection,
+          loading: false,
+          building: false,
+          loaded: true,
+          snapshot: records[key]?.snapshot ?? null,
+          error: humanError(error, "Context Snapshot could not be built."),
+        },
+      }));
+      setStatusMessage("Context build failed; the script remains available.");
+    }
+  }, [projectId, revisionDirty, selectedContextSelection]);
+
   const reviewLink = React.useCallback(async (link: SceneEntityLink, decision: "confirmed" | "rejected") => {
     if (!selectedScene || !selectedRevisionId || !selectedAnalysis) return;
     const selection = { sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId };
@@ -1244,6 +1397,14 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                   resolvedState={selectedResolvedState?.state ?? null}
                   resolvedStateLoading={selectedResolvedState?.loading ?? false}
                   resolvedStateError={selectedResolvedState?.error ?? null}
+                  contextState={selectedContext}
+                  contextPurpose={contextPurpose}
+                  contextPolicyId={contextPolicyId}
+                  contextDisabled={revisionDirty || !selectedScene || !selectedRevisionId || Boolean(selectedContext?.loading) || Boolean(selectedContext?.building)}
+                  hasSavedRevision={Boolean(selectedScene && selectedRevisionId && !revisionDirty)}
+                  hasScene={Boolean(selectedScene)}
+                  onContextPurposeChange={setContextPurpose}
+                  onBuildContext={() => void buildContext()}
                   actions={selectedPatchState && !revisionDirty ? {
                     onAccept: (patch, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept", request),
                     onAcceptEdited: (patch, payload, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept-edited", request, payload),
@@ -1363,6 +1524,14 @@ function CanonPatchReviewPanel({
   resolvedState,
   resolvedStateLoading,
   resolvedStateError,
+  contextState,
+  contextPurpose,
+  contextPolicyId,
+  contextDisabled,
+  hasSavedRevision,
+  hasScene,
+  onContextPurposeChange,
+  onBuildContext,
 }: {
   review: ScenePatchReview | null;
   sceneContent: string;
@@ -1379,6 +1548,14 @@ function CanonPatchReviewPanel({
   resolvedState: ResolvedState | null;
   resolvedStateLoading: boolean;
   resolvedStateError: string | null;
+  contextState: ContextState | null;
+  contextPurpose: ContextPurpose;
+  contextPolicyId: ContextPolicyId;
+  contextDisabled: boolean;
+  hasSavedRevision: boolean;
+  hasScene: boolean;
+  onContextPurposeChange: (purpose: ContextPurpose) => void;
+  onBuildContext: () => void;
 }) {
   return (
     <section className="mt-8 min-w-0 border-t border-line pt-6" aria-labelledby="canon-patch-review-heading" data-testid="canon-patch-review">
@@ -1429,6 +1606,16 @@ function CanonPatchReviewPanel({
       <FactCandidateComposer entities={entities} sceneContent={sceneContent} onPropose={onPropose} />
       <StatePatchComposer characters={confirmedCharacters} props={stateProps} sceneContent={sceneContent} onPropose={onProposeState} blockedByUnsavedRevision={stateProposalBlocked} />
       <ResolvedStateInspector entities={entities} state={resolvedState} loading={resolvedStateLoading} error={resolvedStateError} />
+      <ContextInspector
+        state={contextState}
+        purpose={contextPurpose}
+        policyId={contextPolicyId}
+        disabled={contextDisabled}
+        hasSavedRevision={hasSavedRevision}
+        hasScene={hasScene}
+        onPurposeChange={onContextPurposeChange}
+        onBuild={onBuildContext}
+      />
     </section>
   );
 }
@@ -1631,6 +1818,102 @@ function ResolvedStateInspector({ entities, state, loading, error }: { entities:
           ))}
         </div>
       ) : !loading && !error ? <p className="mt-4 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No confirmed linked entities or resolved fields returned.</p> : null}
+    </section>
+  );
+}
+
+type ContextIssueItem = ContextContent["missing"][number]
+  | ContextContent["conflicts"][number]
+  | ContextContent["warnings"][number]
+  | ContextContent["omitted"][number];
+
+function contextValue(value: unknown) {
+  return stringifyPatchValue(value);
+}
+
+function contextIssueSummary(item: ContextIssueItem) {
+  if ("message" in item) {
+    return `${item.code}: ${item.message}`;
+  }
+  return `${item.kind} ${item.recordId ?? "—"}: ${item.reason}`;
+}
+
+function ContextIssueSection({ title, items, tone, testId }: { title: string; items: readonly ContextIssueItem[]; tone: "danger" | "accent" | "muted"; testId: string }) {
+  const toneClass = tone === "danger" ? "border-danger/40 bg-danger/5 text-danger" : tone === "accent" ? "border-accent/40 bg-accent/5 text-accent" : "border-line bg-surface-muted text-ink-muted";
+  return (
+    <section className={`min-w-0 rounded-md border p-3 ${toneClass}`} aria-labelledby={`${testId}-heading`} data-testid={testId}>
+      <h5 id={`${testId}-heading`} className="text-xs font-semibold uppercase tracking-[0.08em]">{title}</h5>
+      {items.length > 0 ? <ul className="mt-2 min-w-0 space-y-2">{items.map((item, index) => <li key={`${testId}-${index}`} className="min-w-0 break-words whitespace-pre-wrap text-xs leading-5">{contextIssueSummary(item)}</li>)}</ul> : <p className="mt-2 text-xs leading-5 opacity-75">None recorded.</p>}
+    </section>
+  );
+}
+
+function ContextEntityCard({ item, index }: { item: ContextEntity; index: number }) {
+  return (
+    <li className="min-w-0 rounded-md border border-line bg-surface p-3" data-testid={`context-entity-${index}`}>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0"><p className="break-words text-sm font-semibold text-ink">{item.canonicalName}</p><p className="mt-1 break-words text-xs text-ink-muted">{item.type} · Roles: {item.roles.join(", ") || "None"}</p></div>
+        <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">{item.entityId}</span>
+      </div>
+      <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="min-w-0 rounded bg-surface-muted p-2"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Base facts</p>{item.baseFacts.length > 0 ? <ul className="mt-2 space-y-2">{item.baseFacts.map((fact) => <li key={fact.factId} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{fact.predicate}</span>: {contextValue(fact.value)}<br /><span className="break-all font-mono text-[10px] text-ink-faint">fact {fact.factId} · v{fact.version} · source {fact.sourceId}</span></li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">None included.</p>}</div>
+        <div className="min-w-0 rounded bg-surface-muted p-2"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Resolved State</p>{item.resolvedState ? item.resolvedState.fields.length > 0 ? <ul className="mt-2 space-y-2">{item.resolvedState.fields.map((field) => <li key={field.predicate} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{statePredicateLabel(field.predicate)}</span> · {stateTierLabel(field.tier)}: {contextValue(field.value)}{field.sources.length > 0 ? <ul className="mt-1 space-y-1 border-l-2 border-line pl-2">{field.sources.map((source) => <li key={`${source.kind}-${source.recordId}`} className="break-all font-mono text-[10px] text-ink-faint">{source.kind} {source.recordId} · evidence {source.evidenceSourceId} · source revision {source.sourceRevisionId ?? "—"}</li>)}</ul> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No resolved fields.</p> : <p className="mt-2 text-xs text-ink-faint">None included.</p>}</div>
+      </div>
+    </li>
+  );
+}
+
+function ContextInspector({
+  state,
+  purpose,
+  policyId,
+  disabled,
+  hasSavedRevision,
+  hasScene,
+  onPurposeChange,
+  onBuild,
+}: {
+  state: ContextState | null;
+  purpose: ContextPurpose;
+  policyId: ContextPolicyId;
+  disabled: boolean;
+  hasSavedRevision: boolean;
+  hasScene: boolean;
+  onPurposeChange: (purpose: ContextPurpose) => void;
+  onBuild: () => void;
+}) {
+  const content = state?.snapshot?.content;
+  const scene = content?.scene;
+  const entities = content?.entities ?? [];
+  const provenance = content?.provenance ?? [];
+  return (
+    <section className="mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-4" aria-labelledby="context-inspector-heading" data-testid="context-inspector">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 4</p><h4 id="context-inspector-heading" className="mt-2 break-words text-sm font-semibold text-ink">Context Inspector</h4><p className="mt-1 max-w-[58ch] text-xs leading-5 text-ink-muted">Inspect the immutable, provider-neutral input assembled from this saved Scene revision. Building here never submits to a Provider.</p></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2"><span className="rounded border border-line px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">allowInferred=false</span><span className="rounded border border-line px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">No Provider submission</span></div>
+      </div>
+      <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor="context-purpose">Purpose</label><select id="context-purpose" aria-label="Context purpose" value={purpose} onChange={(event) => onPurposeChange(event.target.value as ContextPurpose)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink"><option value="storyboard">Storyboard</option><option value="video">Video</option></select></div>
+        <div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor="context-policy">Policy</label><select id="context-policy" aria-label="Context policy" value={policyId} disabled className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-muted px-3 text-sm text-ink"><option value={policyId}>{policyId}</option></select></div>
+      </div>
+      <div className="mt-4 flex min-w-0 flex-wrap items-center gap-3"><button type="button" onClick={onBuild} disabled={disabled || !hasSavedRevision || !hasScene} className="inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="context-build">{state?.building ? "Building Snapshot…" : "Build Context Snapshot"}</button>{!hasSavedRevision ? <p className="break-words text-xs font-semibold text-danger">Save this revision first before building a Context Snapshot.</p> : !hasScene ? <p className="break-words text-xs text-ink-faint">Save a revision with a Scene before building context.</p> : null}</div>
+      {state?.loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">Loading the latest Context Snapshot…</p> : null}
+      {state?.error ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">Context error: {state.error}</p> : null}
+      {state?.snapshot ? (
+        <div className="mt-5 min-w-0 space-y-4">
+          <dl className="grid min-w-0 grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Snapshot ID</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-snapshot-id">{state.snapshot.id}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Content hash</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-content-hash">{state.snapshot.contentHash}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Input hash</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-input-hash">{state.snapshot.inputHash}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Policy / latest</dt><dd className="mt-1 break-words text-ink">{state.snapshot.policyId} · v{state.snapshot.policyVersion} · {state.snapshot.isLatest ? "Latest" : "Historical"}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3 sm:col-span-2"><dt className="text-ink-faint">Created</dt><dd className="mt-1 break-words text-ink">{state.snapshot.createdAt}</dd></div>
+          </dl>
+          <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-scene-heading"><h5 id="context-scene-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Scene</h5><p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink">{scene?.text ?? "No Scene text included."}</p><p className="mt-2 break-all font-mono text-[10px] text-ink-faint">{scene?.id ?? state.snapshot.sceneId} · revision {scene?.revisionId ?? state.snapshot.sceneRevisionId}</p></section>
+          <section className="min-w-0" aria-labelledby="context-entities-heading"><h5 id="context-entities-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Included Entities ({entities.length})</h5>{entities.length > 0 ? <ul className="mt-3 min-w-0 space-y-3">{entities.map((item, index) => <ContextEntityCard key={`context-entity-${index}`} item={item} index={index} />)}</ul> : <p className="mt-3 border-l-2 border-line pl-3 text-xs text-ink-faint">No confirmed entities were included.</p>}</section>
+          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"><ContextIssueSection title="Blocking conflicts" items={content?.conflicts ?? []} tone="danger" testId="context-conflicts" /><ContextIssueSection title="Missing" items={content?.missing ?? []} tone="danger" testId="context-missing" /><ContextIssueSection title="Warnings" items={content?.warnings ?? []} tone="accent" testId="context-warnings" /><ContextIssueSection title="Omitted" items={content?.omitted ?? []} tone="muted" testId="context-omitted" /></div>
+          <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-provenance-heading" data-testid="context-provenance"><h5 id="context-provenance-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Provenance</h5>{provenance.length > 0 ? <ul className="mt-3 min-w-0 space-y-2">{provenance.map((item) => <li key={`${item.kind}-${item.recordId}`} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{item.kind}</span> · <span className="break-all font-mono">{item.recordId}</span> · version {item.version ?? "—"}{item.sourceId ? <> · source <span className="break-all font-mono">{item.sourceId}</span></> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No provenance records included.</p>}</section>
+        </div>
+      ) : !state?.loading && !state?.error ? <p className="mt-5 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No Context Snapshot loaded for this purpose and saved revision. Build one to inspect its frozen input.</p> : null}
     </section>
   );
 }

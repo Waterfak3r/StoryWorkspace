@@ -44,10 +44,31 @@ export type WorkspaceRevisionSelection = {
   entityId?: string | null;
 };
 
+export type ContextSelection = Omit<WorkspaceRevisionSelection, "entityId"> & {
+  purpose: "storyboard" | "video";
+  policyId: "storyboard-default-v1" | "video-default-v1";
+};
+
 /** Phase 3 requests are scoped beyond a Scene because document lanes can
  * reuse stable scene IDs across revisions and projects. */
 export function workspaceRevisionSelectionKey(selection: WorkspaceRevisionSelection) {
   return [selection.projectId, selection.documentId, selection.sceneId, selection.sceneRevisionId, selection.entityId ?? "all"].join(":");
+}
+
+export function contextSelectionKey(selection: ContextSelection) {
+  return [workspaceRevisionSelectionKey(selection), selection.purpose, selection.policyId].join(":");
+}
+
+export function sameContextSelection(left: ContextSelection | null | undefined, right: ContextSelection | null | undefined) {
+  return Boolean(left && right && contextSelectionKey(left) === contextSelectionKey(right));
+}
+
+export function isCurrentContextResponse(current: ContextSelection | null | undefined, response: ContextSelection) {
+  return sameContextSelection(current, response);
+}
+
+export function isStaleContextResponse(current: ContextSelection | null | undefined, response: ContextSelection) {
+  return !isCurrentContextResponse(current, response);
 }
 
 export function sameWorkspaceRevisionSelection(left: WorkspaceRevisionSelection | null | undefined, right: WorkspaceRevisionSelection | null | undefined) {

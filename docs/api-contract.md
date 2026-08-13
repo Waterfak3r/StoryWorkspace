@@ -64,11 +64,19 @@ Phase 3 continuity and Scene State routes:
 
 State acceptance uses the existing Patch endpoints and transaction. `accept-edited` may change only the state value. The workspace disables revision-bound proposal and review commands while a Scene revision is dirty, so a locally selected continuity group must be saved and frozen before State review. The resolver reads no future narrative rank and never carries across a continuity group; single-valued same-tier and same-priority conflicts are returned rather than resolved by last-write-wins, while `state.held_prop` aggregates unique entity references.
 
+Phase 4 Context Builder routes:
+
+- `POST /api/projects/{projectId}/contexts/build` accepts a current `sceneId`/`sceneRevisionId`, matching `storyboard` or `video` purpose and code-owned policy ID, `allowInferred=false`, `requestId`, and actor. It returns 201 for a new immutable Snapshot or 200 for a request/semantic replay.
+- `GET /api/projects/{projectId}/contexts?sceneId=&sceneRevisionId=&purpose=&policyId=&latest=` lists project-scoped snapshots with strictly validated filters.
+- `GET /api/projects/{projectId}/contexts/{contextId}` reads one immutable Snapshot by project scope.
+
+Snapshot content is provider-neutral and contains the frozen Scene, included confirmed-link entities, policy-selected Base Facts, resolved State, structural budget metadata, `missing`, `conflicts`, `warnings`, `omitted`, and provenance. Candidate links, Inference, RAG, assets, and Provider requests are not included in this slice. Dirty Scene revisions cannot start a build in the workspace. Request IDs use a full input fingerprint; identical content is semantically deduplicated by stable content hash without mutating prior content.
+
 ## SQLite invariants
 
 - Every connection enables foreign keys, a finite busy timeout, and WAL when backed by a file.
 - Schema bootstrap is idempotent and versioned with `PRAGMA user_version`.
-- Phase 0–3 migrations bring the local schema to version 13 from the MVP baseline. New cross-project references are checked in repositories and SQLite project-guard triggers; revisions, evidence, analysis identities, patch payload/provenance, Fact values, and EntityState values are immutable, with only documented lifecycle/version transitions. Pending Patches are Canon-only review commands with operation-specific target/baseVersion and application-result shape; Patch status/version and Inference lifecycle transitions are trigger-guarded. v11 enforces Fact/Inference scope shape and same-project resolvable entity references; v12 requires accepted non-null ModelRuns to be succeeded and source-bound; v13 adds document-scoped continuity, state provenance, and atomic `add_state` acceptance. A new revision that removes accepted text evidence creates a reviewable Fact retract suggestion; it never directly mutates Canon.
+- Phase 0–4 migrations bring the local schema to version 14 from the MVP baseline. New cross-project references are checked in repositories and SQLite project-guard triggers; revisions, evidence, analysis identities, patch payload/provenance, Fact values, EntityState values, and Context Snapshot content are immutable, with only documented lifecycle/version/latest transitions. Pending Patches are Canon-only review commands with operation-specific target/baseVersion and application-result shape; Patch status/version and Inference lifecycle transitions are trigger-guarded. v11 enforces Fact/Inference scope shape and same-project resolvable entity references; v12 requires accepted non-null ModelRuns to be succeeded and source-bound; v13 adds document-scoped continuity, state provenance, and atomic `add_state` acceptance; v14 additively stores provider-neutral Context Snapshots whose latest index can change without changing content. A new revision that removes accepted text evidence creates a reviewable Fact retract suggestion; it never directly mutates Canon.
 - Multi-record changes run inside an explicit transaction.
 - SQL parameters are always bound. User input is never interpolated into SQL.
 - Database files, WAL files, and test databases are ignored by Git.

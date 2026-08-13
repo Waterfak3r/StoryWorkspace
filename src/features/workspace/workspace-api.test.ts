@@ -30,6 +30,7 @@ import {
   updateChapter,
   createDocumentRevision,
   createContinuityGroup,
+  buildContextSnapshot,
   createEntity,
   createEntityAlias,
   createScriptDocument,
@@ -41,9 +42,11 @@ import {
   getDocumentRevision,
   getSceneEntityReview,
   getResolvedState,
+  getContextSnapshot,
   getScriptDocument,
   listEntities,
   listContinuityGroups,
+  listContextSnapshots,
   listPatches,
   listScriptDocuments,
   proposeFactPatch,
@@ -52,6 +55,10 @@ import {
   parseContinuityGroup,
   parseContinuityGroupList,
   parseResolvedState,
+  parseContextBuildResult,
+  parseContextSnapshotEnvelope,
+  parseContextSnapshotList,
+  parseContextSnapshot,
   proposeStatePatch,
   reviewSceneEntityLink,
 } from "./workspace-api";
@@ -133,6 +140,40 @@ const patchModelRunId = "45454545-4545-4454-8454-454545454545";
 const patchApplicationId = "56565656-5656-4565-8565-565656565656";
 const patchFactId = "67676767-6767-4676-8676-676767676767";
 const hash = "a".repeat(64);
+const contextSnapshotId = "78787878-7878-4787-8787-787878787878";
+const contextPolicyVersion = "1";
+
+const contextContent = {
+  scene: { id: sceneId, revisionId: sceneRevisionId, title: "Opening", text: "Lin Mo enters.", contentHash: hash },
+  purpose: "video" as const,
+  policy: { id: "video-default-v1", version: contextPolicyVersion, budgets: { sceneChars: 40_000, maxEntities: 20, maxBaseFactsPerEntity: 12 } },
+  entities: [],
+  organizations: [],
+  events: [],
+  history: [],
+  globalStyle: {},
+  missing: [],
+  conflicts: [],
+  warnings: [],
+  omitted: [],
+  provenance: [],
+  hasBlockingIssues: false,
+};
+
+const contextSnapshot = {
+  id: contextSnapshotId,
+  projectId,
+  sceneId,
+  sceneRevisionId,
+  purpose: "video" as const,
+  policyId: "video-default-v1" as const,
+  policyVersion: contextPolicyVersion,
+  inputHash: hash,
+  content: contextContent,
+  contentHash: hash,
+  isLatest: true,
+  createdAt,
+};
 
 const scriptDocument: ScriptDocument = {
   id: documentId,
@@ -992,5 +1033,51 @@ describe("chapter workspace API", () => {
     expectJsonRequest(fetchMock, `/api/projects/${projectId}/documents/${documentId}/continuity-groups`, "POST", { name: "Flashback", kind: "flashback", requestId: "group-1" });
     expectJsonRequest(fetchMock, `/api/projects/${projectId}/scenes/${sceneId}/state-patches`, "POST", stateInput);
     expect(fetchMock).toHaveBeenNthCalledWith(4, `/api/projects/${projectId}/scenes/${sceneId}/resolved-state?sceneRevisionId=${sceneRevisionId}&entityId=${entityId}`, expect.anything());
+  });
+
+  it("strictly parses Context Snapshot envelopes and rejects presentation aliases", () => {
+    expect(parseContextSnapshot(contextSnapshot)).toEqual(contextSnapshot);
+    expect(() => parseContextSnapshot({ ...contextSnapshot, latestSnapshot: contextSnapshot })).toThrowError(/invalid context snapshot/i);
+    expect(() => parseContextSnapshot({ ...contextSnapshot, content: { ...contextContent, context: contextContent.scene } })).toThrowError(/invalid context snapshot/i);
+    expect(() => parseContextSnapshotEnvelope({ snapshot: contextSnapshot, latestSnapshot: contextSnapshot })).toThrowError(/invalid context snapshot/i);
+    expect(() => parseContextBuildResult({ snapshot: contextSnapshot, idempotent: false, context: contextContent })).toThrowError(/invalid context build/i);
+    expect(() => parseContextSnapshotList({ snapshots: [contextSnapshot], contexts: [contextSnapshot] })).toThrowError(/invalid context snapshot list/i);
+  });
+
+  it("builds, lists, and reads project-scoped Context Snapshots with exact filters", async () => {
+    const input = {
+      sceneId,
+      sceneRevisionId,
+      purpose: "video" as const,
+      policyId: "video-default-v1" as const,
+      allowInferred: false as const,
+      requestId: "context-build-1",
+      actorId: "local-user",
+    };
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { snapshot: contextSnapshot, idempotent: false } }, 201),
+      jsonResponse({ data: { snapshots: [contextSnapshot] } }),
+      jsonResponse({ data: { snapshot: contextSnapshot } }),
+    );
+    await expect(buildContextSnapshot(projectId, input)).resolves.toEqual({ snapshot: contextSnapshot, idempotent: false });
+    await expect(listContextSnapshots(projectId, { sceneId, sceneRevisionId, purpose: "video", policyId: "video-default-v1", latest: true })).resolves.toEqual([contextSnapshot]);
+    await expect(getContextSnapshot(projectId, contextSnapshotId)).resolves.toEqual(contextSnapshot);
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/contexts/build`, "POST", input);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/projects/${projectId}/contexts?sceneId=${sceneId}&sceneRevisionId=${sceneRevisionId}&purpose=video&policyId=video-default-v1&latest=true`, expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(3, `/api/projects/${projectId}/contexts/${contextSnapshotId}`, expect.anything());
+  });
+
+  it("does not issue a request when the purpose and policy do not match", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(buildContextSnapshot(projectId, {
+      sceneId,
+      sceneRevisionId,
+      purpose: "video",
+      policyId: "storyboard-default-v1",
+      allowInferred: false,
+      requestId: "context-invalid-policy",
+    })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

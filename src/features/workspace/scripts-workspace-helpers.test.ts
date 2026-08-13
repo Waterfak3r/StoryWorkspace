@@ -4,6 +4,9 @@ import {
   analysisSelectionKey,
   candidateValueFromInput,
   canAcceptPatch,
+  contextSelectionKey,
+  isCurrentContextResponse,
+  isStaleContextResponse,
   isCurrentAnalysisResponse,
   isCurrentPatchResponse,
   isStalePatchResponse,
@@ -182,5 +185,28 @@ describe("Phase 3 continuity and resolved-state helpers", () => {
     expect(isFactPredicate("wardrobe.current")).toBe(false);
     expect(isFactPredicate("state.injury")).toBe(false);
     expect(isFactPredicate("state.held_prop")).toBe(false);
+  });
+});
+
+describe("Phase 4 Context Snapshot selection helpers", () => {
+  const selection = {
+    projectId: "project-1",
+    documentId: "document-1",
+    sceneId: "scene-1",
+    sceneRevisionId: "revision-1",
+    purpose: "video" as const,
+    policyId: "video-default-v1" as const,
+  };
+
+  it("keys context reads by project, revision, purpose, and matching policy", () => {
+    expect(contextSelectionKey(selection)).toBe("project-1:document-1:scene-1:revision-1:all:video:video-default-v1");
+    expect(contextSelectionKey({ ...selection, purpose: "storyboard", policyId: "storyboard-default-v1" })).not.toBe(contextSelectionKey(selection));
+  });
+
+  it("ignores late Context responses after a Scene or purpose switch", () => {
+    expect(isCurrentContextResponse(selection, selection)).toBe(true);
+    expect(isCurrentContextResponse({ ...selection, sceneRevisionId: "revision-2" }, selection)).toBe(false);
+    expect(isCurrentContextResponse({ ...selection, purpose: "storyboard", policyId: "storyboard-default-v1" }, selection)).toBe(false);
+    expect(isStaleContextResponse(null, selection)).toBe(true);
   });
 });

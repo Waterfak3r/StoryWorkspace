@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 function runMigration(database: DatabaseSync, version: number, migration: () => void) {
   database.exec("BEGIN IMMEDIATE");
@@ -2251,5 +2251,76 @@ export function bootstrapDatabase(database: DatabaseSync) {
         BEGIN SELECT RAISE(ABORT, 'accepted patch model/evidence provenance is invalid'); END;
       `);
     });
+  }
+
+  if (currentVersion < 14) {
+    runMigration(database, 14, () => database.exec(`
+      CREATE TABLE IF NOT EXISTS context_snapshots (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        scene_revision_id TEXT NOT NULL,
+        purpose TEXT NOT NULL CHECK (purpose IN ('storyboard', 'video')),
+        policy_id TEXT NOT NULL CHECK (policy_id IN ('storyboard-default-v1', 'video-default-v1')),
+        policy_version TEXT NOT NULL CHECK (policy_version = '1'),
+        input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
+        content_json TEXT NOT NULL CHECK (json_valid(content_json) AND json_type(content_json) = 'object'),
+        content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+        is_latest INTEGER NOT NULL DEFAULT 0 CHECK (is_latest IN (0, 1)),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_revision_id) REFERENCES scene_revisions(id) ON DELETE CASCADE,
+        UNIQUE (project_id, content_hash)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_project_scene_latest
+        ON context_snapshots(project_id, scene_id, purpose, policy_id, is_latest, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_project_revision
+        ON context_snapshots(project_id, scene_revision_id, created_at DESC, id DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_context_snapshots_one_latest
+        ON context_snapshots(project_id, scene_id, purpose, policy_id)
+        WHERE is_latest = 1;
+
+      CREATE TRIGGER IF NOT EXISTS context_snapshots_project_guard
+      BEFORE INSERT ON context_snapshots
+      WHEN (SELECT project_id FROM scenes WHERE id = NEW.scene_id) IS NULL
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) <> NEW.project_id
+        OR (SELECT status FROM scenes WHERE id = NEW.scene_id) <> 'active'
+        OR (SELECT project_id FROM scene_revisions WHERE id = NEW.scene_revision_id) IS NULL
+        OR (SELECT project_id FROM scene_revisions WHERE id = NEW.scene_revision_id) <> NEW.project_id
+        OR (SELECT scene_id FROM scene_revisions WHERE id = NEW.scene_revision_id) <> NEW.scene_id
+        OR (SELECT status FROM scene_revisions WHERE id = NEW.scene_revision_id) <> 'active'
+        OR NOT EXISTS (
+          SELECT 1 FROM script_documents d JOIN scene_revisions sr ON sr.document_revision_id = d.current_revision_id
+          WHERE d.id = (SELECT document_id FROM scenes WHERE id = NEW.scene_id)
+            AND d.project_id = NEW.project_id
+            AND sr.id = NEW.scene_revision_id
+            AND sr.scene_id = NEW.scene_id
+        )
+        OR (NEW.purpose = 'storyboard' AND NEW.policy_id <> 'storyboard-default-v1')
+        OR (NEW.purpose = 'video' AND NEW.policy_id <> 'video-default-v1')
+      BEGIN SELECT RAISE(ABORT, 'context snapshot project or policy mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS context_snapshots_update_project_guard
+      BEFORE UPDATE OF id, project_id, scene_id, scene_revision_id, purpose, policy_id, policy_version, input_hash, content_json, content_hash, created_at ON context_snapshots
+      WHEN NEW.id IS NOT OLD.id
+        OR NEW.project_id IS NOT OLD.project_id
+        OR NEW.scene_id IS NOT OLD.scene_id
+        OR NEW.scene_revision_id IS NOT OLD.scene_revision_id
+        OR NEW.purpose IS NOT OLD.purpose
+        OR NEW.policy_id IS NOT OLD.policy_id
+        OR NEW.policy_version IS NOT OLD.policy_version
+        OR NEW.input_hash IS NOT OLD.input_hash
+        OR NEW.content_json IS NOT OLD.content_json
+        OR NEW.content_hash IS NOT OLD.content_hash
+        OR NEW.created_at IS NOT OLD.created_at
+      BEGIN SELECT RAISE(ABORT, 'context snapshot identity or content is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS context_snapshots_latest_guard
+      BEFORE UPDATE OF is_latest ON context_snapshots
+      WHEN NEW.is_latest NOT IN (0, 1)
+      BEGIN SELECT RAISE(ABORT, 'context snapshot latest flag is invalid'); END;
+    `));
   }
 }

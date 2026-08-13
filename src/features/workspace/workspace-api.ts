@@ -96,8 +96,19 @@ import {
   type ResolvedStateResponse,
   type StatePatchPayload,
 } from "@/domain/scene-state";
+import {
+  buildContextInputSchema,
+  contextContentSchema,
+  contextSnapshotSchema as domainContextSnapshotSchema,
+  type BuildContextInput,
+  type ContextContent,
+  type ContextPolicyId,
+  type ContextPurpose,
+  type ContextSnapshot,
+} from "@/domain/context-builder";
 
 export type { ContinuityGroup, ContinuityGroupKind, CreateContinuityGroupInput, ProposeStatePatchInput, StatePatchPayload } from "@/domain/scene-state";
+export type { BuildContextInput, ContextContent, ContextEntity, ContextPolicyId, ContextPurpose, ContextSnapshot } from "@/domain/context-builder";
 
 export type WorkspaceFieldErrors = Record<string, string[]>;
 
@@ -189,6 +200,25 @@ export type ResolvedState = ResolvedStateResponse;
 export type ResolvedStateEntity = ResolvedStateResponse["entities"][number];
 export type ResolvedStateField = ResolvedStateEntity["fields"][number];
 export type ResolvedStateSource = ResolvedStateField["sources"][number];
+
+export type ContextSnapshotContent = ContextContent;
+export type ContextBuildInput = BuildContextInput;
+export const contextSnapshotContentSchema = contextContentSchema;
+export const contextBuildInputSchema = buildContextInputSchema;
+export const contextSnapshotSchema = domainContextSnapshotSchema;
+
+export type ContextBuildResult = {
+  snapshot: ContextSnapshot;
+  idempotent: boolean;
+};
+
+export type ListContextSnapshotsOptions = {
+  sceneId: string;
+  sceneRevisionId: string;
+  purpose: ContextPurpose;
+  policyId: ContextPolicyId;
+  latest: boolean;
+};
 
 export type PatchProposalResult = {
   patch: WorkspacePatch;
@@ -1128,6 +1158,67 @@ export function parseResolvedState(value: unknown): ResolvedState {
   const parsed = resolvedStateResponseSchema.safeParse(value);
   if (!parsed.success) throw invalidDataError("resolved state response");
   return parsed.data;
+}
+
+export function parseContextSnapshot(value: unknown): ContextSnapshot {
+  const parsed = contextSnapshotSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("context snapshot response");
+  return parsed.data;
+}
+
+export function parseContextSnapshotEnvelope(value: unknown): ContextSnapshot {
+  const parsed = z.object({ snapshot: contextSnapshotSchema }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("context snapshot response");
+  return parsed.data.snapshot;
+}
+
+export function parseContextBuildResult(value: unknown): ContextBuildResult {
+  const parsed = z.object({ snapshot: contextSnapshotSchema, idempotent: z.boolean() }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("context build response");
+  return parsed.data;
+}
+
+export function parseContextSnapshotList(value: unknown): ContextSnapshot[] {
+  const parsed = z.object({ snapshots: z.array(contextSnapshotSchema) }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("context snapshot list response");
+  return parsed.data.snapshots;
+}
+
+/** Build a provider-neutral, immutable Context Snapshot for one saved Scene revision. */
+export async function buildContextSnapshot(projectId: string, input: ContextBuildInput): Promise<ContextBuildResult> {
+  const parsedInput = contextBuildInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The context build request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/contexts/build`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseContextBuildResult(result);
+}
+
+/** Backwards-friendly alias used by workspace callers. */
+export const buildContext = buildContextSnapshot;
+
+export async function listContextSnapshots(projectId: string, options: ListContextSnapshotsOptions): Promise<ContextSnapshot[]> {
+  const query = new URLSearchParams();
+  query.set("sceneId", options.sceneId);
+  query.set("sceneRevisionId", options.sceneRevisionId);
+  query.set("purpose", options.purpose);
+  query.set("policyId", options.policyId);
+  query.set("latest", String(options.latest));
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/contexts?${query.toString()}`);
+  return parseContextSnapshotList(result);
+}
+
+export async function getContextSnapshot(projectId: string, contextId: string): Promise<ContextSnapshot> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/contexts/${encodeURIComponent(contextId)}`);
+  return parseContextSnapshotEnvelope(result);
 }
 
 export async function getResolvedState(projectId: string, sceneId: string, options: { sceneRevisionId: string; entityId?: string }): Promise<ResolvedState> {
