@@ -29,6 +29,24 @@ npm run dev
 
 Open `http://localhost:3000`. The development server uses hot reload. For a fresh dependency installation without a lockfile install, `npm install` is also supported.
 
+### Windows PowerShell helper
+
+From the repository root, run the foreground helper:
+
+```powershell
+.\start-local.ps1
+```
+
+It checks Node.js 24.x, npm, and port availability; creates the database parent directory; and installs dependencies when `node_modules` is missing (`npm ci` when `package-lock.json` exists, otherwise `npm install`). Relative `-DatabasePath` values resolve from the repository root. Press `Ctrl+C` to stop the server.
+
+```powershell
+.\start-local.ps1 -Port 43140 -DatabasePath 'D:\story workspace\story.db'
+.\start-local.ps1 -Production -Port 3000
+.\start-local.ps1 -SkipInstall  # fail if node_modules is missing
+```
+
+Use `-Production` to build and then run `npm start`; development mode is the default. `-Port` selects the local port, `-DatabasePath` selects the SQLite file, and `-SkipInstall` disables automatic dependency installation. The helper sets `STORY_WORKSPACE_DB_PATH` only for this server run and does not read or print secrets.
+
 ## Production run
 
 ```bash
