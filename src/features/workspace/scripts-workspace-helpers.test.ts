@@ -37,6 +37,9 @@ import {
   compilationInputDefaults,
   isCurrentCompilationResponse,
   isStaleCompilationResponse,
+  generationSelectionKey,
+  isCurrentGenerationResponse,
+  isStaleGenerationResponse,
   workspaceRevisionSelectionKey,
 } from "./scripts-workspace-helpers";
 
@@ -281,5 +284,14 @@ describe("Phase 5B compilation selection helpers", () => {
   it("derives fresh parameter defaults from the newly selected Shot", () => {
     expect(compilationInputDefaults(8)).toEqual({ durationInput: "8", aspectInput: "16:9" });
     expect(compilationInputDefaults(null)).toEqual({ durationInput: "", aspectInput: "16:9" });
+  });
+
+  it("binds generation responses to the immutable compiled request", () => {
+    const generationSelection = { ...selection, compiledRequestId: "compiled-1" };
+    expect(generationSelectionKey(generationSelection)).toBe("project-1:scene-1:revision-1:snapshot-1:storyboard-1:shot-1:compiled-1");
+    expect(generationSelectionKey({ ...generationSelection, shotSpecId: "shot-2" })).not.toBe(generationSelectionKey(generationSelection));
+    expect(isCurrentGenerationResponse(generationSelection, generationSelection)).toBe(true);
+    expect(isCurrentGenerationResponse({ ...generationSelection, compiledRequestId: "compiled-2" }, generationSelection)).toBe(false);
+    expect(isStaleGenerationResponse(null, generationSelection)).toBe(true);
   });
 });

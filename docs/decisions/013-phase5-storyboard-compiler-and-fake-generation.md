@@ -15,10 +15,14 @@ Phase 4 已把当前正文、confirmed link、Base Canon 与 Scene State 冻结�
 7. Phase 5C 的 Generation Manifest 是唯一提交输入，绑定 Context Snapshot、ShotSpec、compiled request、Fake provider/model/profile/compiler version 和完整参数；身份及内容不可更新。提交命令使用完整 request fingerprint 和项目级幂等键，在同一事务内创建 Manifest/job/audit/outbox 后调用 Fake Adapter。
 8. Fake Adapter 实现与真实 Adapter 相同的 validate/prepare/submit/getStatus/normalizeResult 边界，但不联网、不收费、不读取环境密钥。默认确定性完成并生成 `fake://` result；显式测试参数可产生归一化失败。重试同一 requestId 不创建第二个 Manifest/job/result，也不产生第二次 fake submit。
 9. UI 从当前 Context Inspector 选择/创建 Storyboard，审核并 approve ShotSpec，预览实际 prompt/asset/fallback，再提交 Fake generation。dirty Scene revision 不阻止消费已经冻结且明确选中的 Snapshot，但从当前 Scene 自动创建新 Storyboard时要求 Snapshot 与所选 Scene/revision一致。
+10. Phase 5C 每个 Manifest 只创建一个可版本化 `GenerationJob`，状态为 queued/running/succeeded/failed；Manifest 和 Result 不可更新。任务状态转换使用 expected version 的 compare-and-set，成功任务不可再次执行，失败任务只能通过显式 retry command 进入新 attempt。
+11. Fake Provider 使用由 Manifest 派生的稳定 provider idempotency key，并把模拟 submission 独立持久化。`timeout_after_accept_once` 表示 Provider 已接受且结果已生成，但首次本地调用得到归一化 timeout；retry 复用同一 provider submission，再经 getStatus/normalizeResult 取得结果，不进行第二次模拟计费提交。相同 submit/retry requestId 的 HTTP 重放仅返回原响应，requestId 改绑其他输入时报冲突；新的 requestId 代表作者显式再次生成，即使输入 hash 相同也创建新的 Manifest/job，不做内容级语义复用。
+12. Manifest 创建和 queued Job、audit/outbox 写入同一事务并先于 Adapter 副作用；Provider 调用完成后再以事务和 CAS 写 Job terminal 状态、Result 与对应事件。若进程中断，遗留 queued/running Job 可通过同一幂等 Provider submission 安全恢复。
 
 ## 迁移与影响
 
 - v15 additively 增加 Storyboard/ShotSpec；v16 增加 reference asset 与 compiled request；v17 增加 Generation Manifest/job/result。旧表不重建。
+- v17 另外保存 Fake-only provider submission 账本，用于本地证明 retry 未重复提交；它属于 Adapter 基础设施，不进入通用 Manifest 或 Story Bible 领域模型。
 - Context、Storyboard、ShotSpec、compiled request 和 Manifest 形成逐层不可变引用链。Story Bible 或 Scene 后续修改不会改变已提交任务；用户需要显式以新 Snapshot 创建新链路。
 - 首个 Adapter 仅为本地 Fake Provider。真实上传、webhook、计费、取消、对象存储和 Provider secret 不在本 ADR 的完成声明中。
 

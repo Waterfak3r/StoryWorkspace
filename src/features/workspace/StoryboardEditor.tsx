@@ -4,7 +4,9 @@ import * as React from "react";
 import { ArrowClockwise, Check, Plus } from "@phosphor-icons/react";
 import type { ContextEntity, ContextSnapshot } from "@/domain/context-builder";
 import { shotSpecContentSchema, type ShotSpecContent, type Storyboard, type StoryboardStatus } from "@/domain/storyboard";
+import type { CompileShotResult } from "@/domain/generation-compiler";
 import { CompilationPreview } from "./CompilationPreview";
+import type { CompilationSelection } from "./scripts-workspace-helpers";
 
 export type StoryboardDraft = {
   title: string;
@@ -34,6 +36,8 @@ type StoryboardEditorProps = {
   onSave: () => void;
   onApprove: () => void;
   onReload: () => void;
+  onCompileResult?: (selection: CompilationSelection, result: CompileShotResult | null) => void;
+  renderGenerationPanel?: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 };
 
 function entityLabel(entity: ContextEntity) {
@@ -74,6 +78,8 @@ function StoryboardShotEditor({
   storyboardId,
   shotSpecId,
   onRemove,
+  onCompileResult,
+  renderGenerationPanel,
 }: {
   projectId: string;
   draft: StoryboardDraft;
@@ -86,6 +92,8 @@ function StoryboardShotEditor({
   storyboardId: string | null;
   shotSpecId: string | null;
   onRemove: () => void;
+  onCompileResult?: (selection: CompilationSelection, result: CompileShotResult | null) => void;
+  renderGenerationPanel?: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 }) {
   const shot = draft.shots[shotIndex];
   const characterEntities = characters(snapshot);
@@ -178,12 +186,14 @@ function StoryboardShotEditor({
         shotIndex={shotIndex}
         boardStatus={boardStatus}
         boardDirty={boardDirty}
+        onCompileResult={onCompileResult}
+        renderGenerationPanel={renderGenerationPanel}
       />
     </li>
   );
 }
 
-export function StoryboardEditor({ projectId, snapshot, state, selectionValid, onNew, onDraftChange, onLoad, onSave, onApprove, onReload }: StoryboardEditorProps) {
+export function StoryboardEditor({ projectId, snapshot, state, selectionValid, onNew, onDraftChange, onLoad, onSave, onApprove, onReload, onCompileResult, renderGenerationPanel }: StoryboardEditorProps) {
   const draft = state?.draft ?? null;
   const characterEntities = characters(snapshot);
   const selectedBoard = state?.list.find((board) => board.id === state.selectedStoryboardId) ?? null;
@@ -222,7 +232,7 @@ export function StoryboardEditor({ projectId, snapshot, state, selectionValid, o
         {characterEntities.length === 0 ? <p role="alert" className="mt-3 border-l-2 border-danger pl-3 text-xs leading-5 text-danger">This Snapshot includes no Character. Add or confirm a Character, build a new Snapshot, then create a Storyboard.</p> : null}
         <ol className="mt-3 min-w-0 space-y-4" aria-label="Storyboard shots">{draft.shots.map((_, index) => {
           const persistedShot = selectedBoard?.shots[index] ?? null;
-          return <StoryboardShotEditor key={`${index}-${selectedBoard?.id ?? "draft"}-${persistedShot?.id ?? "new"}`} projectId={projectId} draft={draft} shotIndex={index} snapshot={snapshot} onChange={onDraftChange} disabled={!canEdit} boardStatus={selectedBoard?.status ?? "draft"} boardDirty={Boolean(state?.dirty)} storyboardId={selectedBoard?.id ?? null} shotSpecId={persistedShot?.id ?? null} onRemove={() => onDraftChange({ ...draft, shots: draft.shots.filter((__, shotIndex) => shotIndex !== index).map((shot, shotIndex) => ({ ...shot, ordinal: shotIndex + 1 })) })} />;
+          return <StoryboardShotEditor key={`${index}-${selectedBoard?.id ?? "draft"}-${persistedShot?.id ?? "new"}`} projectId={projectId} draft={draft} shotIndex={index} snapshot={snapshot} onChange={onDraftChange} disabled={!canEdit} boardStatus={selectedBoard?.status ?? "draft"} boardDirty={Boolean(state?.dirty)} storyboardId={selectedBoard?.id ?? null} shotSpecId={persistedShot?.id ?? null} onRemove={() => onDraftChange({ ...draft, shots: draft.shots.filter((__, shotIndex) => shotIndex !== index).map((shot, shotIndex) => ({ ...shot, ordinal: shotIndex + 1 })) })} onCompileResult={onCompileResult} renderGenerationPanel={renderGenerationPanel} />;
         })}</ol>
         <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2"><button type="button" onClick={onSave} disabled={!canSave} className="inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="storyboard-save">{state?.saving ? "Saving draft…" : selectedBoard?.status === "superseded" ? "Superseded version" : selectedBoard ? "Save new version" : "Save draft"}</button>{selectedBoard?.status === "draft" ? <button type="button" onClick={onApprove} disabled={Boolean(state?.approving || state?.saving || state?.dirty) || !selectionValid} className="inline-flex min-h-10 items-center rounded-md border border-success px-3 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="storyboard-approve">{state?.approving ? "Approving…" : "Approve draft"}</button> : null}{selectedBoard?.status === "approved" ? <span className="text-xs font-semibold text-success">Approved · edit creates a replacement version.</span> : null}{selectedBoard?.status === "superseded" ? <span className="text-xs text-ink-faint">Historical version · read-only. Start a new board to reuse its ideas.</span> : null}<span className="text-[11px] text-ink-faint">{state?.saving || state?.approving ? "Waiting for the CAS-safe Storyboard operation…" : ""}</span></div>
       </div> : <p className="mt-5 text-xs text-ink-faint">Preparing a local Storyboard draft…</p>}

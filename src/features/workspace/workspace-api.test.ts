@@ -10,6 +10,7 @@ import type { SceneEntityLink } from "@/domain/scene-link";
 import type { Entity, EntityAlias, EvidenceSource, Fact } from "@/domain/story-bible";
 import type { CreateStoryboardInput, Storyboard } from "@/domain/storyboard";
 import type { CompileShotResult, ReferenceAsset } from "@/domain/generation-compiler";
+import type { GenerationJob, GenerationManifest, GenerationRecord, GenerationResult } from "@/domain/generation";
 import {
   WorkspaceApiError,
   createChapter,
@@ -80,6 +81,11 @@ import {
   createReferenceAsset,
   compileShot,
   getCompiledRequest,
+  getGeneration,
+  parseGenerationMutationResult,
+  parseGenerationRecord,
+  retryGenerationJob,
+  submitGeneration,
 } from "./workspace-api";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -164,6 +170,10 @@ const contextPolicyVersion = "1";
 const referenceAssetId = "89898989-8989-4898-8898-898989898989";
 const shotSpecIdForCompile = "8b8b8b8b-8b8b-48b8-88b8-8b8b8b8b8b8b";
 const compiledRequestId = "8c8c8c8c-8c8c-48c8-88c8-8c8c8c8c8c8c";
+const manifestId = "8d8d8d8d-8d8d-48d8-88d8-8d8d8d8d8d8d";
+const generationJobId = "8e8e8e8e-8e8e-48e8-88e8-8e8e8e8e8e8e";
+const providerJobId = "fake-job-8f8f8f8f";
+const generationResultId = "90909090-9090-4090-8090-909090909090";
 
 const contextContent = {
   scene: { id: sceneId, revisionId: sceneRevisionId, title: "Opening", text: "Lin Mo enters.", contentHash: hash },
@@ -247,6 +257,61 @@ const compileResult: CompileShotResult = {
     requestHash: hash,
   },
   idempotent: false,
+};
+
+const generationManifest: GenerationManifest = {
+  id: manifestId,
+  projectId,
+  sceneId,
+  storyboardId: "91919191-9191-4191-8191-919191919191",
+  shotSpecId: shotSpecIdForCompile,
+  contextSnapshotId,
+  compiledRequestId,
+  provider: "fake-video",
+  model: "fake-video-model-v1",
+  capabilityProfileId: "fake-video-v1",
+  capabilityProfileVersion: "1",
+  compilerVersion: "fake-video-compiler-v1",
+  preparedRequest: compileResult.preview,
+  parameters: { durationSeconds: 6, aspectRatio: "16:9", referenceAssetIds: [referenceAssetId], fakeBehavior: "success" },
+  compiledHash: hash,
+  manifestHash: hash,
+  createdBy: "local-user",
+  createdAt,
+};
+
+const generationJob: GenerationJob = {
+  id: generationJobId,
+  projectId,
+  manifestId,
+  status: "succeeded",
+  version: 3,
+  attemptCount: 1,
+  providerJobId,
+  error: null,
+  createdAt,
+  updatedAt,
+};
+
+const generationResult: GenerationResult = {
+  id: generationResultId,
+  projectId,
+  manifestId,
+  jobId: generationJobId,
+  providerJobId,
+  provider: "fake-video",
+  model: "fake-video-model-v1",
+  mediaType: "video",
+  uri: "fake://video/results/90909090-9090-4090-8090-909090909090",
+  metadata: { durationSeconds: 6, aspectRatio: "16:9", referenceAssetIds: [referenceAssetId] },
+  resultHash: hash,
+  createdAt,
+};
+
+const generationRecord: GenerationRecord = {
+  manifest: generationManifest,
+  job: generationJob,
+  result: generationResult,
 };
 
 const scriptDocument: ScriptDocument = {
@@ -1319,5 +1384,51 @@ describe("chapter workspace API", () => {
       requestId: "compile-invalid",
     })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("submits, reads, and retries a strict Phase 5C generation record", async () => {
+    const submitInput = {
+      compiledRequestId,
+      requestId: "generation-submit-1",
+      actorId: "local-user",
+      fakeBehavior: "success" as const,
+    };
+    const retryInput = {
+      expectedVersion: 2,
+      requestId: "generation-retry-1",
+      actorId: "local-user",
+    };
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { ...generationRecord, idempotent: false } }, 201),
+      jsonResponse({ data: generationRecord }),
+      jsonResponse({ data: { ...generationRecord, idempotent: false } }),
+    );
+
+    await expect(submitGeneration(projectId, submitInput)).resolves.toEqual({ ...generationRecord, idempotent: false });
+    await expect(getGeneration(projectId, manifestId)).resolves.toEqual(generationRecord);
+    await expect(retryGenerationJob(projectId, generationJobId, retryInput)).resolves.toEqual({ ...generationRecord, idempotent: false });
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/generations`, "POST", submitInput);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/projects/${projectId}/generations/${manifestId}`, expect.anything());
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/generation-jobs/${generationJobId}/retry`, "POST", retryInput);
+  });
+
+  it("strictly rejects Phase 5C aliases and validates inputs before network calls", async () => {
+    expect(parseGenerationRecord(generationRecord)).toEqual(generationRecord);
+    expect(() => parseGenerationRecord({ ...generationRecord, generation: generationRecord })).toThrowError(/invalid generation response/i);
+    expect(() => parseGenerationMutationResult({ ...generationRecord, idempotent: false, generation: generationRecord })).toThrowError(/invalid generation mutation response/i);
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(submitGeneration(projectId, { compiledRequestId: "not-a-uuid", requestId: "invalid" })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(retryGenerationJob(projectId, generationJobId, { expectedVersion: 0, requestId: "invalid" })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown fields in the Phase 5C response envelope", async () => {
+    mockFetch(jsonResponse({ data: generationRecord, generation: generationRecord }));
+    await expect(getGeneration(projectId, manifestId)).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      retryable: true,
+    });
   });
 });

@@ -129,6 +129,16 @@ import {
   type FakePreparedRequest,
   type ReferenceAsset,
 } from "@/domain/generation-compiler";
+import {
+  generationCommandResultSchema,
+  generationRecordSchema,
+  retryGenerationJobInputSchema,
+  submitGenerationInputSchema,
+  type GenerationCommandResult,
+  type GenerationRecord,
+  type RetryGenerationJobInput,
+  type SubmitGenerationInput,
+} from "@/domain/generation";
 
 export type { ContinuityGroup, ContinuityGroupKind, CreateContinuityGroupInput, ProposeStatePatchInput, StatePatchPayload } from "@/domain/scene-state";
 export type { BuildContextInput, ContextContent, ContextEntity, ContextPolicyId, ContextPurpose, ContextSnapshot } from "@/domain/context-builder";
@@ -250,6 +260,8 @@ export type CompiledRequestPreview = {
   compiledRequest: CompiledGenerationRequest;
   preview: FakePreparedRequest;
 };
+
+export type GenerationMutationResult = GenerationCommandResult;
 
 export type ListStoryboardsOptions = {
   contextSnapshotId?: string;
@@ -872,7 +884,7 @@ async function requestData<T>(url: string, init?: RequestInit): Promise<T> {
     throw new WorkspaceApiError(response.status, errorPayload);
   }
 
-  if (!isRecord(payload) || !("data" in payload)) {
+  if (!isRecord(payload) || !("data" in payload) || Object.keys(payload).length !== 1) {
     throw new WorkspaceApiError(response.status, {
       code: "INTERNAL_ERROR",
       message: "The workspace returned an invalid response. Try again in a moment.",
@@ -1282,6 +1294,18 @@ export function parseCompiledRequestPreview(value: unknown): CompiledRequestPrev
   return parsed.data;
 }
 
+export function parseGenerationRecord(value: unknown): GenerationRecord {
+  const parsed = generationRecordSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("generation response");
+  return parsed.data;
+}
+
+export function parseGenerationMutationResult(value: unknown): GenerationMutationResult {
+  const parsed = generationCommandResultSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("generation mutation response");
+  return parsed.data;
+}
+
 /** Build a provider-neutral, immutable Context Snapshot for one saved Scene revision. */
 export async function buildContextSnapshot(projectId: string, input: ContextBuildInput): Promise<ContextBuildResult> {
   const parsedInput = contextBuildInputSchema.safeParse(input);
@@ -1410,6 +1434,45 @@ export async function compileShot(projectId: string, shotSpecId: string, input: 
 export async function getCompiledRequest(projectId: string, compiledRequestId: string): Promise<CompiledRequestPreview> {
   const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/compiled-requests/${encodeURIComponent(compiledRequestId)}`);
   return parseCompiledRequestPreview(result);
+}
+
+export async function submitGeneration(projectId: string, input: SubmitGenerationInput): Promise<GenerationMutationResult> {
+  const parsedInput = submitGenerationInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The generation request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/generations`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseGenerationMutationResult(result);
+}
+
+export async function getGeneration(projectId: string, manifestId: string): Promise<GenerationRecord> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/generations/${encodeURIComponent(manifestId)}`);
+  return parseGenerationRecord(result);
+}
+
+export async function retryGenerationJob(projectId: string, jobId: string, input: RetryGenerationJobInput): Promise<GenerationMutationResult> {
+  const parsedInput = retryGenerationJobInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The generation retry request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/generation-jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseGenerationMutationResult(result);
 }
 
 export async function getResolvedState(projectId: string, sceneId: string, options: { sceneRevisionId: string; entityId?: string }): Promise<ResolvedState> {

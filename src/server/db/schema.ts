@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 function runMigration(database: DatabaseSync, version: number, migration: () => void) {
   database.exec("BEGIN IMMEDIATE");
@@ -2659,6 +2659,351 @@ export function bootstrapDatabase(database: DatabaseSync) {
       CREATE TRIGGER IF NOT EXISTS compiled_generation_requests_delete_guard
       BEFORE DELETE ON compiled_generation_requests
       BEGIN SELECT RAISE(ABORT, 'compiled generation request is immutable'); END;
+    `));
+  }
+
+  if (currentVersion < 17) {
+    runMigration(database, 17, () => database.exec(`
+      CREATE TABLE IF NOT EXISTS generation_manifests (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        storyboard_id TEXT NOT NULL,
+        shot_spec_id TEXT NOT NULL,
+        context_snapshot_id TEXT NOT NULL,
+        compiled_request_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK (provider = 'fake-video'),
+        model TEXT NOT NULL CHECK (model = 'fake-video-model-v1'),
+        capability_profile_id TEXT NOT NULL CHECK (capability_profile_id = 'fake-video-v1'),
+        capability_profile_version TEXT NOT NULL CHECK (capability_profile_version = '1'),
+        compiler_version TEXT NOT NULL CHECK (compiler_version = 'fake-video-compiler-v1'),
+        manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json) AND json_type(manifest_json) = 'object'),
+        prepared_json TEXT NOT NULL CHECK (json_valid(prepared_json) AND json_type(prepared_json) = 'object'),
+        parameters_json TEXT NOT NULL CHECK (json_valid(parameters_json) AND json_type(parameters_json) = 'object'),
+        compiled_hash TEXT NOT NULL CHECK (length(compiled_hash) = 64 AND compiled_hash NOT GLOB '*[^0-9a-f]*'),
+        manifest_hash TEXT NOT NULL CHECK (length(manifest_hash) = 64 AND manifest_hash NOT GLOB '*[^0-9a-f]*'),
+        created_by TEXT NOT NULL CHECK (length(trim(created_by)) > 0),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE RESTRICT,
+        FOREIGN KEY (storyboard_id) REFERENCES storyboards(id) ON DELETE RESTRICT,
+        FOREIGN KEY (shot_spec_id) REFERENCES shot_specs(id) ON DELETE RESTRICT,
+        FOREIGN KEY (context_snapshot_id) REFERENCES context_snapshots(id) ON DELETE RESTRICT,
+        FOREIGN KEY (compiled_request_id) REFERENCES compiled_generation_requests(id) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_generation_manifests_project_created
+        ON generation_manifests(project_id, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_generation_manifests_project_compiled
+        ON generation_manifests(project_id, compiled_request_id, created_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS generation_jobs (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        manifest_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+        version INTEGER NOT NULL CHECK (version > 0),
+        attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+        provider_job_id TEXT,
+        error_json TEXT CHECK (error_json IS NULL OR (json_valid(error_json) AND json_type(error_json) = 'object')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (manifest_id) REFERENCES generation_manifests(id) ON DELETE RESTRICT,
+        UNIQUE (project_id, manifest_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_generation_jobs_project_status
+        ON generation_jobs(project_id, status, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_generation_jobs_project_manifest
+        ON generation_jobs(project_id, manifest_id);
+
+      CREATE TABLE IF NOT EXISTS generation_results (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        manifest_id TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        provider_job_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK (provider = 'fake-video'),
+        model TEXT NOT NULL CHECK (model = 'fake-video-model-v1'),
+        media_type TEXT NOT NULL CHECK (media_type = 'video'),
+        uri TEXT NOT NULL CHECK (uri LIKE 'fake://video/results/%'),
+        metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
+        result_hash TEXT NOT NULL CHECK (length(result_hash) = 64 AND result_hash NOT GLOB '*[^0-9a-f]*'),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (manifest_id) REFERENCES generation_manifests(id) ON DELETE RESTRICT,
+        FOREIGN KEY (job_id) REFERENCES generation_jobs(id) ON DELETE RESTRICT,
+        UNIQUE (job_id),
+        UNIQUE (manifest_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_generation_results_project_created
+        ON generation_results(project_id, created_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS fake_provider_submissions (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        manifest_id TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL CHECK (length(trim(idempotency_key)) > 0),
+        provider_job_id TEXT NOT NULL CHECK (length(trim(provider_job_id)) > 0),
+        behavior TEXT NOT NULL CHECK (behavior IN ('success', 'timeout_after_accept_once', 'invalid_input')),
+        status TEXT NOT NULL CHECK (status = 'accepted'),
+        prepared_json TEXT NOT NULL CHECK (json_valid(prepared_json) AND json_type(prepared_json) = 'object'),
+        raw_result_json TEXT CHECK (raw_result_json IS NULL OR (json_valid(raw_result_json) AND json_type(raw_result_json) = 'object')),
+        submit_count INTEGER NOT NULL DEFAULT 1 CHECK (submit_count = 1),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (manifest_id) REFERENCES generation_manifests(id) ON DELETE RESTRICT,
+        FOREIGN KEY (job_id) REFERENCES generation_jobs(id) ON DELETE RESTRICT,
+        UNIQUE (project_id, job_id),
+        UNIQUE (project_id, idempotency_key),
+        UNIQUE (project_id, provider_job_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_fake_provider_submissions_project_manifest
+        ON fake_provider_submissions(project_id, manifest_id, created_at DESC, id DESC);
+
+      CREATE TRIGGER IF NOT EXISTS generation_manifests_project_guard
+      BEFORE INSERT ON generation_manifests
+      WHEN json_extract(NEW.manifest_json, '$.id') IS NOT NEW.id
+        OR json_extract(NEW.manifest_json, '$.projectId') IS NOT NEW.project_id
+        OR json_extract(NEW.manifest_json, '$.sceneId') IS NOT NEW.scene_id
+        OR json_extract(NEW.manifest_json, '$.storyboardId') IS NOT NEW.storyboard_id
+        OR json_extract(NEW.manifest_json, '$.shotSpecId') IS NOT NEW.shot_spec_id
+        OR json_extract(NEW.manifest_json, '$.contextSnapshotId') IS NOT NEW.context_snapshot_id
+        OR json_extract(NEW.manifest_json, '$.compiledRequestId') IS NOT NEW.compiled_request_id
+        OR json_extract(NEW.manifest_json, '$.provider') IS NOT NEW.provider
+        OR json_extract(NEW.manifest_json, '$.model') IS NOT NEW.model
+        OR json_extract(NEW.manifest_json, '$.capabilityProfileId') IS NOT NEW.capability_profile_id
+        OR json_extract(NEW.manifest_json, '$.capabilityProfileVersion') IS NOT NEW.capability_profile_version
+        OR json_extract(NEW.manifest_json, '$.compilerVersion') IS NOT NEW.compiler_version
+        OR json_extract(NEW.manifest_json, '$.compiledHash') IS NOT NEW.compiled_hash
+        OR json_extract(NEW.manifest_json, '$.manifestHash') IS NOT NEW.manifest_hash
+        OR json_extract(NEW.manifest_json, '$.createdBy') IS NOT NEW.created_by
+        OR json_extract(NEW.manifest_json, '$.createdAt') IS NOT NEW.created_at
+        OR json_type(NEW.manifest_json, '$.preparedRequest') IS NOT 'object'
+        OR json_type(NEW.manifest_json, '$.preparedRequest.body') IS NOT 'object'
+        OR json_type(NEW.manifest_json, '$.parameters') IS NOT 'object'
+        OR json_type(NEW.manifest_json, '$.parameters.referenceAssetIds') IS NOT 'array'
+        OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json)) <> 18
+        OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json, '$.preparedRequest')) <> 5
+        OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json, '$.preparedRequest.body')) <> 5
+        OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json, '$.parameters')) <> 4
+        OR (SELECT COUNT(*) FROM json_each(NEW.prepared_json)) <> 5
+        OR (SELECT COUNT(*) FROM json_each(NEW.prepared_json, '$.body')) <> 5
+        OR (SELECT COUNT(*) FROM json_each(NEW.parameters_json)) <> 4
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.provider') IS NOT json_extract(NEW.prepared_json, '$.provider')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.model') IS NOT json_extract(NEW.prepared_json, '$.model')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.endpoint') IS NOT json_extract(NEW.prepared_json, '$.endpoint')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.body.prompt') IS NOT json_extract(NEW.prepared_json, '$.body.prompt')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.body.negativePrompt') IS NOT json_extract(NEW.prepared_json, '$.body.negativePrompt')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.body.referenceAssetIds') IS NOT json_extract(NEW.prepared_json, '$.body.referenceAssetIds')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.body.durationSeconds') IS NOT json_extract(NEW.prepared_json, '$.body.durationSeconds')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.body.aspectRatio') IS NOT json_extract(NEW.prepared_json, '$.body.aspectRatio')
+        OR json_extract(NEW.manifest_json, '$.preparedRequest.requestHash') IS NOT json_extract(NEW.prepared_json, '$.requestHash')
+        OR json_extract(NEW.manifest_json, '$.parameters.durationSeconds') IS NOT json_extract(NEW.parameters_json, '$.durationSeconds')
+        OR json_extract(NEW.manifest_json, '$.parameters.aspectRatio') IS NOT json_extract(NEW.parameters_json, '$.aspectRatio')
+        OR json_extract(NEW.manifest_json, '$.parameters.fakeBehavior') IS NOT json_extract(NEW.parameters_json, '$.fakeBehavior')
+        OR json_extract(NEW.manifest_json, '$.parameters.referenceAssetIds') IS NOT json_extract(NEW.parameters_json, '$.referenceAssetIds')
+        OR json_extract(NEW.parameters_json, '$.durationSeconds') IS NOT json_extract(NEW.prepared_json, '$.body.durationSeconds')
+        OR json_extract(NEW.parameters_json, '$.aspectRatio') IS NOT json_extract(NEW.prepared_json, '$.body.aspectRatio')
+        OR json_extract(NEW.parameters_json, '$.referenceAssetIds') IS NOT json_extract(NEW.prepared_json, '$.body.referenceAssetIds')
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) IS NULL
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) <> NEW.project_id
+        OR (SELECT status FROM scenes WHERE id = NEW.scene_id) <> 'active'
+        OR (SELECT project_id FROM storyboards WHERE id = NEW.storyboard_id) IS NULL
+        OR (SELECT project_id FROM storyboards WHERE id = NEW.storyboard_id) <> NEW.project_id
+        OR (SELECT scene_id FROM storyboards WHERE id = NEW.storyboard_id) <> NEW.scene_id
+        OR (SELECT status FROM storyboards WHERE id = NEW.storyboard_id) <> 'approved'
+        OR (SELECT sealed FROM storyboards WHERE id = NEW.storyboard_id) <> 1
+        OR (SELECT project_id FROM shot_specs WHERE id = NEW.shot_spec_id) IS NULL
+        OR (SELECT project_id FROM shot_specs WHERE id = NEW.shot_spec_id) <> NEW.project_id
+        OR (SELECT storyboard_id FROM shot_specs WHERE id = NEW.shot_spec_id) <> NEW.storyboard_id
+        OR (SELECT scene_id FROM shot_specs WHERE id = NEW.shot_spec_id) <> NEW.scene_id
+        OR (SELECT project_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) IS NULL
+        OR (SELECT project_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.project_id
+        OR (SELECT scene_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.scene_id
+        OR (SELECT context_snapshot_id FROM storyboards WHERE id = NEW.storyboard_id) <> NEW.context_snapshot_id
+        OR (SELECT project_id FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) IS NULL
+        OR (SELECT project_id FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.project_id
+        OR (SELECT scene_id FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.scene_id
+        OR (SELECT shot_spec_id FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.shot_spec_id
+        OR (SELECT context_snapshot_id FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.context_snapshot_id
+        OR (SELECT provider FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.provider
+        OR (SELECT model FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.model
+        OR (SELECT capability_profile_id FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.capability_profile_id
+        OR (SELECT capability_profile_version FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.capability_profile_version
+        OR (SELECT compiler_version FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.compiler_version
+        OR (SELECT compiled_hash FROM compiled_generation_requests WHERE id = NEW.compiled_request_id) <> NEW.compiled_hash
+        OR json_extract(NEW.prepared_json, '$.provider') IS NOT (SELECT json_extract(prepared_json, '$.provider') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.model') IS NOT (SELECT json_extract(prepared_json, '$.model') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.endpoint') IS NOT (SELECT json_extract(prepared_json, '$.endpoint') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.body.prompt') IS NOT (SELECT json_extract(prepared_json, '$.body.prompt') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.body.negativePrompt') IS NOT (SELECT json_extract(prepared_json, '$.body.negativePrompt') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.body.referenceAssetIds') IS NOT (SELECT json_extract(prepared_json, '$.body.referenceAssetIds') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.body.durationSeconds') IS NOT (SELECT json_extract(prepared_json, '$.body.durationSeconds') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.body.aspectRatio') IS NOT (SELECT json_extract(prepared_json, '$.body.aspectRatio') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+        OR json_extract(NEW.prepared_json, '$.requestHash') IS NOT (SELECT json_extract(prepared_json, '$.requestHash') FROM compiled_generation_requests WHERE id = NEW.compiled_request_id)
+      BEGIN SELECT RAISE(ABORT, 'generation manifest source chain or content mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_manifests_immutable_guard
+      BEFORE UPDATE ON generation_manifests
+      BEGIN SELECT RAISE(ABORT, 'generation manifest is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_manifests_delete_guard
+      BEFORE DELETE ON generation_manifests
+      BEGIN SELECT RAISE(ABORT, 'generation manifest is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_jobs_project_guard
+      BEFORE INSERT ON generation_jobs
+      WHEN (SELECT project_id FROM generation_manifests WHERE id = NEW.manifest_id) IS NULL
+        OR (SELECT project_id FROM generation_manifests WHERE id = NEW.manifest_id) <> NEW.project_id
+        OR NEW.status <> 'queued'
+        OR NEW.version <> 1
+        OR NEW.attempt_count <> 0
+        OR NEW.provider_job_id IS NOT NULL
+        OR NEW.error_json IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'generation job project or initial state mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_jobs_transition_guard
+      BEFORE UPDATE ON generation_jobs
+      WHEN NEW.id IS NOT OLD.id
+        OR NEW.project_id IS NOT OLD.project_id
+        OR NEW.manifest_id IS NOT OLD.manifest_id
+        OR NEW.created_at IS NOT OLD.created_at
+        OR NEW.version <> OLD.version + 1
+        OR NEW.updated_at = OLD.updated_at
+        OR (OLD.status = 'queued' AND NEW.status <> 'running')
+        OR (OLD.status = 'running' AND NEW.status NOT IN ('succeeded', 'failed'))
+        OR (OLD.status = 'failed' AND NEW.status <> 'queued')
+        OR (OLD.status = 'failed' AND json_extract(OLD.error_json, '$.retryable') IS NOT 1)
+        OR OLD.status = 'succeeded'
+        OR (OLD.status = 'queued' AND NEW.attempt_count <> OLD.attempt_count + 1)
+        OR (OLD.status = 'running' AND NEW.attempt_count <> OLD.attempt_count)
+        OR (OLD.status = 'failed' AND NEW.attempt_count <> OLD.attempt_count)
+        OR (NEW.status = 'failed' AND NEW.error_json IS NULL)
+        OR (NEW.status = 'failed' AND (
+          json_type(NEW.error_json, '$.code') IS NOT 'text'
+          OR json_extract(NEW.error_json, '$.code') NOT IN ('invalid_input', 'auth', 'quota', 'rate_limit', 'safety', 'provider_unavailable', 'timeout', 'unknown')
+          OR json_type(NEW.error_json, '$.message') IS NOT 'text'
+          OR length(trim(json_extract(NEW.error_json, '$.message'))) = 0
+          OR json_type(NEW.error_json, '$.retryable') NOT IN ('true', 'false')
+          OR json_extract(NEW.error_json, '$.retryable') NOT IN (0, 1)
+        ))
+        OR (NEW.status IN ('queued', 'running', 'succeeded') AND NEW.error_json IS NOT NULL)
+        OR (NEW.status = 'succeeded' AND (
+          NEW.provider_job_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM generation_results gr
+            WHERE gr.project_id = NEW.project_id
+              AND gr.manifest_id = NEW.manifest_id
+              AND gr.job_id = NEW.id
+              AND gr.provider_job_id = NEW.provider_job_id
+          )
+        ))
+      BEGIN SELECT RAISE(ABORT, 'invalid generation job transition'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_jobs_delete_guard
+      BEFORE DELETE ON generation_jobs
+      BEGIN SELECT RAISE(ABORT, 'generation job is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_results_project_guard
+      BEFORE INSERT ON generation_results
+      WHEN (SELECT project_id FROM generation_manifests WHERE id = NEW.manifest_id) IS NULL
+        OR (SELECT project_id FROM generation_manifests WHERE id = NEW.manifest_id) <> NEW.project_id
+        OR (SELECT project_id FROM generation_jobs WHERE id = NEW.job_id) IS NULL
+        OR (SELECT project_id FROM generation_jobs WHERE id = NEW.job_id) <> NEW.project_id
+        OR (SELECT manifest_id FROM generation_jobs WHERE id = NEW.job_id) <> NEW.manifest_id
+        OR (SELECT status FROM generation_jobs WHERE id = NEW.job_id) <> 'running'
+        OR (SELECT provider FROM generation_manifests WHERE id = NEW.manifest_id) <> NEW.provider
+        OR (SELECT model FROM generation_manifests WHERE id = NEW.manifest_id) <> NEW.model
+        OR NOT EXISTS (
+          SELECT 1 FROM fake_provider_submissions fps
+          WHERE fps.project_id = NEW.project_id
+            AND fps.manifest_id = NEW.manifest_id
+            AND fps.job_id = NEW.job_id
+            AND fps.provider_job_id = NEW.provider_job_id
+            AND fps.status = 'accepted'
+        )
+        OR NOT EXISTS (
+          SELECT 1 FROM fake_provider_submissions fps
+          WHERE fps.project_id = NEW.project_id
+            AND fps.manifest_id = NEW.manifest_id
+            AND fps.job_id = NEW.job_id
+            AND fps.provider_job_id = NEW.provider_job_id
+            AND json_extract(fps.raw_result_json, '$.providerJobId') IS NEW.provider_job_id
+            AND json_extract(fps.raw_result_json, '$.uri') IS NEW.uri
+            AND json_extract(fps.raw_result_json, '$.durationSeconds') IS json_extract(NEW.metadata_json, '$.durationSeconds')
+            AND json_extract(fps.raw_result_json, '$.aspectRatio') IS json_extract(NEW.metadata_json, '$.aspectRatio')
+            AND json_extract(fps.raw_result_json, '$.referenceAssetIds') IS json_extract(NEW.metadata_json, '$.referenceAssetIds')
+        )
+        OR NEW.provider_job_id IS NULL
+        OR NEW.uri NOT LIKE 'fake://video/results/%'
+        OR json_type(NEW.metadata_json, '$.durationSeconds') IS NOT 'integer'
+        OR json_type(NEW.metadata_json, '$.aspectRatio') IS NOT 'text'
+        OR json_type(NEW.metadata_json, '$.referenceAssetIds') IS NOT 'array'
+        OR (SELECT COUNT(*) FROM json_each(NEW.metadata_json)) <> 3
+        OR json_extract(NEW.metadata_json, '$.durationSeconds') IS NOT json_extract((SELECT parameters_json FROM generation_manifests WHERE id = NEW.manifest_id), '$.durationSeconds')
+        OR json_extract(NEW.metadata_json, '$.aspectRatio') IS NOT json_extract((SELECT parameters_json FROM generation_manifests WHERE id = NEW.manifest_id), '$.aspectRatio')
+        OR json_extract(NEW.metadata_json, '$.referenceAssetIds') IS NOT json_extract((SELECT parameters_json FROM generation_manifests WHERE id = NEW.manifest_id), '$.referenceAssetIds')
+      BEGIN SELECT RAISE(ABORT, 'generation result project or metadata mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_results_immutable_guard
+      BEFORE UPDATE ON generation_results
+      BEGIN SELECT RAISE(ABORT, 'generation result is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS generation_results_delete_guard
+      BEFORE DELETE ON generation_results
+      BEGIN SELECT RAISE(ABORT, 'generation result is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS fake_provider_submissions_project_guard
+      BEFORE INSERT ON fake_provider_submissions
+      WHEN (SELECT project_id FROM generation_manifests WHERE id = NEW.manifest_id) IS NULL
+        OR (SELECT project_id FROM generation_manifests WHERE id = NEW.manifest_id) <> NEW.project_id
+        OR (SELECT project_id FROM generation_jobs WHERE id = NEW.job_id) IS NULL
+        OR (SELECT project_id FROM generation_jobs WHERE id = NEW.job_id) <> NEW.project_id
+        OR (SELECT manifest_id FROM generation_jobs WHERE id = NEW.job_id) <> NEW.manifest_id
+        OR (SELECT status FROM generation_jobs WHERE id = NEW.job_id) <> 'running'
+        OR NEW.status <> 'accepted'
+        OR NEW.submit_count <> 1
+        OR NEW.idempotency_key IS NOT ('generation:' || NEW.manifest_id)
+        OR (SELECT COUNT(*) FROM json_each(NEW.prepared_json)) <> 5
+        OR (SELECT COUNT(*) FROM json_each(NEW.prepared_json, '$.body')) <> 5
+        OR (SELECT COUNT(*) FROM json_each(NEW.raw_result_json)) <> 5
+        OR json_extract(NEW.prepared_json, '$.provider') IS NOT (SELECT json_extract(prepared_json, '$.provider') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.model') IS NOT (SELECT json_extract(prepared_json, '$.model') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.endpoint') IS NOT (SELECT json_extract(prepared_json, '$.endpoint') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.body.prompt') IS NOT (SELECT json_extract(prepared_json, '$.body.prompt') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.body.negativePrompt') IS NOT (SELECT json_extract(prepared_json, '$.body.negativePrompt') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.body.referenceAssetIds') IS NOT (SELECT json_extract(prepared_json, '$.body.referenceAssetIds') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.body.durationSeconds') IS NOT (SELECT json_extract(prepared_json, '$.body.durationSeconds') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.body.aspectRatio') IS NOT (SELECT json_extract(prepared_json, '$.body.aspectRatio') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR json_extract(NEW.prepared_json, '$.requestHash') IS NOT (SELECT json_extract(prepared_json, '$.requestHash') FROM generation_manifests WHERE id = NEW.manifest_id)
+        OR NEW.behavior IS NOT json_extract((SELECT parameters_json FROM generation_manifests WHERE id = NEW.manifest_id), '$.fakeBehavior')
+        OR json_extract(NEW.prepared_json, '$.provider') <> 'fake-video'
+        OR json_extract(NEW.prepared_json, '$.endpoint') <> 'fake://video/generate'
+        OR json_type(NEW.raw_result_json, '$.providerJobId') IS NOT 'text'
+        OR json_type(NEW.raw_result_json, '$.uri') IS NOT 'text'
+        OR json_type(NEW.raw_result_json, '$.durationSeconds') IS NOT 'integer'
+        OR json_type(NEW.raw_result_json, '$.aspectRatio') IS NOT 'text'
+        OR json_type(NEW.raw_result_json, '$.referenceAssetIds') IS NOT 'array'
+        OR json_extract(NEW.raw_result_json, '$.providerJobId') IS NOT NEW.provider_job_id
+        OR json_extract(NEW.raw_result_json, '$.uri') NOT LIKE 'fake://video/results/%'
+        OR json_extract(NEW.raw_result_json, '$.durationSeconds') IS NOT json_extract(NEW.prepared_json, '$.body.durationSeconds')
+        OR json_extract(NEW.raw_result_json, '$.aspectRatio') IS NOT json_extract(NEW.prepared_json, '$.body.aspectRatio')
+        OR json_extract(NEW.raw_result_json, '$.referenceAssetIds') IS NOT json_extract(NEW.prepared_json, '$.body.referenceAssetIds')
+      BEGIN SELECT RAISE(ABORT, 'fake provider submission project or content mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS fake_provider_submissions_immutable_guard
+      BEFORE UPDATE ON fake_provider_submissions
+      BEGIN SELECT RAISE(ABORT, 'fake provider submission is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS fake_provider_submissions_delete_guard
+      BEFORE DELETE ON fake_provider_submissions
+      BEGIN SELECT RAISE(ABORT, 'fake provider submission is immutable'); END;
     `));
   }
 }

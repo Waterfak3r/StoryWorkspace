@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import { AdaptationEditConflictError, AiGenerationAlreadyAcceptedError, AiGenerationAlreadyConsumedError, ChapterEditConflictError, NarrativeNotFoundError, NarrativeValidationError } from "@/server/db/narrative-errors";
 import { AiProviderError } from "@/server/ai/provider";
 import { SceneAnalysisStaleError, SceneEntityLinkConflictError, StoryBibleConflictError, StoryBibleIdempotencyConflictError, StoryBibleNotFoundError, StoryBiblePatchConflictError, StoryBiblePatchResolvedError, StoryBibleValidationError } from "@/server/db/story-bible-errors";
+import { GenerationConflictError } from "@/server/db/generation-errors";
 
 type ValidationIssue = {
   path: Array<string | number>;
@@ -107,6 +108,10 @@ export function analysisStaleResponse(message = "The analysis belongs to an olde
   return NextResponse.json({ error: { code: "ANALYSIS_STALE", message, retryable: false } }, { status: 409 });
 }
 
+export function generationConflictResponse(current: unknown, message = "The generation job changed on the server. Review the current job before retrying.") {
+  return NextResponse.json({ error: { code: "EDIT_CONFLICT", message, currentGeneration: current, retryable: false } }, { status: 409 });
+}
+
 export function storyBiblePatchConflictResponse(patch: unknown, message: string) {
   return NextResponse.json({ error: { code: "PATCH_CONFLICT", message, patch, currentPatch: patch, retryable: false } }, { status: 409 });
 }
@@ -196,6 +201,9 @@ export function routeErrorResponse(method: string, path: string, error: unknown)
   }
   if (error instanceof SceneAnalysisStaleError) {
     return analysisStaleResponse(error.message);
+  }
+  if (error instanceof GenerationConflictError) {
+    return generationConflictResponse(error.current, error.message);
   }
   if (error instanceof StoryBiblePatchConflictError) {
     return storyBiblePatchConflictResponse(error.patch, error.reason);

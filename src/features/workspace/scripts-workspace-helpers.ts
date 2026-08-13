@@ -139,6 +139,27 @@ export function isStaleCompilationResponse(current: CompilationSelection | null 
   return !isCurrentCompilationResponse(current, response);
 }
 
+/** Phase 5C actions are bound to the immutable compiled request as well as the Shot selection. */
+export type GenerationSelection = CompilationSelection & {
+  compiledRequestId: string;
+};
+
+export function generationSelectionKey(selection: GenerationSelection) {
+  return `${compilationSelectionKey(selection)}:${selection.compiledRequestId}`;
+}
+
+export function sameGenerationSelection(left: GenerationSelection | null | undefined, right: GenerationSelection | null | undefined) {
+  return Boolean(left && right && generationSelectionKey(left) === generationSelectionKey(right));
+}
+
+export function isCurrentGenerationResponse(current: GenerationSelection | null | undefined, response: GenerationSelection) {
+  return sameGenerationSelection(current, response);
+}
+
+export function isStaleGenerationResponse(current: GenerationSelection | null | undefined, response: GenerationSelection) {
+  return !isCurrentGenerationResponse(current, response);
+}
+
 /**
  * A compiled preview is only valid for the exact immutable Shot selection and
  * the input values that produced it. Asset refreshes can auto-select metadata,

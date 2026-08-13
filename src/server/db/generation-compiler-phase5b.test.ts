@@ -167,6 +167,12 @@ describe("Phase 5B reference assets and compiler", () => {
     expect(() => database.prepare("UPDATE compiled_generation_requests SET compiled_hash = :hash WHERE project_id = :projectId").run({ hash: "f".repeat(64), projectId: values.projectId })).toThrow();
     const got = getCompiledGenerationRequest(textOnly.compiledRequest.id, values.projectId, database);
     expect(got?.preview.requestHash).toBe(textOnly.preview.requestHash);
+
+    const forgedId = randomUUID();
+    const forgedCompiled = { ...textOnly.compiledRequest, id: forgedId, inputHash: "1".repeat(64), compiledHash: "2".repeat(64), createdAt: new Date().toISOString() };
+    const forgedPreview = { ...textOnly.preview, requestHash: "3".repeat(64) };
+    database.prepare("INSERT INTO compiled_generation_requests (id, project_id, scene_id, shot_spec_id, context_snapshot_id, provider, model, capability_profile_id, capability_profile_version, compiler_version, compiled_json, prepared_json, input_hash, compiled_hash, created_at) VALUES (:id, :projectId, :sceneId, :shotSpecId, :contextSnapshotId, :provider, :model, :capabilityProfileId, :capabilityProfileVersion, :compilerVersion, :compiledJson, :preparedJson, :inputHash, :compiledHash, :createdAt)").run({ id: forgedId, projectId: values.projectId, sceneId: values.scene.sceneId, shotSpecId: values.shotId, contextSnapshotId: values.snapshot.id, provider: forgedCompiled.provider, model: forgedCompiled.model, capabilityProfileId: forgedCompiled.capabilityProfileId, capabilityProfileVersion: forgedCompiled.capabilityProfileVersion, compilerVersion: forgedCompiled.compilerVersion, compiledJson: JSON.stringify(forgedCompiled), preparedJson: JSON.stringify(forgedPreview), inputHash: forgedCompiled.inputHash, compiledHash: forgedCompiled.compiledHash, createdAt: forgedCompiled.createdAt });
+    expect(() => getCompiledGenerationRequest(forgedId, values.projectId, database)).toThrow(/hash mismatch/i);
   });
 
   it("requires an approved sealed board and an active scene", () => {

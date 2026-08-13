@@ -7,6 +7,8 @@ import type { AnalysisRun, AnalysisRunStatus, EntityMention } from "@/domain/ana
 import type { AcceptEditedPatchInput, AcceptPatchInput, RejectPatchInput } from "@/domain/canon-patch";
 import type { SceneEntityLink } from "@/domain/scene-link";
 import type { Storyboard } from "@/domain/storyboard";
+import type { CompileShotResult } from "@/domain/generation-compiler";
+import type { FakeGenerationBehavior, GenerationRecord } from "@/domain/generation";
 import { predicateSchemaRegistry } from "@/domain/story-bible";
 import type { CreateEntityInput, Entity, EntityState, EvidenceSource, Fact, FactScope, FactValueType } from "@/domain/story-bible";
 import {
@@ -36,6 +38,9 @@ import {
   createStoryboard,
   getStoryboard,
   listStoryboards,
+  getGeneration,
+  retryGenerationJob,
+  submitGeneration,
 } from "./workspace-api";
 import type {
   ContinuityGroup,
@@ -78,8 +83,13 @@ import {
   isCurrentStoryboardBoardResponse,
   isCurrentStoryboardResponse,
   storyboardSelectionKey,
+  compilationSelectionKey,
   type StoryboardBoardSelection,
   type StoryboardSelection,
+  generationSelectionKey,
+  isCurrentGenerationResponse,
+  type CompilationSelection,
+  type GenerationSelection,
 } from "./scripts-workspace-helpers";
 import { StoryboardEditor, type StoryboardDraft, type StoryboardEditorState } from "./StoryboardEditor";
 
@@ -140,6 +150,15 @@ type ContextState = {
 
 type StoryboardState = StoryboardEditorState & {
   selection: StoryboardSelection;
+};
+
+type GenerationState = {
+  selection: GenerationSelection;
+  compiledResult: CompileShotResult;
+  record: GenerationRecord | null;
+  submitting: boolean;
+  retrying: boolean;
+  error: string | null;
 };
 
 type FactCandidateDraft = {
@@ -372,6 +391,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const [contextPurpose, setContextPurpose] = React.useState<ContextPurpose>("video");
   const [contextByKey, setContextByKey] = React.useState<Record<string, ContextState>>({});
   const [storyboardByKey, setStoryboardByKey] = React.useState<Record<string, StoryboardState>>({});
+  const [generationByKey, setGenerationByKey] = React.useState<Record<string, GenerationState>>({});
   const [storyboardReloadToken, setStoryboardReloadToken] = React.useState(0);
   const [resolvedStateRefreshToken, setResolvedStateRefreshToken] = React.useState(0);
   const [entities, setEntities] = React.useState<Entity[]>([]);
@@ -390,10 +410,13 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const contextSelectionRef = React.useRef<ContextSelection | null>(null);
   const storyboardSelectionRef = React.useRef<StoryboardSelection | null>(null);
   const storyboardBoardSelectionRef = React.useRef<StoryboardBoardSelection | null>(null);
+  const generationSelectionRef = React.useRef<Record<string, GenerationSelection>>({});
+  const generationBusyRef = React.useRef<Set<string>>(new Set());
   const analysisByKeyRef = React.useRef<Record<string, AnalysisState>>({});
   const patchReviewByKeyRef = React.useRef<Record<string, PatchReviewState>>({});
   const contextByKeyRef = React.useRef<Record<string, ContextState>>({});
   const storyboardByKeyRef = React.useRef<Record<string, StoryboardState>>({});
+  const generationByKeyRef = React.useRef<Record<string, GenerationState>>({});
   const resolvedStateByKeyRef = React.useRef<typeof resolvedStateByKey>({});
   const documentId = document?.id ?? null;
   const documentVersion = document?.version ?? null;
@@ -431,6 +454,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const selectedStoryboardState = selectedStoryboardKey ? storyboardByKey[selectedStoryboardKey] ?? null : null;
 
   React.useEffect(() => {
+    generationByKeyRef.current = generationByKey;
+  }, [generationByKey]);
+
+  React.useEffect(() => {
     setFreshDocument(document);
   }, [document]);
 
@@ -458,6 +485,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     storyboardBoardSelectionRef.current = null;
     storyboardByKeyRef.current = {};
     setStoryboardByKey({});
+    generationSelectionRef.current = {};
+    generationBusyRef.current.clear();
+    generationByKeyRef.current = {};
+    setGenerationByKey({});
     analysisSelectionRef.current = null;
     patchSelectionRef.current = null;
     setAnalysisByKey({});
@@ -1431,6 +1462,176 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     setStoryboardReloadToken((value) => value + 1);
   }, [selectedStoryboardSelection]);
 
+  const clearGenerationForCompilation = React.useCallback((selection: CompilationSelection) => {
+    const baseKey = compilationSelectionKey(selection);
+    const refNext = { ...generationByKeyRef.current };
+    for (const key of Object.keys(refNext)) {
+      if (key.startsWith(`${baseKey}:`)) delete refNext[key];
+    }
+    generationByKeyRef.current = refNext;
+    setGenerationByKey((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(next)) {
+        if (key.startsWith(`${baseKey}:`)) delete next[key];
+      }
+      return next;
+    });
+    for (const key of Object.keys(generationSelectionRef.current)) {
+      if (key.startsWith(`${baseKey}:`)) delete generationSelectionRef.current[key];
+    }
+    for (const busyKey of generationBusyRef.current) {
+      if (["submit", "retry", "refresh"].some((operation) => busyKey.startsWith(`${operation}:${baseKey}:`))) generationBusyRef.current.delete(busyKey);
+    }
+  }, []);
+
+  const handleCompileResult = React.useCallback((selection: CompilationSelection, result: CompileShotResult | null) => {
+    if (!result) {
+      clearGenerationForCompilation(selection);
+      return;
+    }
+    const generationSelection: GenerationSelection = { ...selection, compiledRequestId: result.compiledRequest.id };
+    const key = generationSelectionKey(generationSelection);
+    generationSelectionRef.current[key] = generationSelection;
+    const existing = generationByKeyRef.current[key];
+    generationByKeyRef.current = {
+      ...generationByKeyRef.current,
+      [key]: {
+        selection: generationSelection,
+        compiledResult: result,
+        record: existing?.compiledResult.compiledRequest.id === result.compiledRequest.id ? existing.record : null,
+        submitting: false,
+        retrying: false,
+        error: null,
+      },
+    };
+    setGenerationByKey((current) => {
+      const currentExisting = current[key];
+      return {
+        ...current,
+        [key]: {
+          selection: generationSelection,
+          compiledResult: result,
+          record: currentExisting?.compiledResult.compiledRequest.id === result.compiledRequest.id ? currentExisting.record : null,
+          submitting: false,
+          retrying: false,
+          error: null,
+        },
+      };
+    });
+  }, [clearGenerationForCompilation]);
+
+  const setGenerationBusy = React.useCallback((selection: GenerationSelection, field: "submitting" | "retrying", value: boolean) => {
+    const key = generationSelectionKey(selection);
+    setGenerationByKey((current) => {
+      const record = current[key];
+      if (!record || !isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return current;
+      return { ...current, [key]: { ...record, [field]: value } };
+    });
+  }, []);
+
+  const handleSubmitGeneration = React.useCallback(async (selection: GenerationSelection, behavior: FakeGenerationBehavior) => {
+    const key = generationSelectionKey(selection);
+    const current = generationByKeyRef.current[key];
+    const currentJob = current?.record?.job ?? null;
+    const canStartNewGeneration = currentJob === null || (currentJob.status === "failed" && currentJob.error?.retryable === false);
+    if (!current || current.submitting || current.retrying || !canStartNewGeneration) return;
+    const knownSelection = generationSelectionRef.current[key];
+    if (knownSelection && !isCurrentGenerationResponse(knownSelection, selection)) return;
+    generationSelectionRef.current[key] = selection;
+    const busyKey = `submit:${key}`;
+    if (generationBusyRef.current.has(busyKey)) return;
+    generationBusyRef.current.add(busyKey);
+    setGenerationBusy(selection, "submitting", true);
+    try {
+      const result = await submitGeneration(projectId, {
+        compiledRequestId: selection.compiledRequestId,
+        requestId: requestId("generation-submit"),
+        actorId: "local-user",
+        fakeBehavior: behavior,
+      });
+      if (!isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return;
+      setGenerationByKey((records) => {
+        const record = records[key];
+        if (!record) return records;
+        return { ...records, [key]: { ...record, record: result, error: null, submitting: false, retrying: false } };
+      });
+      setStatusMessage(result.idempotent ? "Fake generation submission replayed." : "Fake generation submitted.");
+    } catch (error) {
+      if (!isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return;
+      setGenerationByKey((records) => records[key] ? { ...records, [key]: { ...records[key], submitting: false, error: humanError(error, "Fake generation could not be submitted. Retry without changing the compiled Shot.") } } : records);
+    } finally {
+      generationBusyRef.current.delete(busyKey);
+      setGenerationBusy(selection, "submitting", false);
+    }
+  }, [projectId, setGenerationBusy]);
+
+  const handleRetryGeneration = React.useCallback(async (selection: GenerationSelection) => {
+    const key = generationSelectionKey(selection);
+    const current = generationByKeyRef.current[key];
+    if (!current || current.submitting || current.retrying || current.record?.job.status !== "failed") return;
+    const knownSelection = generationSelectionRef.current[key];
+    if (knownSelection && !isCurrentGenerationResponse(knownSelection, selection)) return;
+    generationSelectionRef.current[key] = selection;
+    const busyKey = `retry:${key}`;
+    if (generationBusyRef.current.has(busyKey)) return;
+    generationBusyRef.current.add(busyKey);
+    setGenerationBusy(selection, "retrying", true);
+    try {
+      const result = await retryGenerationJob(projectId, current.record.job.id, {
+        expectedVersion: current.record.job.version,
+        requestId: requestId("generation-retry"),
+        actorId: "local-user",
+      });
+      if (!isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return;
+      setGenerationByKey((records) => records[key] ? { ...records, [key]: { ...records[key], record: result, error: null, retrying: false, submitting: false } } : records);
+      setStatusMessage(result.idempotent ? "Fake generation retry replayed." : "Fake generation retry completed.");
+    } catch (error) {
+      if (!isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return;
+      setGenerationByKey((records) => records[key] ? { ...records, [key]: { ...records[key], retrying: false, error: humanError(error, "Fake generation retry failed. The immutable Manifest remains available.") } } : records);
+    } finally {
+      generationBusyRef.current.delete(busyKey);
+      setGenerationBusy(selection, "retrying", false);
+    }
+  }, [projectId, setGenerationBusy]);
+
+  const handleRefreshGeneration = React.useCallback(async (selection: GenerationSelection) => {
+    const key = generationSelectionKey(selection);
+    const current = generationByKeyRef.current[key];
+    if (!current || current.submitting || current.retrying || !current.record) return;
+    const knownSelection = generationSelectionRef.current[key];
+    if (knownSelection && !isCurrentGenerationResponse(knownSelection, selection)) return;
+    generationSelectionRef.current[key] = selection;
+    const busyKey = `refresh:${key}`;
+    if (generationBusyRef.current.has(busyKey)) return;
+    generationBusyRef.current.add(busyKey);
+    try {
+      const result = await getGeneration(projectId, current.record.manifest.id);
+      if (!isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return;
+      setGenerationByKey((records) => records[key] ? { ...records, [key]: { ...records[key], record: result, error: null } } : records);
+    } catch (error) {
+      if (!isCurrentGenerationResponse(generationSelectionRef.current[key], selection)) return;
+      setGenerationByKey((records) => records[key] ? { ...records, [key]: { ...records[key], error: humanError(error, "Generation status could not be refreshed.") } } : records);
+    } finally {
+      generationBusyRef.current.delete(busyKey);
+    }
+  }, [projectId]);
+
+  const renderGenerationLifecyclePanel = React.useCallback((selection: CompilationSelection, result: CompileShotResult) => {
+    const generationSelection: GenerationSelection = { ...selection, compiledRequestId: result.compiledRequest.id };
+    const key = generationSelectionKey(generationSelection);
+    return (
+      <GenerationLifecyclePanel
+        key={key}
+        selection={generationSelection}
+        compiledResult={result}
+        state={generationByKey[key] ?? null}
+        onSubmit={handleSubmitGeneration}
+        onRetry={handleRetryGeneration}
+        onRefresh={handleRefreshGeneration}
+      />
+    );
+  }, [generationByKey, handleRefreshGeneration, handleRetryGeneration, handleSubmitGeneration]);
+
   const reviewLink = React.useCallback(async (link: SceneEntityLink, decision: "confirmed" | "rejected") => {
     if (!selectedScene || !selectedRevisionId || !selectedAnalysis) return;
     const selection = { sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId };
@@ -1673,6 +1874,8 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                   onSaveStoryboard={() => void saveStoryboard()}
                   onApproveStoryboard={() => void approveCurrentStoryboard()}
                   onReloadStoryboards={reloadStoryboards}
+                  onCompileResult={handleCompileResult}
+                  renderGenerationPanel={renderGenerationLifecyclePanel}
                   actions={selectedPatchState && !revisionDirty ? {
                     onAccept: (patch, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept", request),
                     onAcceptEdited: (patch, payload, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept-edited", request, payload),
@@ -1809,6 +2012,8 @@ function CanonPatchReviewPanel({
   onSaveStoryboard,
   onApproveStoryboard,
   onReloadStoryboards,
+  onCompileResult,
+  renderGenerationPanel,
 }: {
   projectId: string;
   review: ScenePatchReview | null;
@@ -1842,6 +2047,8 @@ function CanonPatchReviewPanel({
   onSaveStoryboard: () => void;
   onApproveStoryboard: () => void;
   onReloadStoryboards: () => void;
+  onCompileResult: (selection: CompilationSelection, result: CompileShotResult | null) => void;
+  renderGenerationPanel: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 }) {
   return (
     <section className="mt-8 min-w-0 border-t border-line pt-6" aria-labelledby="canon-patch-review-heading" data-testid="canon-patch-review">
@@ -1910,6 +2117,8 @@ function CanonPatchReviewPanel({
         onSave={onSaveStoryboard}
         onApprove={onApproveStoryboard}
         onReload={onReloadStoryboards}
+        onCompileResult={onCompileResult}
+        renderGenerationPanel={renderGenerationPanel}
       />
     </section>
   );
@@ -2158,6 +2367,70 @@ function ContextEntityCard({ item, index }: { item: ContextEntity; index: number
   );
 }
 
+function GenerationLifecyclePanel({
+  selection,
+  compiledResult,
+  state,
+  onSubmit,
+  onRetry,
+  onRefresh,
+}: {
+  selection: GenerationSelection;
+  compiledResult: CompileShotResult;
+  state: GenerationState | null;
+  onSubmit: (selection: GenerationSelection, behavior: FakeGenerationBehavior) => void;
+  onRetry: (selection: GenerationSelection) => void;
+  onRefresh: (selection: GenerationSelection) => void;
+}) {
+  const [behavior, setBehavior] = React.useState<FakeGenerationBehavior>("success");
+  const record = state?.record ?? null;
+  const job = record?.job ?? null;
+  const manifest = record?.manifest ?? null;
+  const result = record?.result ?? null;
+  const canStartNewGeneration = !record || (job?.status === "failed" && job.error?.retryable === false);
+  const canSubmit = canStartNewGeneration && !state?.submitting && !state?.retrying;
+  const canRetry = job?.status === "failed" && job.error?.retryable === true && !state?.submitting && !state?.retrying;
+  const canRefresh = Boolean(record && !state?.submitting && !state?.retrying);
+  return (
+    <section className="mt-5 min-w-0 rounded-md border border-success/30 bg-success/5 p-3" data-testid="generation-lifecycle" aria-labelledby="generation-lifecycle-heading">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-success">Phase 5C</p><h6 id="generation-lifecycle-heading" className="mt-1 break-words text-xs font-semibold text-ink">Fake generation lifecycle</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">Submission consumes this immutable compiled request. It is a local Fake-only simulation; no real provider, upload, or secret is used.</p></div>
+        <span className="max-w-full break-all rounded border border-line px-2 py-1 font-mono text-[10px] text-ink-faint">compiledRequest {selection.compiledRequestId}</span>
+      </div>
+      <p className="mt-3 break-all font-mono text-[10px] text-ink-faint">Compiled hash {compiledResult.compiledRequest.compiledHash} · prepared request {compiledResult.preview.requestHash}</p>
+
+      {canStartNewGeneration ? (
+        <div className="mt-4 min-w-0 rounded-md border border-line bg-surface p-3">
+          {record ? <p className="mb-3 break-words text-[10px] leading-4 text-ink-muted">The previous non-retryable Manifest remains immutable. Start a new generation after changing the Fake behavior.</p> : null}
+          <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint" htmlFor={`generation-fake-behavior-${selection.shotSpecId}`}>Fake-only test behavior</label>
+          <select id={`generation-fake-behavior-${selection.shotSpecId}`} data-testid="generation-fake-behavior" value={behavior} onChange={(event) => setBehavior(event.target.value as FakeGenerationBehavior)} disabled={!canSubmit} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink">
+            <option value="success">success · deterministic local completion</option>
+            <option value="timeout_after_accept_once">timeout_after_accept_once · accepted once, retry observes result</option>
+            <option value="invalid_input">invalid_input · non-retryable validation failure</option>
+          </select>
+          <p className="mt-2 break-words text-[10px] leading-4 text-ink-faint">Local simulation only. The timeout path preserves provider submission identity and does not submit twice.</p>
+          <button type="button" data-testid="generation-submit" onClick={() => onSubmit(selection, behavior)} disabled={!canSubmit} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-success px-3 text-xs font-semibold text-on-accent hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-45">{state?.submitting ? "Submitting Fake generation…" : record ? "Start new Fake generation" : "Submit Fake generation"}</button>
+        </div>
+      ) : null}
+
+      {state?.error ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger" data-testid="generation-error">{state.error}</p> : null}
+
+      {manifest ? (
+        <section className="mt-4 min-w-0 space-y-3" data-testid="generation-manifest">
+          <div className="min-w-0 rounded-md border border-line bg-surface p-3"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Immutable Manifest identity / chain</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div className="min-w-0"><dt className="text-ink-faint">Manifest ID</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.id}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Manifest hash</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.manifestHash}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Context Snapshot</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.contextSnapshotId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Storyboard</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.storyboardId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Shot</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.shotSpecId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Compiled Request</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.compiledRequestId}</dd></div></dl></div>
+          <div className="min-w-0 rounded-md border border-line bg-surface p-3"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Provider / compiler binding</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="min-w-0"><dt className="text-ink-faint">Provider</dt><dd className="mt-1 break-words text-ink">{manifest.provider}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Model</dt><dd className="mt-1 break-words text-ink">{manifest.model}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Profile</dt><dd className="mt-1 break-words text-ink">{manifest.capabilityProfileId} v{manifest.capabilityProfileVersion}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Compiler</dt><dd className="mt-1 break-words text-ink">{manifest.compilerVersion}</dd></div></dl><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Parameters</p><pre className="mt-2 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink">{JSON.stringify(manifest.parameters, null, 2)}</pre><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Prepared request</p><pre className="mt-2 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink" data-testid="generation-prepared-request">{JSON.stringify(manifest.preparedRequest, null, 2)}</pre></div>
+        </section>
+      ) : null}
+
+      {job ? <section className="mt-3 min-w-0 rounded-md border border-line bg-surface p-3" data-testid="generation-job"><div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Job</h6><div className="flex flex-wrap gap-2"><button type="button" onClick={() => onRefresh(selection)} disabled={!canRefresh} className="min-h-8 rounded border border-line px-2 text-[10px] font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45" data-testid="generation-refresh">Refresh status</button>{canRetry ? <button type="button" onClick={() => onRetry(selection)} disabled={state?.retrying} className="min-h-8 rounded border border-accent px-2 text-[10px] font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="generation-retry">{state?.retrying ? "Retrying…" : "Retry Fake generation"}</button> : null}</div></div><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5"><div className="min-w-0"><dt className="text-ink-faint">Status</dt><dd className="mt-1 break-words font-semibold text-ink">{job.status}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Version</dt><dd className="mt-1 text-ink">{job.version}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Attempts</dt><dd className="mt-1 text-ink">{job.attemptCount}</dd></div><div className="min-w-0 lg:col-span-2"><dt className="text-ink-faint">Provider job ID</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="generation-provider-job-id">{job.providerJobId ?? "—"}</dd></div></dl>{job.error ? <div className="mt-3 rounded border border-danger/40 bg-danger/5 p-2" data-testid="generation-normalized-error"><p className="text-xs font-semibold text-danger">Normalized provider error · {job.error.code}</p><p className="mt-1 break-words text-xs leading-5 text-danger">{job.error.message}</p><p className="mt-1 text-[10px] text-danger">Retryable: {job.error.retryable ? "yes" : "no"}</p></div> : null}</section> : null}
+
+      {result ? <section className="mt-3 min-w-0 rounded-md border border-success/40 bg-surface p-3" data-testid="generation-result"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-success">Fake result</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div className="min-w-0 sm:col-span-2"><dt className="text-ink-faint">URI</dt><dd className="mt-1 break-all font-mono text-ink">{result.uri}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Provider job ID</dt><dd className="mt-1 break-all font-mono text-ink">{result.providerJobId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Result hash</dt><dd className="mt-1 break-all font-mono text-ink">{result.resultHash}</dd></div></dl><pre className="mt-3 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink">{JSON.stringify(result.metadata, null, 2)}</pre></section> : null}
+
+      {!record ? <p className="mt-3 text-[10px] text-ink-faint">Manifest, Job, and Result details appear after the local submission is accepted.</p> : null}
+    </section>
+  );
+}
+
 function ContextInspector({
   projectId,
   state,
@@ -2176,6 +2449,8 @@ function ContextInspector({
   onSave,
   onApprove,
   onReload,
+  onCompileResult,
+  renderGenerationPanel,
 }: {
   projectId: string;
   state: ContextState | null;
@@ -2194,6 +2469,8 @@ function ContextInspector({
   onSave: () => void;
   onApprove: () => void;
   onReload: () => void;
+  onCompileResult: (selection: CompilationSelection, result: CompileShotResult | null) => void;
+  renderGenerationPanel: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 }) {
   const content = state?.snapshot?.content;
   const scene = content?.scene;
@@ -2227,7 +2504,7 @@ function ContextInspector({
           <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-provenance-heading" data-testid="context-provenance"><h5 id="context-provenance-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Provenance</h5>{provenance.length > 0 ? <ul className="mt-3 min-w-0 space-y-2">{provenance.map((item) => <li key={`${item.kind}-${item.recordId}`} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{item.kind}</span> · <span className="break-all font-mono">{item.recordId}</span> · version {item.version ?? "—"}{item.sourceId ? <> · source <span className="break-all font-mono">{item.sourceId}</span></> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No provenance records included.</p>}</section>
         </div>
       ) : !state?.loading && !state?.error ? <p className="mt-5 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No Context Snapshot loaded for this purpose and saved revision. Build one to inspect its frozen input.</p> : null}
-      <StoryboardEditor projectId={projectId} snapshot={state?.snapshot?.purpose === "storyboard" ? state.snapshot : null} state={storyboardState} selectionValid={storyboardSelectionValid} onNew={onNew} onDraftChange={onDraftChange} onLoad={onLoad} onSave={onSave} onApprove={onApprove} onReload={onReload} />
+      <StoryboardEditor projectId={projectId} snapshot={state?.snapshot?.purpose === "storyboard" ? state.snapshot : null} state={storyboardState} selectionValid={storyboardSelectionValid} onNew={onNew} onDraftChange={onDraftChange} onLoad={onLoad} onSave={onSave} onApprove={onApprove} onReload={onReload} onCompileResult={onCompileResult} renderGenerationPanel={renderGenerationPanel} />
     </section>
   );
 }

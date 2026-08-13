@@ -33,6 +33,8 @@ type CompilationPreviewProps = {
   shotIndex: number;
   boardStatus: StoryboardStatus;
   boardDirty: boolean;
+  onCompileResult?: (selection: CompilationSelection, result: CompileShotResult | null) => void;
+  renderGenerationPanel?: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 };
 
 function requestId(prefix: string) {
@@ -157,7 +159,7 @@ function CompileResult({ result, entities }: { result: CompileShotResult; entiti
   );
 }
 
-export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpecId, shot, shotIndex, boardStatus, boardDirty }: CompilationPreviewProps) {
+export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpecId, shot, shotIndex, boardStatus, boardDirty, onCompileResult, renderGenerationPanel }: CompilationPreviewProps) {
   const entities = React.useMemo(() => relevantEntities(snapshot, shot), [shot, snapshot]);
   const entityIds = React.useMemo(() => entities.map((entity) => entity.entityId), [entities]);
   const entityIdsKey = entityIds.join(",");
@@ -193,6 +195,22 @@ export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpec
   const assetCreateError = selectionKey && assetCreateState?.key === selectionKey ? assetCreateState.error : null;
   const assetCreateNotice = selectionKey && assetCreateState?.key === selectionKey ? assetCreateState.notice : null;
   const previousSelectionKeyRef = React.useRef<string | null>(null);
+  const onCompileResultRef = React.useRef(onCompileResult);
+  const reportedCompileKeyRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    onCompileResultRef.current = onCompileResult;
+  }, [onCompileResult]);
+
+  React.useEffect(() => {
+    if (!selection || !compileResult) {
+      reportedCompileKeyRef.current = null;
+      return;
+    }
+    if (reportedCompileKeyRef.current === compileInputSignature) return;
+    reportedCompileKeyRef.current = compileInputSignature;
+    onCompileResultRef.current?.(selection, compileResult);
+  }, [compileInputSignature, compileResult, selection]);
 
   React.useEffect(() => {
     const key = selectionKey;
@@ -262,10 +280,14 @@ export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpec
       });
     return () => {
       active = false;
+      if (currentSelection) onCompileResultRef.current?.(currentSelection, null);
       if (selectionRef.current && compilationSelectionKey(selectionRef.current) === key) {
         selectionRef.current = null;
         setAssetLoading(false);
         setCompiling(false);
+        setCompileResultState(null);
+        setCompileErrorState(null);
+        setCompileValidationError(null);
       }
     };
   }, [entityIds, entityIdsKey, projectId, refreshToken, selection, selectionKey]);
@@ -277,7 +299,8 @@ export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpec
     setCompiling(false);
     setCompileResultState(null);
     setCompileErrorState(null);
-  }, []);
+    if (selection) onCompileResultRef.current?.(selection, null);
+  }, [selection]);
 
   const toggleAsset = React.useCallback((assetId: string, checked: boolean) => {
     setSelectedAssetIds((current) => {
@@ -397,6 +420,7 @@ export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpec
       </section>
 
       {compileResult ? <CompileResult result={compileResult} entities={entities} /> : null}
+      {compileResult && selection && renderGenerationPanel ? renderGenerationPanel(selection, compileResult) : null}
     </section>
   );
 }

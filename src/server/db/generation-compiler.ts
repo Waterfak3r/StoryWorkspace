@@ -321,11 +321,27 @@ function compiledCore(request: Omit<CompiledGenerationRequest, "id" | "createdAt
   return request;
 }
 
+function persistedCompiledCore(request: CompiledGenerationRequest) {
+  const core: Record<string, unknown> = { ...request };
+  delete core.id;
+  delete core.createdAt;
+  delete core.inputHash;
+  delete core.compiledHash;
+  return core;
+}
+
 function toResult(row: CompiledRow): { compiledRequest: CompiledGenerationRequest; preview: ReturnType<typeof fakeVideoAdapter.prepare> } {
   const compiled = compiledGenerationRequestSchema.safeParse(parseJson(row.compiled_json, `Invalid compiled request ${row.id}`));
   if (!compiled.success) throw new StoryBibleDataIntegrityError(`Invalid compiled request ${row.id}`);
   const preview = fakePreparedRequestSchema.safeParse(parseJson(row.prepared_json, `Invalid prepared request ${row.id}`));
   if (!preview.success) throw new StoryBibleDataIntegrityError(`Invalid prepared request ${row.id}`);
+  if (sha256(canonicalContextJson(persistedCompiledCore(compiled.data))) !== compiled.data.compiledHash) {
+    throw new StoryBibleDataIntegrityError(`Compiled request hash mismatch ${row.id}`);
+  }
+  const expectedPreview = fakeVideoAdapter.prepare(compiled.data);
+  if (canonicalContextJson(preview.data) !== canonicalContextJson(expectedPreview)) {
+    throw new StoryBibleDataIntegrityError(`Prepared request content mismatch ${row.id}`);
+  }
   return { compiledRequest: compiled.data, preview: preview.data };
 }
 
