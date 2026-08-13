@@ -8,6 +8,7 @@ import type { Inference, ModelRun } from "@/domain/inference";
 import type { AcceptEditedPatchInput, AcceptPatchInput, Patch, PatchApplication, ProposeFactPatchInput, RejectPatchInput } from "@/domain/canon-patch";
 import type { SceneEntityLink } from "@/domain/scene-link";
 import type { Entity, EntityAlias, EvidenceSource, Fact } from "@/domain/story-bible";
+import type { CreateStoryboardInput, Storyboard } from "@/domain/storyboard";
 import {
   WorkspaceApiError,
   createChapter,
@@ -59,8 +60,16 @@ import {
   parseContextSnapshotEnvelope,
   parseContextSnapshotList,
   parseContextSnapshot,
+  parseStoryboard,
+  parseStoryboardEnvelope,
+  parseStoryboardList,
+  parseStoryboardMutationResult,
   proposeStatePatch,
   reviewSceneEntityLink,
+  approveStoryboard,
+  createStoryboard,
+  getStoryboard,
+  listStoryboards,
 } from "./workspace-api";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -1078,6 +1087,124 @@ describe("chapter workspace API", () => {
       allowInferred: false,
       requestId: "context-invalid-policy",
     })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("creates, lists, reads, and approves Storyboards using the domain contract", async () => {
+    const storyboardId = "55555555-5555-4555-8555-555555555555";
+    const shotId = "66666666-6666-4666-8666-666666666666";
+    const characterId = entityId;
+    const storyboard: Storyboard = {
+      id: storyboardId,
+      projectId,
+      sceneId,
+      sceneRevisionId,
+      contextSnapshotId,
+      title: "Opening beat",
+      status: "draft",
+      version: 1,
+      supersedesStoryboardId: null,
+      contentHash: "a".repeat(64),
+      shots: [{
+        id: shotId,
+        projectId,
+        storyboardId,
+        sceneId,
+        spec: {
+          ordinal: 1,
+          narrativePurpose: "Establish the entrance",
+          subjects: [{ entityId: characterId, action: "enters", expression: null, framingRole: "primary" }],
+          locationEntityId: null,
+          propEntityIds: [],
+          framing: null,
+          cameraMotion: null,
+          lens: null,
+          durationSeconds: null,
+          dialogueLineIds: [],
+          continuityConstraints: [],
+          negativeConstraints: [],
+        },
+        specHash: "b".repeat(64),
+        createdAt,
+      }],
+      createdBy: "local-user",
+      createdAt,
+      updatedAt,
+    };
+    const input: CreateStoryboardInput = {
+      contextSnapshotId,
+      title: "Opening beat",
+      shots: [storyboard.shots[0].spec],
+      requestId: "storyboard-create-1",
+      actorId: "local-user",
+    };
+    const fetchMock = mockFetch(
+      jsonResponse({ data: { storyboard, idempotent: false } }, 201),
+      jsonResponse({ data: { storyboards: [storyboard] } }),
+      jsonResponse({ data: { storyboard } }),
+      jsonResponse({ data: { storyboard: { ...storyboard, status: "approved", version: 2 }, idempotent: false } }),
+    );
+
+    await expect(createStoryboard(projectId, sceneId, input)).resolves.toEqual({ storyboard, idempotent: false });
+    await expect(listStoryboards(projectId, sceneId, { contextSnapshotId, status: "draft" })).resolves.toEqual([storyboard]);
+    await expect(getStoryboard(projectId, storyboardId)).resolves.toEqual(storyboard);
+    await expect(approveStoryboard(projectId, storyboardId, { expectedVersion: 1, requestId: "storyboard-approve-1", actorId: "local-user" })).resolves.toMatchObject({ idempotent: false, storyboard: { status: "approved", version: 2 } });
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/scenes/${sceneId}/storyboards`, "POST", {
+      contextSnapshotId: input.contextSnapshotId,
+      title: input.title,
+      shots: input.shots,
+      supersedesStoryboardId: null,
+      expectedSupersededVersion: null,
+      requestId: input.requestId,
+      actorId: input.actorId,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/projects/${projectId}/scenes/${sceneId}/storyboards?contextSnapshotId=${contextSnapshotId}&status=draft`, expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(3, `/api/projects/${projectId}/storyboards/${storyboardId}`, expect.anything());
+    expectJsonRequest(fetchMock, `/api/projects/${projectId}/storyboards/${storyboardId}/approve`, "POST", { expectedVersion: 1, requestId: "storyboard-approve-1", actorId: "local-user" });
+  });
+
+  it("strictly rejects Storyboard response aliases and unknown envelope fields", () => {
+    const storyboardId = "55555555-5555-4555-8555-555555555555";
+    const storyboard: Storyboard = {
+      id: storyboardId,
+      projectId,
+      sceneId,
+      sceneRevisionId,
+      contextSnapshotId,
+      title: "Strict board",
+      status: "draft",
+      version: 1,
+      supersedesStoryboardId: null,
+      contentHash: "a".repeat(64),
+      shots: [{
+        id: "66666666-6666-4666-8666-666666666666",
+        projectId,
+        storyboardId,
+        sceneId,
+        spec: { ordinal: 1, narrativePurpose: "Beat", subjects: [{ entityId, action: "waits", expression: null, framingRole: "primary" }], locationEntityId: null, propEntityIds: [], framing: null, cameraMotion: null, lens: null, durationSeconds: null, dialogueLineIds: [], continuityConstraints: [], negativeConstraints: [] },
+        specHash: "b".repeat(64),
+        createdAt,
+      }],
+      createdBy: "local-user",
+      createdAt,
+      updatedAt,
+    };
+    expect(() => parseStoryboardEnvelope({ storyboard, board: storyboard })).toThrowError(/invalid storyboard/i);
+    expect(() => parseStoryboardMutationResult({ storyboard, idempotent: false, created: true })).toThrowError(/invalid storyboard mutation/i);
+    expect(() => parseStoryboardList({ storyboards: [storyboard], boards: [storyboard] })).toThrowError(/invalid storyboard list/i);
+    expect(() => parseStoryboard({ ...storyboard, shotSpecs: storyboard.shots })).toThrowError(/invalid storyboard/i);
+  });
+
+  it("validates Storyboard input before making a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(createStoryboard(projectId, sceneId, {
+      contextSnapshotId,
+      title: "Missing shots",
+      shots: [],
+      requestId: "storyboard-invalid",
+    })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(approveStoryboard(projectId, "not-a-uuid", { expectedVersion: 0, requestId: "storyboard-invalid-approve" })).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

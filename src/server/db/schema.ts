@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 function runMigration(database: DatabaseSync, version: number, migration: () => void) {
   database.exec("BEGIN IMMEDIATE");
@@ -2321,6 +2321,171 @@ export function bootstrapDatabase(database: DatabaseSync) {
       BEFORE UPDATE OF is_latest ON context_snapshots
       WHEN NEW.is_latest NOT IN (0, 1)
       BEGIN SELECT RAISE(ABORT, 'context snapshot latest flag is invalid'); END;
+    `));
+  }
+
+  if (currentVersion < 15) {
+    runMigration(database, 15, () => database.exec(`
+      CREATE TABLE IF NOT EXISTS storyboards (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        scene_revision_id TEXT NOT NULL,
+        context_snapshot_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'superseded')),
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+        sealed INTEGER NOT NULL DEFAULT 0 CHECK (sealed IN (0, 1)),
+        supersedes_storyboard_id TEXT,
+        content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_revision_id) REFERENCES scene_revisions(id) ON DELETE CASCADE,
+        FOREIGN KEY (context_snapshot_id) REFERENCES context_snapshots(id) ON DELETE CASCADE,
+        FOREIGN KEY (supersedes_storyboard_id) REFERENCES storyboards(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_storyboards_project_scene_status
+        ON storyboards(project_id, scene_id, status, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_storyboards_project_context
+        ON storyboards(project_id, context_snapshot_id, created_at DESC, id DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_storyboards_active_semantic_identity
+        ON storyboards(project_id, context_snapshot_id, content_hash)
+        WHERE status IN ('draft', 'approved');
+
+      CREATE TABLE IF NOT EXISTS shot_specs (
+        id TEXT PRIMARY KEY NOT NULL,
+        project_id TEXT NOT NULL,
+        storyboard_id TEXT NOT NULL,
+        scene_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+        spec_json TEXT NOT NULL CHECK (json_valid(spec_json) AND json_type(spec_json) = 'object'),
+        spec_hash TEXT NOT NULL CHECK (length(spec_hash) = 64),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (storyboard_id) REFERENCES storyboards(id) ON DELETE CASCADE,
+        FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+        UNIQUE (storyboard_id, ordinal)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_shot_specs_project_storyboard_ordinal
+        ON shot_specs(project_id, storyboard_id, ordinal, id);
+
+      CREATE TRIGGER IF NOT EXISTS storyboards_project_guard
+      BEFORE INSERT ON storyboards
+      WHEN trim(NEW.title) = ''
+        OR NEW.status <> 'draft'
+        OR NEW.version <> 1
+        OR NEW.sealed <> 0
+        OR NEW.supersedes_storyboard_id IS NOT NULL AND (
+          (SELECT status FROM storyboards WHERE id = NEW.supersedes_storyboard_id) NOT IN ('draft', 'approved')
+        )
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) IS NULL
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) <> NEW.project_id
+        OR (SELECT status FROM scenes WHERE id = NEW.scene_id) <> 'active'
+        OR (SELECT project_id FROM scene_revisions WHERE id = NEW.scene_revision_id) IS NULL
+        OR (SELECT project_id FROM scene_revisions WHERE id = NEW.scene_revision_id) <> NEW.project_id
+        OR (SELECT scene_id FROM scene_revisions WHERE id = NEW.scene_revision_id) <> NEW.scene_id
+        OR (SELECT status FROM scene_revisions WHERE id = NEW.scene_revision_id) <> 'active'
+        OR (SELECT project_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) IS NULL
+        OR (SELECT project_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.project_id
+        OR (SELECT scene_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.scene_id
+        OR (SELECT scene_revision_id FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> NEW.scene_revision_id
+        OR (SELECT purpose FROM context_snapshots WHERE id = NEW.context_snapshot_id) <> 'storyboard'
+        OR (NEW.supersedes_storyboard_id IS NOT NULL AND (
+          (SELECT project_id FROM storyboards WHERE id = NEW.supersedes_storyboard_id) IS NULL
+          OR (SELECT project_id FROM storyboards WHERE id = NEW.supersedes_storyboard_id) <> NEW.project_id
+          OR (SELECT scene_id FROM storyboards WHERE id = NEW.supersedes_storyboard_id) <> NEW.scene_id
+          OR (SELECT sealed FROM storyboards WHERE id = NEW.supersedes_storyboard_id) <> 1
+        ))
+      BEGIN SELECT RAISE(ABORT, 'storyboard project, scene, revision, or context mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS storyboards_update_project_guard
+      BEFORE UPDATE OF id, project_id, scene_id, scene_revision_id, context_snapshot_id, title, supersedes_storyboard_id, content_hash, created_by, created_at ON storyboards
+      WHEN NEW.id IS NOT OLD.id
+        OR NEW.project_id IS NOT OLD.project_id
+        OR NEW.scene_id IS NOT OLD.scene_id
+        OR NEW.scene_revision_id IS NOT OLD.scene_revision_id
+        OR NEW.context_snapshot_id IS NOT OLD.context_snapshot_id
+        OR NEW.title IS NOT OLD.title
+        OR NEW.supersedes_storyboard_id IS NOT OLD.supersedes_storyboard_id
+        OR NEW.content_hash IS NOT OLD.content_hash
+        OR NEW.created_by IS NOT OLD.created_by
+        OR NEW.created_at IS NOT OLD.created_at
+      BEGIN SELECT RAISE(ABORT, 'storyboard identity or content is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS storyboards_seal_guard
+      BEFORE UPDATE OF sealed ON storyboards
+      WHEN OLD.sealed <> 0
+        OR NEW.sealed <> 1
+        OR (SELECT COUNT(*) FROM shot_specs WHERE project_id = OLD.project_id AND storyboard_id = OLD.id) NOT BETWEEN 1 AND 100
+      BEGIN SELECT RAISE(ABORT, 'storyboard can only be sealed once with complete shots'); END;
+
+      CREATE TRIGGER IF NOT EXISTS storyboards_lifecycle_guard
+      BEFORE UPDATE OF status, version, updated_at ON storyboards
+      WHEN OLD.sealed <> 1
+        OR NEW.status = OLD.status
+        OR OLD.status NOT IN ('draft', 'approved')
+        OR (OLD.status = 'draft' AND NEW.status NOT IN ('approved', 'superseded'))
+        OR (OLD.status = 'approved' AND NEW.status <> 'superseded')
+        OR NEW.version <> OLD.version + 1
+        OR NEW.updated_at = OLD.updated_at
+      BEGIN SELECT RAISE(ABORT, 'invalid storyboard lifecycle transition'); END;
+
+      CREATE TRIGGER IF NOT EXISTS storyboards_delete_guard
+      BEFORE DELETE ON storyboards
+      BEGIN SELECT RAISE(ABORT, 'storyboard content is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS shot_specs_project_guard
+      BEFORE INSERT ON shot_specs
+      WHEN json_type(NEW.spec_json, '$.ordinal') IS NOT 'integer'
+        OR json_extract(NEW.spec_json, '$.ordinal') IS NOT NEW.ordinal
+        OR json_type(NEW.spec_json, '$.subjects') IS NOT 'array'
+        OR json_array_length(NEW.spec_json, '$.subjects') < 1
+        OR (SELECT COUNT(*) FROM json_each(NEW.spec_json, '$.subjects')) <> (SELECT COUNT(DISTINCT json_extract(value, '$.entityId')) FROM json_each(NEW.spec_json, '$.subjects'))
+        OR json_type(NEW.spec_json, '$.propEntityIds') IS NOT 'array'
+        OR (SELECT COUNT(*) FROM json_each(NEW.spec_json, '$.propEntityIds')) <> (SELECT COUNT(DISTINCT value) FROM json_each(NEW.spec_json, '$.propEntityIds'))
+        OR EXISTS (
+          SELECT 1 FROM json_each(NEW.spec_json, '$.subjects') subject
+          WHERE json_type(subject.value, '$.entityId') <> 'text'
+            OR NOT EXISTS (
+              SELECT 1 FROM json_each((SELECT cs.content_json FROM context_snapshots cs JOIN storyboards sb ON sb.context_snapshot_id = cs.id WHERE sb.id = NEW.storyboard_id), '$.entities') entity
+              WHERE json_extract(entity.value, '$.entityId') = json_extract(subject.value, '$.entityId')
+                AND json_extract(entity.value, '$.type') = 'character'
+            )
+        )
+        OR (json_extract(NEW.spec_json, '$.locationEntityId') IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM json_each((SELECT cs.content_json FROM context_snapshots cs JOIN storyboards sb ON sb.context_snapshot_id = cs.id WHERE sb.id = NEW.storyboard_id), '$.entities') entity
+          WHERE json_extract(entity.value, '$.entityId') = json_extract(NEW.spec_json, '$.locationEntityId')
+            AND json_extract(entity.value, '$.type') = 'location'
+        ))
+        OR EXISTS (
+          SELECT 1 FROM json_each(NEW.spec_json, '$.propEntityIds') prop
+          WHERE NOT EXISTS (
+            SELECT 1 FROM json_each((SELECT cs.content_json FROM context_snapshots cs JOIN storyboards sb ON sb.context_snapshot_id = cs.id WHERE sb.id = NEW.storyboard_id), '$.entities') entity
+            WHERE json_extract(entity.value, '$.entityId') = prop.value
+              AND json_extract(entity.value, '$.type') = 'prop'
+          )
+        )
+        OR (SELECT project_id FROM storyboards WHERE id = NEW.storyboard_id) IS NULL
+        OR (SELECT project_id FROM storyboards WHERE id = NEW.storyboard_id) <> NEW.project_id
+        OR (SELECT scene_id FROM storyboards WHERE id = NEW.storyboard_id) <> NEW.scene_id
+        OR (SELECT sealed FROM storyboards WHERE id = NEW.storyboard_id) <> 0
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) IS NULL
+        OR (SELECT project_id FROM scenes WHERE id = NEW.scene_id) <> NEW.project_id
+        OR (SELECT status FROM scenes WHERE id = NEW.scene_id) <> 'active'
+      BEGIN SELECT RAISE(ABORT, 'shot spec project or scene mismatch'); END;
+
+      CREATE TRIGGER IF NOT EXISTS shot_specs_update_guard
+      BEFORE UPDATE ON shot_specs
+      BEGIN SELECT RAISE(ABORT, 'shot spec content is immutable'); END;
+
+      CREATE TRIGGER IF NOT EXISTS shot_specs_delete_guard
+      BEFORE DELETE ON shot_specs
+      BEGIN SELECT RAISE(ABORT, 'shot spec content is immutable'); END;
     `));
   }
 }

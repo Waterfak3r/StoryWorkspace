@@ -160,7 +160,7 @@ describe("Phase 4 context builder", () => {
     expect(factBudget.omitted).toContainEqual(expect.objectContaining({ kind: "fact", entityId: includedCharacter.entityId, reason: "budget" }));
   });
 
-  it("rejects request collisions and preserves additive v14 marker", () => {
+  it("rejects request collisions and preserves the additive v14 migration through the current schema", () => {
     const database = isolatedDatabase();
     const values = fixture(database);
     const input = { sceneId: values.scene.sceneId, sceneRevisionId: values.scene.id, purpose: "storyboard" as const, policyId: "storyboard-default-v1" as const, requestId: "collision" };
@@ -170,11 +170,11 @@ describe("Phase 4 context builder", () => {
     expect(buildContextSnapshot(values.projectId, input, database)).toMatchObject({ idempotent: true, snapshot: { id: original.snapshot.id } });
     expect(() => buildContextSnapshot(values.projectId, { ...input, purpose: "video", policyId: "video-default-v1", requestId: "collision" }, database)).toThrow(StoryBibleIdempotencyConflictError);
     expect(() => buildContextSnapshot(values.projectId, { ...input, actorId: "another-actor", requestId: "collision" }, database)).toThrow(StoryBibleIdempotencyConflictError);
-    expect(CURRENT_SCHEMA_VERSION).toBe(14);
-    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(14);
+    expect(CURRENT_SCHEMA_VERSION).toBe(15);
+    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(CURRENT_SCHEMA_VERSION);
     database.exec("DROP TABLE context_snapshots; PRAGMA user_version = 13;");
     bootstrapDatabase(database);
-    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(14);
+    expect((database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_snapshots'").get()).toMatchObject({ name: "context_snapshots" });
   });
 });

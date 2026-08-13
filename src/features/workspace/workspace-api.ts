@@ -106,6 +106,15 @@ import {
   type ContextPurpose,
   type ContextSnapshot,
 } from "@/domain/context-builder";
+import {
+  approveStoryboardInputSchema,
+  createStoryboardInputSchema,
+  storyboardSchema,
+  type ApproveStoryboardInput,
+  type CreateStoryboardInput,
+  type Storyboard,
+  type StoryboardStatus,
+} from "@/domain/storyboard";
 
 export type { ContinuityGroup, ContinuityGroupKind, CreateContinuityGroupInput, ProposeStatePatchInput, StatePatchPayload } from "@/domain/scene-state";
 export type { BuildContextInput, ContextContent, ContextEntity, ContextPolicyId, ContextPurpose, ContextSnapshot } from "@/domain/context-builder";
@@ -121,6 +130,7 @@ export type WorkspaceErrorPayload = {
   currentChapter?: unknown;
   currentAdaptation?: unknown;
   currentPatch?: unknown;
+  currentStoryboard?: unknown;
   patch?: unknown;
   consumedBy?: "chapter" | "adaptation";
 };
@@ -210,6 +220,16 @@ export const contextSnapshotSchema = domainContextSnapshotSchema;
 export type ContextBuildResult = {
   snapshot: ContextSnapshot;
   idempotent: boolean;
+};
+
+export type StoryboardMutationResult = {
+  storyboard: Storyboard;
+  idempotent: boolean;
+};
+
+export type ListStoryboardsOptions = {
+  contextSnapshotId?: string;
+  status?: StoryboardStatus;
 };
 
 export type ListContextSnapshotsOptions = {
@@ -1184,6 +1204,30 @@ export function parseContextSnapshotList(value: unknown): ContextSnapshot[] {
   return parsed.data.snapshots;
 }
 
+export function parseStoryboard(value: unknown): Storyboard {
+  const parsed = storyboardSchema.safeParse(value);
+  if (!parsed.success) throw invalidDataError("storyboard response");
+  return parsed.data;
+}
+
+export function parseStoryboardEnvelope(value: unknown): Storyboard {
+  const parsed = z.object({ storyboard: storyboardSchema }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("storyboard response");
+  return parsed.data.storyboard;
+}
+
+export function parseStoryboardMutationResult(value: unknown): StoryboardMutationResult {
+  const parsed = z.object({ storyboard: storyboardSchema, idempotent: z.boolean() }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("storyboard mutation response");
+  return parsed.data;
+}
+
+export function parseStoryboardList(value: unknown): Storyboard[] {
+  const parsed = z.object({ storyboards: z.array(storyboardSchema) }).strict().safeParse(value);
+  if (!parsed.success) throw invalidDataError("storyboard list response");
+  return parsed.data.storyboards;
+}
+
 /** Build a provider-neutral, immutable Context Snapshot for one saved Scene revision. */
 export async function buildContextSnapshot(projectId: string, input: ContextBuildInput): Promise<ContextBuildResult> {
   const parsedInput = contextBuildInputSchema.safeParse(input);
@@ -1219,6 +1263,54 @@ export async function listContextSnapshots(projectId: string, options: ListConte
 export async function getContextSnapshot(projectId: string, contextId: string): Promise<ContextSnapshot> {
   const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/contexts/${encodeURIComponent(contextId)}`);
   return parseContextSnapshotEnvelope(result);
+}
+
+export async function createStoryboard(projectId: string, sceneId: string, input: CreateStoryboardInput): Promise<StoryboardMutationResult> {
+  const parsedInput = createStoryboardInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The storyboard request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/storyboards`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseStoryboardMutationResult(result);
+}
+
+export async function listStoryboards(projectId: string, sceneId: string, options: ListStoryboardsOptions = {}): Promise<Storyboard[]> {
+  const query = new URLSearchParams();
+  if (options.contextSnapshotId) query.set("contextSnapshotId", options.contextSnapshotId);
+  if (options.status) query.set("status", options.status);
+  const suffix = query.toString();
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/storyboards${suffix ? `?${suffix}` : ""}`);
+  return parseStoryboardList(result);
+}
+
+export async function getStoryboard(projectId: string, storyboardId: string): Promise<Storyboard> {
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/storyboards/${encodeURIComponent(storyboardId)}`);
+  return parseStoryboardEnvelope(result);
+}
+
+export async function approveStoryboard(projectId: string, storyboardId: string, input: ApproveStoryboardInput): Promise<StoryboardMutationResult> {
+  const parsedInput = approveStoryboardInputSchema.safeParse(input);
+  if (!parsedInput.success) {
+    throw new WorkspaceApiError(400, {
+      code: "VALIDATION_ERROR",
+      message: "The storyboard approval request is invalid.",
+      fieldErrors: parsedInput.error.flatten().fieldErrors as WorkspaceFieldErrors,
+      retryable: false,
+    });
+  }
+  const result = await requestData<unknown>(`/api/projects/${encodeURIComponent(projectId)}/storyboards/${encodeURIComponent(storyboardId)}/approve`, {
+    method: "POST",
+    ...jsonBody(parsedInput.data),
+  });
+  return parseStoryboardMutationResult(result);
 }
 
 export async function getResolvedState(projectId: string, sceneId: string, options: { sceneRevisionId: string; entityId?: string }): Promise<ResolvedState> {

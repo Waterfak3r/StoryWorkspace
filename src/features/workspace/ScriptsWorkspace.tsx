@@ -6,6 +6,7 @@ import type { DocumentRevision, SceneRevision, ScriptDocument } from "@/domain/d
 import type { AnalysisRun, AnalysisRunStatus, EntityMention } from "@/domain/analysis";
 import type { AcceptEditedPatchInput, AcceptPatchInput, RejectPatchInput } from "@/domain/canon-patch";
 import type { SceneEntityLink } from "@/domain/scene-link";
+import type { Storyboard } from "@/domain/storyboard";
 import { predicateSchemaRegistry } from "@/domain/story-bible";
 import type { CreateEntityInput, Entity, EntityState, EvidenceSource, Fact, FactScope, FactValueType } from "@/domain/story-bible";
 import {
@@ -31,6 +32,10 @@ import {
   proposeStatePatch,
   rejectPatch,
   reviewSceneEntityLink,
+  approveStoryboard,
+  createStoryboard,
+  getStoryboard,
+  listStoryboards,
 } from "./workspace-api";
 import type {
   ContinuityGroup,
@@ -70,7 +75,13 @@ import {
   statePredicateLabel,
   stateTierLabel,
   workspaceRevisionSelectionKey,
+  isCurrentStoryboardBoardResponse,
+  isCurrentStoryboardResponse,
+  storyboardSelectionKey,
+  type StoryboardBoardSelection,
+  type StoryboardSelection,
 } from "./scripts-workspace-helpers";
+import { StoryboardEditor, type StoryboardDraft, type StoryboardEditorState } from "./StoryboardEditor";
 
 type ScriptsWorkspaceProps = {
   projectId: string;
@@ -125,6 +136,10 @@ type ContextState = {
   loaded: boolean;
   snapshot: ContextSnapshot | null;
   error: string | null;
+};
+
+type StoryboardState = StoryboardEditorState & {
+  selection: StoryboardSelection;
 };
 
 type FactCandidateDraft = {
@@ -295,6 +310,43 @@ function reviewToAnalysisState(selection: AnalysisState["selection"], review: Sc
   };
 }
 
+function storyboardDraftFromBoard(board: Storyboard): StoryboardDraft {
+  return { title: board.title, shots: board.shots.map((shot) => shot.spec) };
+}
+
+function emptyStoryboardDraft(snapshot: ContextSnapshot | null): StoryboardDraft {
+  const character = snapshot?.content.entities.find((entity) => entity.type === "character");
+  return {
+    title: "",
+    shots: [{
+      ordinal: 1,
+      narrativePurpose: "",
+      subjects: [{ entityId: character?.entityId ?? "", action: "", expression: null, framingRole: "primary" }],
+      locationEntityId: null,
+      propEntityIds: [],
+      framing: null,
+      cameraMotion: null,
+      lens: null,
+      durationSeconds: null,
+      dialogueLineIds: [],
+      continuityConstraints: [],
+      negativeConstraints: [],
+    }],
+  };
+}
+
+function clearStoryboardBusyState(
+  setState: React.Dispatch<React.SetStateAction<Record<string, StoryboardState>>>,
+  key: string,
+  field: "loading" | "saving" | "approving",
+) {
+  setState((current) => {
+    const record = current[key];
+    if (!record || !record[field]) return current;
+    return { ...current, [key]: { ...record, [field]: false } };
+  });
+}
+
 export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCreateDocument, onDirtyChange }: ScriptsWorkspaceProps) {
   const [freshDocument, setFreshDocument] = React.useState<ScriptDocument | null>(document);
   const [revision, setRevision] = React.useState<DocumentRevision | null>(null);
@@ -319,6 +371,8 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const [resolvedStateByKey, setResolvedStateByKey] = React.useState<Record<string, { selection: { projectId: string; documentId: string; sceneId: string; sceneRevisionId: string }; loading: boolean; state: ResolvedState | null; error: string | null }>>({});
   const [contextPurpose, setContextPurpose] = React.useState<ContextPurpose>("video");
   const [contextByKey, setContextByKey] = React.useState<Record<string, ContextState>>({});
+  const [storyboardByKey, setStoryboardByKey] = React.useState<Record<string, StoryboardState>>({});
+  const [storyboardReloadToken, setStoryboardReloadToken] = React.useState(0);
   const [resolvedStateRefreshToken, setResolvedStateRefreshToken] = React.useState(0);
   const [entities, setEntities] = React.useState<Entity[]>([]);
   const [entityLoading, setEntityLoading] = React.useState(false);
@@ -334,9 +388,12 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   const patchSelectionRef = React.useRef<PatchReviewState["selection"] | null>(null);
   const resolvedStateSelectionRef = React.useRef<{ projectId: string; documentId: string; sceneId: string; sceneRevisionId: string } | null>(null);
   const contextSelectionRef = React.useRef<ContextSelection | null>(null);
+  const storyboardSelectionRef = React.useRef<StoryboardSelection | null>(null);
+  const storyboardBoardSelectionRef = React.useRef<StoryboardBoardSelection | null>(null);
   const analysisByKeyRef = React.useRef<Record<string, AnalysisState>>({});
   const patchReviewByKeyRef = React.useRef<Record<string, PatchReviewState>>({});
   const contextByKeyRef = React.useRef<Record<string, ContextState>>({});
+  const storyboardByKeyRef = React.useRef<Record<string, StoryboardState>>({});
   const resolvedStateByKeyRef = React.useRef<typeof resolvedStateByKey>({});
   const documentId = document?.id ?? null;
   const documentVersion = document?.version ?? null;
@@ -365,6 +422,13 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     : null, [contextPolicyId, contextPurpose, documentId, projectId, selectedRevisionId, selectedScene]);
   const selectedContextKey = selectedContextSelection ? contextSelectionKey(selectedContextSelection) : null;
   const selectedContext = selectedContextKey ? contextByKey[selectedContextKey] ?? null : null;
+  const selectedStoryboardSelection = React.useMemo<StoryboardSelection | null>(() => {
+    const snapshot = selectedContext?.snapshot;
+    if (!snapshot || snapshot.purpose !== "storyboard" || !selectedScene || !selectedRevisionId) return null;
+    return { projectId, sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId, contextSnapshotId: snapshot.id };
+  }, [projectId, selectedContext?.snapshot, selectedRevisionId, selectedScene]);
+  const selectedStoryboardKey = selectedStoryboardSelection ? storyboardSelectionKey(selectedStoryboardSelection) : null;
+  const selectedStoryboardState = selectedStoryboardKey ? storyboardByKey[selectedStoryboardKey] ?? null : null;
 
   React.useEffect(() => {
     setFreshDocument(document);
@@ -390,6 +454,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     contextSelectionRef.current = null;
     contextByKeyRef.current = {};
     setContextByKey({});
+    storyboardSelectionRef.current = null;
+    storyboardBoardSelectionRef.current = null;
+    storyboardByKeyRef.current = {};
+    setStoryboardByKey({});
     analysisSelectionRef.current = null;
     patchSelectionRef.current = null;
     setAnalysisByKey({});
@@ -477,6 +545,10 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
   React.useEffect(() => {
     contextByKeyRef.current = contextByKey;
   }, [contextByKey]);
+
+  React.useEffect(() => {
+    storyboardByKeyRef.current = storyboardByKey;
+  }, [storyboardByKey]);
 
   React.useEffect(() => {
     if (!selectedSceneAnalysisId || !selectedRevisionId || !revision) {
@@ -669,6 +741,57 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
         }));
       });
   }, [contextPolicyId, contextPurpose, documentId, projectId, revision, revisionDirty, selectedRevisionId, selectedSceneAnalysisId]);
+
+  React.useEffect(() => {
+    const selection = selectedStoryboardSelection;
+    if (!selection) {
+      storyboardSelectionRef.current = null;
+      storyboardBoardSelectionRef.current = null;
+      return;
+    }
+    storyboardSelectionRef.current = selection;
+    const key = storyboardSelectionKey(selection);
+    const existing = storyboardByKeyRef.current[key];
+    if (existing?.loading || (existing?.loaded && storyboardReloadToken === 0)) return;
+    let cancelled = false;
+    setStoryboardByKey((current) => ({
+      ...current,
+      [key]: {
+        selection,
+        loading: true,
+        saving: false,
+        approving: false,
+        loaded: false,
+        list: current[key]?.list ?? [],
+        selectedStoryboardId: current[key]?.selectedStoryboardId ?? null,
+        draft: current[key]?.draft ?? emptyStoryboardDraft(selectedContext?.snapshot ?? null),
+        dirty: false,
+        error: null,
+      },
+    }));
+    void listStoryboards(projectId, selection.sceneId, { contextSnapshotId: selection.contextSnapshotId })
+      .then((storyboards) => {
+        if (cancelled || !isCurrentStoryboardResponse(storyboardSelectionRef.current, selection)) return;
+        const selected = storyboards.find((board) => board.status === "draft") ?? storyboards.find((board) => board.status === "approved") ?? storyboards[0] ?? null;
+        const selectedId = selected?.id ?? null;
+        storyboardBoardSelectionRef.current = selected ? { ...selection, storyboardId: selected.id } : null;
+        setStoryboardByKey((current) => ({
+          ...current,
+          [key]: { selection, loading: false, saving: false, approving: false, loaded: true, list: storyboards, selectedStoryboardId: selectedId, draft: selected ? storyboardDraftFromBoard(selected) : emptyStoryboardDraft(selectedContext?.snapshot ?? null), dirty: false, error: null },
+        }));
+      })
+      .catch((error: unknown) => {
+        if (cancelled || !isCurrentStoryboardResponse(storyboardSelectionRef.current, selection)) return;
+        setStoryboardByKey((current) => ({
+          ...current,
+          [key]: { selection, loading: false, saving: false, approving: false, loaded: true, list: current[key]?.list ?? [], selectedStoryboardId: current[key]?.selectedStoryboardId ?? null, draft: current[key]?.draft ?? emptyStoryboardDraft(selectedContext?.snapshot ?? null), dirty: false, error: humanError(error, "Storyboards could not be loaded.") },
+        }));
+      });
+    return () => {
+      cancelled = true;
+      clearStoryboardBusyState(setStoryboardByKey, key, "loading");
+    };
+  }, [projectId, selectedContext?.snapshot, selectedStoryboardSelection, storyboardReloadToken]);
 
   const updateScene = React.useCallback((sceneId: string, update: Partial<Pick<EditableScene, "title" | "content" | "continuityGroupId">>) => {
     setScenes((current) => current.map((scene) => scene.id === sceneId ? { ...scene, ...update } : scene));
@@ -1172,6 +1295,142 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     }
   }, [projectId, revisionDirty, selectedContextSelection]);
 
+  const storyboardSelectionIsValid = Boolean(selectedStoryboardSelection && selectedContext?.snapshot
+    && selectedContext.snapshot.sceneId === selectedStoryboardSelection.sceneId
+    && selectedContext.snapshot.sceneRevisionId === selectedStoryboardSelection.sceneRevisionId);
+
+  const updateStoryboardDraft = React.useCallback((draft: StoryboardDraft) => {
+    const selection = selectedStoryboardSelection;
+    if (!selection) return;
+    const key = storyboardSelectionKey(selection);
+    setStoryboardByKey((current) => {
+      const record = current[key];
+      if (!record) return current;
+      return { ...current, [key]: { ...record, draft, dirty: true, error: null } };
+    });
+  }, [selectedStoryboardSelection]);
+
+  const newStoryboard = React.useCallback(() => {
+    const selection = selectedStoryboardSelection;
+    if (!selection || !storyboardSelectionIsValid) return;
+    const key = storyboardSelectionKey(selection);
+    storyboardBoardSelectionRef.current = null;
+    setStoryboardByKey((current) => {
+      const record = current[key];
+      if (!record || record.saving || record.approving) return current;
+      return { ...current, [key]: { ...record, selectedStoryboardId: null, draft: emptyStoryboardDraft(selectedContext?.snapshot ?? null), dirty: true, error: null } };
+    });
+  }, [selectedContext?.snapshot, selectedStoryboardSelection, storyboardSelectionIsValid]);
+
+  const loadStoryboard = React.useCallback(async (storyboardId: string) => {
+    const selection = selectedStoryboardSelection;
+    if (!selection || !storyboardSelectionIsValid) return;
+    const key = storyboardSelectionKey(selection);
+    const boardSelection: StoryboardBoardSelection = { ...selection, storyboardId };
+    storyboardBoardSelectionRef.current = boardSelection;
+    setStoryboardByKey((current) => current[key] ? { ...current, [key]: { ...current[key], loading: true, error: null } } : current);
+    try {
+      const board = await getStoryboard(projectId, storyboardId);
+      if (!isCurrentStoryboardResponse(storyboardSelectionRef.current, selection) || !isCurrentStoryboardBoardResponse(storyboardBoardSelectionRef.current, boardSelection)) {
+        clearStoryboardBusyState(setStoryboardByKey, key, "loading");
+        return;
+      }
+      setStoryboardByKey((current) => {
+        const record = current[key];
+        if (!record) return current;
+        const list = record.list.some((item) => item.id === board.id) ? record.list.map((item) => item.id === board.id ? board : item) : [...record.list, board];
+        return { ...current, [key]: { ...record, loading: false, loaded: true, list, selectedStoryboardId: board.id, draft: storyboardDraftFromBoard(board), dirty: false, error: null } };
+      });
+    } catch (error) {
+      if (!isCurrentStoryboardResponse(storyboardSelectionRef.current, selection) || !isCurrentStoryboardBoardResponse(storyboardBoardSelectionRef.current, boardSelection)) {
+        clearStoryboardBusyState(setStoryboardByKey, key, "loading");
+        return;
+      }
+      setStoryboardByKey((current) => current[key] ? { ...current, [key]: { ...current[key], loading: false, error: humanError(error, "The Storyboard could not be loaded.") } } : current);
+    }
+  }, [projectId, selectedStoryboardSelection, storyboardSelectionIsValid]);
+
+  const saveStoryboard = React.useCallback(async () => {
+    const selection = selectedStoryboardSelection;
+    const record = selectedStoryboardState;
+    const snapshot = selectedContext?.snapshot;
+    if (!selection || !record || !record.draft || !snapshot || !storyboardSelectionIsValid || record.saving || record.approving || !record.dirty) return;
+    const selectedBoard = record.list.find((board) => board.id === record.selectedStoryboardId) ?? null;
+    if (selectedBoard?.status === "superseded") return;
+    const key = storyboardSelectionKey(selection);
+    const boardSelection = selectedBoard ? { ...selection, storyboardId: selectedBoard.id } : null;
+    if (boardSelection) storyboardBoardSelectionRef.current = boardSelection;
+    setStoryboardByKey((current) => current[key] ? { ...current, [key]: { ...current[key], saving: true, error: null } } : current);
+    const input = {
+      contextSnapshotId: snapshot.id,
+      title: record.draft.title,
+      shots: record.draft.shots,
+      ...(selectedBoard ? { supersedesStoryboardId: selectedBoard.id, expectedSupersededVersion: selectedBoard.version } : { supersedesStoryboardId: null, expectedSupersededVersion: null }),
+      requestId: requestId("storyboard-create"),
+      actorId: "local-user",
+    };
+    try {
+      const result = await createStoryboard(projectId, selection.sceneId, input);
+      if (!isCurrentStoryboardResponse(storyboardSelectionRef.current, selection) || (boardSelection && !isCurrentStoryboardBoardResponse(storyboardBoardSelectionRef.current, boardSelection))) {
+        clearStoryboardBusyState(setStoryboardByKey, key, "saving");
+        return;
+      }
+      const created = result.storyboard;
+      setStoryboardByKey((current) => {
+        const currentRecord = current[key];
+        if (!currentRecord) return current;
+        const list = currentRecord.list.map((board) => board.id === selectedBoard?.id ? { ...board, status: "superseded" as const } : board);
+        return { ...current, [key]: { ...currentRecord, saving: false, loaded: true, list: [...list.filter((board) => board.id !== created.id), created], selectedStoryboardId: created.id, draft: storyboardDraftFromBoard(created), dirty: false, error: null } };
+      });
+      storyboardBoardSelectionRef.current = { ...selection, storyboardId: created.id };
+      setStatusMessage(result.idempotent ? "Storyboard draft replayed." : selectedBoard ? "Storyboard replacement draft saved." : "Storyboard draft saved.");
+    } catch (error) {
+      if (!isCurrentStoryboardResponse(storyboardSelectionRef.current, selection) || (boardSelection && !isCurrentStoryboardBoardResponse(storyboardBoardSelectionRef.current, boardSelection))) {
+        clearStoryboardBusyState(setStoryboardByKey, key, "saving");
+        return;
+      }
+      setStoryboardByKey((current) => current[key] ? { ...current, [key]: { ...current[key], saving: false, error: humanError(error, "The Storyboard could not be saved.") } } : current);
+      setStatusMessage("Storyboard save failed; the local draft remains available.");
+    }
+  }, [projectId, selectedContext?.snapshot, selectedStoryboardSelection, selectedStoryboardState, storyboardSelectionIsValid]);
+
+  const approveCurrentStoryboard = React.useCallback(async () => {
+    const selection = selectedStoryboardSelection;
+    const record = selectedStoryboardState;
+    if (!selection || !record || !storyboardSelectionIsValid || record.saving || record.approving || record.dirty || !record.selectedStoryboardId) return;
+    const board = record.list.find((item) => item.id === record.selectedStoryboardId);
+    if (!board || board.status !== "draft") return;
+    const key = storyboardSelectionKey(selection);
+    const boardSelection: StoryboardBoardSelection = { ...selection, storyboardId: board.id };
+    storyboardBoardSelectionRef.current = boardSelection;
+    setStoryboardByKey((current) => current[key] ? { ...current, [key]: { ...current[key], approving: true, error: null } } : current);
+    try {
+      const result = await approveStoryboard(projectId, board.id, { expectedVersion: board.version, requestId: requestId("storyboard-approve"), actorId: "local-user" });
+      if (!isCurrentStoryboardResponse(storyboardSelectionRef.current, selection) || !isCurrentStoryboardBoardResponse(storyboardBoardSelectionRef.current, boardSelection)) {
+        clearStoryboardBusyState(setStoryboardByKey, key, "approving");
+        return;
+      }
+      setStoryboardByKey((current) => {
+        const currentRecord = current[key];
+        if (!currentRecord) return current;
+        return { ...current, [key]: { ...currentRecord, approving: false, list: currentRecord.list.map((item) => item.id === result.storyboard.id ? result.storyboard : item), selectedStoryboardId: result.storyboard.id, draft: storyboardDraftFromBoard(result.storyboard), dirty: false, error: null } };
+      });
+      setStatusMessage(result.idempotent ? "Storyboard approval replayed." : "Storyboard approved.");
+    } catch (error) {
+      if (!isCurrentStoryboardResponse(storyboardSelectionRef.current, selection) || !isCurrentStoryboardBoardResponse(storyboardBoardSelectionRef.current, boardSelection)) {
+        clearStoryboardBusyState(setStoryboardByKey, key, "approving");
+        return;
+      }
+      setStoryboardByKey((current) => current[key] ? { ...current, [key]: { ...current[key], approving: false, error: humanError(error, "The Storyboard could not be approved.") } } : current);
+      setStatusMessage("Storyboard approval failed; review the current draft and retry.");
+    }
+  }, [projectId, selectedStoryboardSelection, selectedStoryboardState, storyboardSelectionIsValid]);
+
+  const reloadStoryboards = React.useCallback(() => {
+    if (!selectedStoryboardSelection) return;
+    setStoryboardReloadToken((value) => value + 1);
+  }, [selectedStoryboardSelection]);
+
   const reviewLink = React.useCallback(async (link: SceneEntityLink, decision: "confirmed" | "rejected") => {
     if (!selectedScene || !selectedRevisionId || !selectedAnalysis) return;
     const selection = { sceneId: selectedScene.id, sceneRevisionId: selectedRevisionId };
@@ -1405,6 +1664,14 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                   hasScene={Boolean(selectedScene)}
                   onContextPurposeChange={setContextPurpose}
                   onBuildContext={() => void buildContext()}
+                  storyboardState={selectedStoryboardState}
+                  storyboardSelectionValid={storyboardSelectionIsValid}
+                  onNewStoryboard={newStoryboard}
+                  onStoryboardDraftChange={updateStoryboardDraft}
+                  onLoadStoryboard={(storyboardId) => void loadStoryboard(storyboardId)}
+                  onSaveStoryboard={() => void saveStoryboard()}
+                  onApproveStoryboard={() => void approveCurrentStoryboard()}
+                  onReloadStoryboards={reloadStoryboards}
                   actions={selectedPatchState && !revisionDirty ? {
                     onAccept: (patch, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept", request),
                     onAcceptEdited: (patch, payload, request) => void runPatchMutation(selectedPatchState.selection, patch, "accept-edited", request, payload),
@@ -1532,6 +1799,14 @@ function CanonPatchReviewPanel({
   hasScene,
   onContextPurposeChange,
   onBuildContext,
+  storyboardState,
+  storyboardSelectionValid,
+  onNewStoryboard,
+  onStoryboardDraftChange,
+  onLoadStoryboard,
+  onSaveStoryboard,
+  onApproveStoryboard,
+  onReloadStoryboards,
 }: {
   review: ScenePatchReview | null;
   sceneContent: string;
@@ -1556,6 +1831,14 @@ function CanonPatchReviewPanel({
   hasScene: boolean;
   onContextPurposeChange: (purpose: ContextPurpose) => void;
   onBuildContext: () => void;
+  storyboardState: StoryboardState | null;
+  storyboardSelectionValid: boolean;
+  onNewStoryboard: () => void;
+  onStoryboardDraftChange: (draft: StoryboardDraft) => void;
+  onLoadStoryboard: (storyboardId: string) => void;
+  onSaveStoryboard: () => void;
+  onApproveStoryboard: () => void;
+  onReloadStoryboards: () => void;
 }) {
   return (
     <section className="mt-8 min-w-0 border-t border-line pt-6" aria-labelledby="canon-patch-review-heading" data-testid="canon-patch-review">
@@ -1615,6 +1898,14 @@ function CanonPatchReviewPanel({
         hasScene={hasScene}
         onPurposeChange={onContextPurposeChange}
         onBuild={onBuildContext}
+        storyboardState={storyboardState}
+        storyboardSelectionValid={storyboardSelectionValid}
+        onNew={onNewStoryboard}
+        onDraftChange={onStoryboardDraftChange}
+        onLoad={onLoadStoryboard}
+        onSave={onSaveStoryboard}
+        onApprove={onApproveStoryboard}
+        onReload={onReloadStoryboards}
       />
     </section>
   );
@@ -1872,6 +2163,14 @@ function ContextInspector({
   hasScene,
   onPurposeChange,
   onBuild,
+  storyboardState,
+  storyboardSelectionValid,
+  onNew,
+  onDraftChange,
+  onLoad,
+  onSave,
+  onApprove,
+  onReload,
 }: {
   state: ContextState | null;
   purpose: ContextPurpose;
@@ -1881,6 +2180,14 @@ function ContextInspector({
   hasScene: boolean;
   onPurposeChange: (purpose: ContextPurpose) => void;
   onBuild: () => void;
+  storyboardState: StoryboardState | null;
+  storyboardSelectionValid: boolean;
+  onNew: () => void;
+  onDraftChange: (draft: StoryboardDraft) => void;
+  onLoad: (storyboardId: string) => void;
+  onSave: () => void;
+  onApprove: () => void;
+  onReload: () => void;
 }) {
   const content = state?.snapshot?.content;
   const scene = content?.scene;
@@ -1914,6 +2221,7 @@ function ContextInspector({
           <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-provenance-heading" data-testid="context-provenance"><h5 id="context-provenance-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Provenance</h5>{provenance.length > 0 ? <ul className="mt-3 min-w-0 space-y-2">{provenance.map((item) => <li key={`${item.kind}-${item.recordId}`} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{item.kind}</span> · <span className="break-all font-mono">{item.recordId}</span> · version {item.version ?? "—"}{item.sourceId ? <> · source <span className="break-all font-mono">{item.sourceId}</span></> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No provenance records included.</p>}</section>
         </div>
       ) : !state?.loading && !state?.error ? <p className="mt-5 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No Context Snapshot loaded for this purpose and saved revision. Build one to inspect its frozen input.</p> : null}
+      <StoryboardEditor snapshot={state?.snapshot?.purpose === "storyboard" ? state.snapshot : null} state={storyboardState} selectionValid={storyboardSelectionValid} onNew={onNew} onDraftChange={onDraftChange} onLoad={onLoad} onSave={onSave} onApprove={onApprove} onReload={onReload} />
     </section>
   );
 }

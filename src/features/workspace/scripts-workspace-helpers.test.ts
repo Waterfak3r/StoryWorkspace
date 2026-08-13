@@ -7,6 +7,8 @@ import {
   contextSelectionKey,
   isCurrentContextResponse,
   isStaleContextResponse,
+  isCurrentStoryboardBoardResponse,
+  isCurrentStoryboardResponse,
   isCurrentAnalysisResponse,
   isCurrentPatchResponse,
   isStalePatchResponse,
@@ -24,8 +26,12 @@ import {
   isCurrentWorkspaceRevisionResponse,
   isFactPredicate,
   isStaleWorkspaceRevisionResponse,
+  isStaleStoryboardBoardResponse,
+  isStaleStoryboardResponse,
   statePredicateLabel,
   stateTierLabel,
+  storyboardBoardSelectionKey,
+  storyboardSelectionKey,
   workspaceRevisionSelectionKey,
 } from "./scripts-workspace-helpers";
 
@@ -208,5 +214,31 @@ describe("Phase 4 Context Snapshot selection helpers", () => {
     expect(isCurrentContextResponse({ ...selection, sceneRevisionId: "revision-2" }, selection)).toBe(false);
     expect(isCurrentContextResponse({ ...selection, purpose: "storyboard", policyId: "storyboard-default-v1" }, selection)).toBe(false);
     expect(isStaleContextResponse(null, selection)).toBe(true);
+  });
+});
+
+describe("Phase 5A Storyboard selection helpers", () => {
+  const selection = {
+    projectId: "project-1",
+    sceneId: "scene-1",
+    sceneRevisionId: "revision-1",
+    contextSnapshotId: "snapshot-1",
+  };
+  const boardSelection = { ...selection, storyboardId: "storyboard-1" };
+
+  it("keys Storyboard reads by the immutable Context Snapshot", () => {
+    expect(storyboardSelectionKey(selection)).toBe("project-1:scene-1:revision-1:snapshot-1");
+    expect(storyboardSelectionKey({ ...selection, contextSnapshotId: "snapshot-2" })).not.toBe(storyboardSelectionKey(selection));
+    expect(storyboardBoardSelectionKey(boardSelection)).toBe("project-1:scene-1:revision-1:snapshot-1:storyboard-1");
+  });
+
+  it("ignores late list and board detail responses after local selection changes", () => {
+    expect(isCurrentStoryboardResponse(selection, selection)).toBe(true);
+    expect(isCurrentStoryboardResponse({ ...selection, sceneRevisionId: "revision-2" }, selection)).toBe(false);
+    expect(isCurrentStoryboardResponse({ ...selection, contextSnapshotId: "snapshot-2" }, selection)).toBe(false);
+    expect(isStaleStoryboardResponse(null, selection)).toBe(true);
+    expect(isCurrentStoryboardBoardResponse(boardSelection, boardSelection)).toBe(true);
+    expect(isCurrentStoryboardBoardResponse({ ...boardSelection, storyboardId: "storyboard-2" }, boardSelection)).toBe(false);
+    expect(isStaleStoryboardBoardResponse(null, boardSelection)).toBe(true);
   });
 });

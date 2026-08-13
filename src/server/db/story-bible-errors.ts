@@ -2,6 +2,7 @@ import type { DocumentRevision, SceneRevision, ScriptDocument } from "@/domain/d
 import type { Entity, Fact } from "@/domain/story-bible";
 import type { Patch } from "@/domain/canon-patch";
 import type { SceneEntityLink } from "@/domain/scene-link";
+import type { Storyboard } from "@/domain/storyboard";
 
 export type StoryBibleValidationIssue = {
   path: Array<string | number>;
@@ -33,10 +34,10 @@ export class StoryBibleDataIntegrityError extends Error {
 }
 
 export class StoryBibleConflictError extends Error {
-  readonly resourceType: "document" | "revision" | "entity" | "fact";
-  readonly current: ScriptDocument | DocumentRevision | SceneRevision | Entity | Fact;
+  readonly resourceType: "document" | "revision" | "entity" | "fact" | "storyboard";
+  readonly current: ScriptDocument | DocumentRevision | SceneRevision | Entity | Fact | Storyboard;
 
-  constructor(resourceType: "document" | "revision" | "entity" | "fact", current: ScriptDocument | DocumentRevision | SceneRevision | Entity | Fact) {
+  constructor(resourceType: "document" | "revision" | "entity" | "fact" | "storyboard", current: ScriptDocument | DocumentRevision | SceneRevision | Entity | Fact | Storyboard) {
     super(`The ${resourceType} changed on the server. Review the current version before saving again.`);
     this.name = "StoryBibleConflictError";
     this.resourceType = resourceType;

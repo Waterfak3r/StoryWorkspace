@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { validationResponse } from "./http";
+import { storyBibleConflictResponse, validationResponse } from "./http";
 
 describe("API validation envelope", () => {
   it("preserves root refinement messages in the top-level message and form errors", async () => {
@@ -12,5 +12,12 @@ describe("API validation envelope", () => {
     expect(payload.error.message).toBe("A title is required before continuing");
     expect(payload.error.fieldErrors._form).toEqual(["A title is required before continuing"]);
     expect(payload.error.retryable).toBe(false);
+  });
+
+  it("returns the canonical Storyboard in a stable edit-conflict field", async () => {
+    const currentStoryboard = { id: "33333333-3333-4333-8333-333333333333", version: 2 };
+    const response = storyBibleConflictResponse("storyboard", currentStoryboard);
+    await expect(response.json()).resolves.toEqual({ error: { code: "EDIT_CONFLICT", message: "The resource changed on the server. Review the current version before saving again.", currentStoryboard, retryable: false } });
+    expect(response.status).toBe(409);
   });
 });

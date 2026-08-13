@@ -90,8 +90,8 @@ export function adaptationEditConflictResponse(currentAdaptation: unknown, messa
   );
 }
 
-export function storyBibleConflictResponse(resourceType: "document" | "revision" | "entity" | "fact", current: unknown, message = "The resource changed on the server. Review the current version before saving again.") {
-  const key = resourceType === "document" ? "currentDocument" : resourceType === "entity" ? "currentEntity" : resourceType === "fact" ? "currentFact" : "currentRevision";
+export function storyBibleConflictResponse(resourceType: "document" | "revision" | "entity" | "fact" | "storyboard", current: unknown, message = "The resource changed on the server. Review the current version before saving again.") {
+  const key = resourceType === "document" ? "currentDocument" : resourceType === "entity" ? "currentEntity" : resourceType === "fact" ? "currentFact" : resourceType === "storyboard" ? "currentStoryboard" : "currentRevision";
   return NextResponse.json({ error: { code: "EDIT_CONFLICT", message, [key]: current, retryable: false } }, { status: 409 });
 }
 

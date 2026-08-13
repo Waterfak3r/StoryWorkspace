@@ -71,6 +71,51 @@ export function isStaleContextResponse(current: ContextSelection | null | undefi
   return !isCurrentContextResponse(current, response);
 }
 
+export type StoryboardSelection = {
+  projectId: string;
+  sceneId: string;
+  sceneRevisionId: string;
+  contextSnapshotId: string;
+};
+
+export type StoryboardBoardSelection = StoryboardSelection & {
+  storyboardId: string;
+};
+
+export function storyboardSelectionKey(selection: StoryboardSelection) {
+  return [selection.projectId, selection.sceneId, selection.sceneRevisionId, selection.contextSnapshotId].join(":");
+}
+
+export function sameStoryboardSelection(left: StoryboardSelection | null | undefined, right: StoryboardSelection | null | undefined) {
+  return Boolean(left && right && storyboardSelectionKey(left) === storyboardSelectionKey(right));
+}
+
+/** Ignore a Storyboard list response after the Context Snapshot/Scene changes. */
+export function isCurrentStoryboardResponse(current: StoryboardSelection | null | undefined, response: StoryboardSelection) {
+  return sameStoryboardSelection(current, response);
+}
+
+export function isStaleStoryboardResponse(current: StoryboardSelection | null | undefined, response: StoryboardSelection) {
+  return !isCurrentStoryboardResponse(current, response);
+}
+
+export function storyboardBoardSelectionKey(selection: StoryboardBoardSelection) {
+  return `${storyboardSelectionKey(selection)}:${selection.storyboardId}`;
+}
+
+export function sameStoryboardBoardSelection(left: StoryboardBoardSelection | null | undefined, right: StoryboardBoardSelection | null | undefined) {
+  return Boolean(left && right && storyboardBoardSelectionKey(left) === storyboardBoardSelectionKey(right));
+}
+
+/** Detail responses additionally carry the board ID so a late load cannot replace another board. */
+export function isCurrentStoryboardBoardResponse(current: StoryboardBoardSelection | null | undefined, response: StoryboardBoardSelection) {
+  return sameStoryboardBoardSelection(current, response);
+}
+
+export function isStaleStoryboardBoardResponse(current: StoryboardBoardSelection | null | undefined, response: StoryboardBoardSelection) {
+  return !isCurrentStoryboardBoardResponse(current, response);
+}
+
 export function sameWorkspaceRevisionSelection(left: WorkspaceRevisionSelection | null | undefined, right: WorkspaceRevisionSelection | null | undefined) {
   return Boolean(left && right
     && left.projectId === right.projectId

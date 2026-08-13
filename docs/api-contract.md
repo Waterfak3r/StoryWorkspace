@@ -16,7 +16,7 @@ Successful JSON responses use `{ "data": ... }`. Failed responses use:
 }
 ```
 
-Expected codes include `VALIDATION_ERROR`, `NOT_FOUND`, `EDIT_CONFLICT`, `IDEMPOTENCY_CONFLICT`, `ANALYSIS_STALE`, `AI_NOT_CONFIGURED`, `AI_TIMEOUT`, `AI_AUTHENTICATION_ERROR`, `AI_RATE_LIMITED`, `AI_PROVIDER_ERROR`, `AI_INVALID_RESPONSE`, `AI_GENERATION_ALREADY_ACCEPTED`, `AI_GENERATION_ALREADY_CONSUMED`, and `INTERNAL_ERROR`. An edit conflict includes the canonical `currentChapter`, `currentAdaptation`, or `currentLink` for the affected resource. A consumed generation includes `consumedBy` (`chapter` or `adaptation`) and, for an adaptation consumer, a typed `currentAdaptation`. Route handlers log diagnostic details server-side but return no stack traces or secrets.
+Expected codes include `VALIDATION_ERROR`, `NOT_FOUND`, `EDIT_CONFLICT`, `IDEMPOTENCY_CONFLICT`, `ANALYSIS_STALE`, `AI_NOT_CONFIGURED`, `AI_TIMEOUT`, `AI_AUTHENTICATION_ERROR`, `AI_RATE_LIMITED`, `AI_PROVIDER_ERROR`, `AI_INVALID_RESPONSE`, `AI_GENERATION_ALREADY_ACCEPTED`, `AI_GENERATION_ALREADY_CONSUMED`, and `INTERNAL_ERROR`. An edit conflict includes the canonical `currentChapter`, `currentAdaptation`, `currentLink`, or `currentStoryboard` for the affected resource. A consumed generation includes `consumedBy` (`chapter` or `adaptation`) and, for an adaptation consumer, a typed `currentAdaptation`. Route handlers log diagnostic details server-side but return no stack traces or secrets.
 
 Phase 2 adds `PATCH_CONFLICT` and `PATCH_RESOLVED`; both include the canonical `patch`/`currentPatch` and are non-retryable until the author reviews the proposal.
 
@@ -72,11 +72,20 @@ Phase 4 Context Builder routes:
 
 Snapshot content is provider-neutral and contains the frozen Scene, included confirmed-link entities, policy-selected Base Facts, resolved State, structural budget metadata, `missing`, `conflicts`, `warnings`, `omitted`, and provenance. Candidate links, Inference, RAG, assets, and Provider requests are not included in this slice. Dirty Scene revisions cannot start a build in the workspace. Request IDs use a full input fingerprint; identical content is semantically deduplicated by stable content hash without mutating prior content.
 
+Phase 5A Storyboard routes:
+
+- `POST /api/projects/{projectId}/scenes/{sceneId}/storyboards` atomically creates and seals one immutable Storyboard with all ordered ShotSpecs from a same-project Context Snapshot. No partially written aggregate is readable. Optional `supersedesStoryboardId` plus expected version creates a replacement and supersedes the old board.
+- `GET /api/projects/{projectId}/scenes/{sceneId}/storyboards?contextSnapshotId=&status=` lists strict project/Scene-scoped summaries with ShotSpecs.
+- `GET /api/projects/{projectId}/storyboards/{storyboardId}` reads one complete Storyboard by project scope.
+- `POST /api/projects/{projectId}/storyboards/{storyboardId}/approve` uses expected version and request ID to transition draft to approved idempotently.
+
+Shot subjects, location and prop IDs must be present in the bound Snapshot with the matching entity type. Content cannot be updated; editing creates a replacement Storyboard and preserves the older Storyboard/ShotSpec input.
+
 ## SQLite invariants
 
 - Every connection enables foreign keys, a finite busy timeout, and WAL when backed by a file.
 - Schema bootstrap is idempotent and versioned with `PRAGMA user_version`.
-- Phase 0–4 migrations bring the local schema to version 14 from the MVP baseline. New cross-project references are checked in repositories and SQLite project-guard triggers; revisions, evidence, analysis identities, patch payload/provenance, Fact values, EntityState values, and Context Snapshot content are immutable, with only documented lifecycle/version/latest transitions. Pending Patches are Canon-only review commands with operation-specific target/baseVersion and application-result shape; Patch status/version and Inference lifecycle transitions are trigger-guarded. v11 enforces Fact/Inference scope shape and same-project resolvable entity references; v12 requires accepted non-null ModelRuns to be succeeded and source-bound; v13 adds document-scoped continuity, state provenance, and atomic `add_state` acceptance; v14 additively stores provider-neutral Context Snapshots whose latest index can change without changing content. A new revision that removes accepted text evidence creates a reviewable Fact retract suggestion; it never directly mutates Canon.
+- Phase 0–5A migrations bring the local schema to version 15 from the MVP baseline. New cross-project references are checked in repositories and SQLite project-guard triggers; revisions, evidence, analysis identities, patch payload/provenance, Fact values, EntityState values, Context Snapshot content, and ShotSpec content are immutable, with only documented lifecycle/version/latest transitions. Pending Patches are Canon-only review commands with operation-specific target/baseVersion and application-result shape; Patch status/version and Inference lifecycle transitions are trigger-guarded. v11 enforces Fact/Inference scope shape and same-project resolvable entity references; v12 requires accepted non-null ModelRuns to be succeeded and source-bound; v13 adds document-scoped continuity, state provenance, and atomic `add_state` acceptance; v14 additively stores provider-neutral Context Snapshots whose latest index can change without changing content; v15 binds immutable Storyboards/ShotSpecs to a Snapshot and uses CAS lifecycle transitions. A new revision that removes accepted text evidence creates a reviewable Fact retract suggestion; it never directly mutates Canon.
 - Multi-record changes run inside an explicit transaction.
 - SQL parameters are always bound. User input is never interpolated into SQL.
 - Database files, WAL files, and test databases are ignored by Git.
