@@ -25,6 +25,7 @@
 - 主代理模型是gpt-5.6-sol effort为xhigh, 是产品构思者与架构负责人，负责范围、路线、接口、拆解、分发任务给subagent luna-max和claude code、协调和最终验收。
 - `luna-max` 是主要实现代理，负责按任务说明编码、测试并报告变更。
 - Claude Code 通过 Herdr 使用，负责重复性或机械性工作、批量处理及独立审查；启动时必须传入 `--permission-mode auto`（即 `herdr agent start <name> --kind claude --pane <paneId> -- --permission-mode auto`）。
+- Windows 下若标准启动因 npm shim 报 `%1 is not a valid Win32 application`，保留 pane 并用 `herdr pane run <paneId> "claude.cmd --permission-mode auto"` 恢复；随后必须确认 Herdr 已识别 Claude、界面显示 `auto mode on`，再命名 agent 并派发任务。
 - Claude Code 不自行改变产品范围或核心架构；发现问题时提交证据与建议。
 - Claude Code 调用完成、取消或确认无需继续后，主代理立即关闭对应 Herdr pane。
 - Herdr 的 prompt/wait timeout 只表示本次等待结束，不是取消或关闭依据；主代理必须继续检查 agent 状态和可见/最近输出，判断是否仍在工作、思考、组合结果、等待输入或已完成。
