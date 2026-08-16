@@ -7,7 +7,8 @@ import { z } from "zod";
 import { parseJsonRecord, writeJsonFile } from "../fs/json";
 
 export const DEFAULT_PROVIDER_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_IMAGE_SIZE = "1024x1024";
+export const DEFAULT_IMAGE_SIZE = "3840x2160";
+export const DEFAULT_IMAGE_QUALITY = "high";
 export const DEFAULT_USER_CONFIG_PATH = ".data/user/providers.json";
 
 export const textProtocolSchema = z.enum(["auto", "chat", "responses"]);
@@ -24,11 +25,19 @@ export const storedImageProviderSchema = z.strictObject({
   apiKey: z.string(),
   model: z.string(),
   size: z.string(),
+  quality: z.string().optional(),
 });
 
 export const storedProviderSettingsSchema = z.strictObject({
   text: storedTextProviderSchema,
   image: storedImageProviderSchema,
+});
+
+/** Read accepts a leftover disk `video` key then drops it on write. */
+const storedProviderSettingsReadSchema = z.strictObject({
+  text: storedTextProviderSchema,
+  image: storedImageProviderSchema,
+  video: z.unknown().optional(),
 });
 
 export const putTextProviderSchema = z.strictObject({
@@ -43,6 +52,7 @@ export const putImageProviderSchema = z.strictObject({
   baseUrl: z.string().optional(),
   model: z.string().optional(),
   size: z.string().optional(),
+  quality: z.string().optional(),
   apiKey: z.string().optional(),
   clearApiKey: z.boolean().optional(),
 });
@@ -73,6 +83,7 @@ export type ResolvedImageProvider = {
   apiKey: string;
   model: string;
   size: string;
+  quality: string;
 };
 
 export type PublicTextProviderView = {
@@ -88,6 +99,7 @@ export type PublicImageProviderView = {
   baseUrl: string;
   model: string;
   size: string;
+  quality: string;
   apiKeyConfigured: boolean;
   apiKeyHint: string;
   source: ProviderKeySource;
@@ -101,7 +113,7 @@ export type PublicProviderSettings = {
 export function emptyProviderSettings(): StoredProviderSettings {
   return {
     text: { baseUrl: "", apiKey: "", model: "", protocol: "auto" },
-    image: { baseUrl: "", apiKey: "", model: "", size: "" },
+    image: { baseUrl: "", apiKey: "", model: "", size: "", quality: "" },
   };
 }
 
@@ -116,7 +128,11 @@ export function readProviderSettings(): StoredProviderSettings {
   if (!fs.existsSync(filePath)) {
     return emptyProviderSettings();
   }
-  return parseJsonRecord(filePath, storedProviderSettingsSchema);
+  const raw = parseJsonRecord(filePath, storedProviderSettingsReadSchema);
+  return {
+    text: raw.text,
+    image: raw.image,
+  };
 }
 
 export function writeProviderSettings(settings: StoredProviderSettings): void {
@@ -154,6 +170,7 @@ export function resolveImageProvider(stored = readProviderSettings()): ResolvedI
     apiKey: firstNonEmpty(stored.image.apiKey, envValue("IMAGE_API_KEY"), envValue("AI_API_KEY")),
     model: firstNonEmpty(stored.image.model, envValue("IMAGE_MODEL")),
     size: firstNonEmpty(stored.image.size, envValue("IMAGE_SIZE"), DEFAULT_IMAGE_SIZE),
+    quality: firstNonEmpty(stored.image.quality, envValue("IMAGE_QUALITY"), DEFAULT_IMAGE_QUALITY),
   };
 }
 
@@ -178,6 +195,7 @@ export function toPublicProviderSettings(stored = readProviderSettings()): Publi
       baseUrl: image.baseUrl,
       model: image.model,
       size: image.size,
+      quality: image.quality,
       apiKeyConfigured: Boolean(image.apiKey),
       apiKeyHint: apiKeyHint(image.apiKey),
       source: keySource(stored.image.apiKey, envValue("IMAGE_API_KEY") ?? envValue("AI_API_KEY")),
@@ -205,6 +223,7 @@ function mergeImageProvider(current: StoredImageProvider, patch: PutProviderSett
     baseUrl: patch.baseUrl === undefined ? current.baseUrl : patch.baseUrl.trim(),
     model: patch.model === undefined ? current.model : patch.model.trim(),
     size: patch.size === undefined ? current.size : patch.size.trim(),
+    quality: patch.quality === undefined ? current.quality ?? "" : patch.quality.trim(),
     apiKey: nextStoredApiKey(current.apiKey, patch.apiKey, patch.clearApiKey),
   };
 }
@@ -232,6 +251,7 @@ function normalizeStoredSettings(settings: StoredProviderSettings): StoredProvid
       apiKey: settings.image.apiKey.trim(),
       model: settings.image.model.trim(),
       size: settings.image.size.trim(),
+      quality: (settings.image.quality ?? "").trim(),
     },
   };
 }

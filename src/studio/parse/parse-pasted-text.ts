@@ -1,14 +1,19 @@
 import "server-only";
 
+import { STUDIO_ENTITY_KINDS } from "../domain";
 import { StudioAiError, StudioValidationError } from "../errors";
-import { readProject } from "../fs";
+import { listEntities, readProject } from "../fs";
 import { normalizeLlmParseProposal } from "./normalize-proposal";
+import { preserveProposalScripts } from "./preserve-scripts";
 import { allocateParseRunId, nowIso, writeParseRun } from "./runs";
 import {
   llmParseProposalSchema,
   type CompleteJson,
   type StudioParseRun,
 } from "./schemas";
+
+const EXTRACT_INSTRUCTIONS =
+  "Extract proposed scenes and entities from this story text. Copy each scene's original wording into script, including all dialogue; do not write a synopsis.";
 
 export async function parsePastedText(
   projectId: string,
@@ -22,10 +27,19 @@ export async function parsePastedText(
     throw new StudioValidationError("Paste some text to parse.", "text");
   }
 
-  const raw = await completeJson(
-    llmParseProposalSchema,
-    `Extract proposed scenes and entities from this story text.\n\n${sourceText}`,
-  );
+  const catalogEntities = STUDIO_ENTITY_KINDS.flatMap((kind) => listEntities(projectId, kind));
+  const extractBlock = `${EXTRACT_INSTRUCTIONS}\n\n${sourceText}`;
+  const prompt =
+    catalogEntities.length > 0
+      ? [
+          "Existing reusable entities in this project. Reuse these exact names when the story refers to them. Clothing and wearable items are costumes (kind costume).",
+          ...catalogEntities.map((entity) => `${entity.kind}: ${entity.name}`),
+          "",
+          extractBlock,
+        ].join("\n")
+      : extractBlock;
+
+  const raw = await completeJson(llmParseProposalSchema, prompt);
 
   const normalized = normalizeLlmParseProposal(raw);
   const parsed = llmParseProposalSchema.safeParse(normalized);
@@ -42,13 +56,15 @@ export async function parsePastedText(
     );
   }
 
+  const preserved = preserveProposalScripts(sourceText, parsed.data);
+
   const now = nowIso();
   const run: StudioParseRun = {
     id: allocateParseRunId(projectId),
     status: "pending",
     sourceText,
-    proposedScenes: parsed.data.proposedScenes,
-    proposedEntities: parsed.data.proposedEntities,
+    proposedScenes: preserved.proposedScenes,
+    proposedEntities: preserved.proposedEntities,
     createdAt: now,
     updatedAt: now,
   };

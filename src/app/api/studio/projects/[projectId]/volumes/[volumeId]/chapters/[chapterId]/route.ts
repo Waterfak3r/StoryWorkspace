@@ -1,5 +1,5 @@
 import { updateChapterInputSchema } from "@/studio/domain";
-import { updateChapter } from "@/studio/fs";
+import { deleteChapter, updateChapter } from "@/studio/fs";
 import { parseStudioBody, runStudioRoute, studioDataResponse } from "@/studio/http";
 
 export const runtime = "nodejs";
@@ -15,5 +15,13 @@ export async function PATCH(request: Request, context: ChapterRouteContext) {
     const input = await parseStudioBody(request, updateChapterInputSchema);
     const chapter = updateChapter(projectId, volumeId, chapterId, input);
     return studioDataResponse({ chapter });
+  });
+}
+
+export async function DELETE(_request: Request, context: ChapterRouteContext) {
+  return runStudioRoute(async () => {
+    const { projectId, volumeId, chapterId } = await context.params;
+    const result = deleteChapter(projectId, volumeId, chapterId);
+    return studioDataResponse(result);
   });
 }

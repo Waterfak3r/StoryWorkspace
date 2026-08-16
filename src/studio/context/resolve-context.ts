@@ -87,6 +87,16 @@ function loadReferencedEntities(projectId: string, scene: StudioScene): StudioEn
   if (scene.location && !ids.includes(scene.location)) {
     ids.push(scene.location);
   }
+  for (const id of scene.props) {
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  for (const id of scene.costumes) {
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
 
   const entities: StudioEntity[] = [];
   for (const id of ids) {

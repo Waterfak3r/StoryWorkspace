@@ -1,19 +1,23 @@
 # MVP：可完成的第一垂直切片
 
-本文件是本分支的产品范围与**当前实现基线**。完整方向见 [concept.md](./concept.md)。未列入本页的视频、配音、音乐、完整 State/Version/Stale 不得借“目标规格存在”而进入实现。不要双栈 SQLite。
+本文件是本分支的产品范围与**当前实现基线**。完整方向见 [concept.md](./concept.md)。
 
-`Agents.md` 只保留协作规则；基线以本节为准。
+**限制随用户补充：** 「当前限制」不是开篇冻结表。用户新声明的不做项写入该节；用户明确要做的能力从限制划出并写入必做/切片。最新用户覆盖优先于本页旧句与 `concept.md` 里的远期条目。`concept.md` 或旧切片不得单独当作实现许可。不要双栈 SQLite。
+
+`Agents.md` 只保留协作规则；基线以本文件最新文本为准。
 
 ## 切片状态（已核对仓库）
 
 | 切片 | 状态 |
 |------|------|
-| [01 JSON 工作区](./slice-01-json-workspace.md) | 已实现：工作区根 + 项目文件夹 JSON + Story 树/剧本 + 角色/地点 |
+| [01 JSON 工作区](./slice-01-json-workspace.md) | 已实现：工作区根 + 项目文件夹 JSON + Story 树/剧本 + 角色/地点/道具/服饰 |
 | [02 解析确认](./slice-02-parse-confirm.md) | 已实现：粘贴 → 待确认提案 → 人工确认；新场写入**当前选中的卷/章** |
 | [03 分镜 + Context](./slice-03-storyboard-context.md) | 已实现：可编辑 Shot；可检查快照 |
 | [04 生图 + Workflow](./slice-04-generate-workflow.md) | 已实现：假/真 Image adapter、锁定、带约束重生成、Workflow/Outputs |
+| 05 可灵文生视频 | **已撤回**（见 [ADR 017](../decisions/017-cut-video-comics-only.md)）：studio 不做 Kling/视频生成 |
 | Settings / 文本协议 | 已实现（切片后补）：用户级 Provider；`auto` / `chat` / `responses`；OpenCode Go 走 `/chat/completions` |
-| Story 选中与实体挂接 | 已实现（切片后补）：卷/章/场可点选；本场检索添加角色/地点 |
+| Story 选中与实体挂接 | 已实现（切片后补）：卷/章/场可点选；本场检索添加角色/地点/道具/服饰 |
+| [Story 删除](./slice-05-story-delete.md) | 已实现：卷/章/场级联硬删 + 确认弹窗；实体不删 |
 
 ## 当前实现基线
 
@@ -21,7 +25,7 @@
 - 项目真相：`STORY_WORKSPACE_ROOT`（默认 `.data/projects`）下的项目文件夹 + JSON。不设 `STORY_WORKSPACE_DB_PATH` 也能列/建/开项目。`src/server/db/**` 仍在磁盘，不是产品真相，新入口不得引用。
 - 密钥：环境变量或用户级 `.data/user/providers.json`（Settings 写入；`STORY_USER_CONFIG` 可改路径）。**不进**项目 JSON、不进 GET 明文、不进 Git。项目树里的 `config/providers.json` 是规划占位，运行时未作为真相。
 - 文本 API：OpenAI 兼容优先。`protocol=auto` 时 OpenCode Go（`opencode.ai` / `/zen/go`）走 Chat Completions；其它地址先 `/responses`，404/405 再试 chat。
-- 生图：已配 Image key+model 则调兼容 Images API；否则假 adapter 写 1×1 PNG（测试默认注入假 adapter）。
+- 生图：已配 Image key+model 则调 OpenAI-compatible Images API（`/images/generations`，quality+n）；Settings 预设钠API 4K：`https://naapi.cc/v1` + `gpt-image-2` + `3840x2160` + quality high + `b64_json`；否则假 adapter 写 1×1 PNG（测试默认注入假 adapter）。本分支多模态只做漫画静帧/分镜生图，不做视频。
 - 可沿用：`src/features/i18n/`、`globals.css` token、`start-local.ps1`、工具链、假 Provider 测试夹具。
 - 只借概念、已在 `src/studio` 重写：Context Resolver、Entity 身份 vs 场引用、可编辑 Storyboard、Compiler/Adapter、Lock/Retry、Workflow node。
 - 不搬进主路径：SQLite schema、章节/大纲/圣经/改编产品页、Phase 0–5C 路由、Fake Video 页。
@@ -38,8 +42,8 @@
 | 模块 | 职责 |
 |------|------|
 | 项目管理 | 新建 / 打开本地项目目录 |
-| 内容结构 | Volume → Chapter → Scene 树 + 剧本编辑 |
-| 实体管理 | 角色 / 地点 的创建、编辑、参考图 |
+| 内容结构 | Volume → Chapter → Scene 树 + 剧本编辑 + **删除**（级联硬删，确认弹窗） |
+| 实体管理 | 角色 / 地点 / 道具 / 服饰 的创建、编辑、参考图 |
 | 导入解析 | 粘贴文本 → AI 提取 Scene + Entity → 人工确认 |
 | Context Resolver | 生成时自动组装实体、状态、风格、Intent、前镜连续性 |
 | Storyboard | Scene → 多个可编辑 Shot |
@@ -47,13 +51,18 @@
 | 单镜头重生成 | Agent 读取前后状态，输出连续性约束再生成 |
 | Workflow 面板 | 节点状态：待跑 / 成功 / 失败 / 锁定；可点 Shot 重跑 |
 
-## 明确不做（本切片）
+## 当前限制（随用户决策补充）
 
-- 视频、配音、音乐、混音、成片合成
+用户补充：多模态只做漫画静帧 / 分镜生图；不做视频（Kling 已撤回，[ADR 017](../decisions/017-cut-video-comics-only.md)）。
+
+仍有效：
+
+- 配音、音乐、混音、成片合成
 - 完整 Version / Stale / 平行世界时间轴
-- 组织 / Creature 等扩展实体
+- 组织 / Creature 等扩展实体（道具与服饰已纳入一等实体）
 - Electron / Tauri 桌面壳
 - 把旧 SQLite 故事库自动迁移进新项目格式
+- 本决策未要求的漫画页排版 / 分镜网格 / 新 comics compiler（未另开切片前不做）
 
 ## 页面
 
@@ -90,7 +99,7 @@ Workflow 是演示核心：能看见节点状态，能重跑某个 Shot，能看
 my-project/
 ├── project.json
 ├── content/volumes/.../chapters/.../scenes/scene-01.json
-├── entities/characters/  locations/  props/
+├── entities/characters/  locations/  props/  costumes/
 ├── assets/images/  voices/
 ├── states/content-states/  continuity/
 ├── styles/default.json
@@ -101,7 +110,7 @@ my-project/
 
 ## 精简模型
 
-**Scene**：`id`、`title`、`script`、`characters[]`、`location`、`props[]`、`intent`、`shots[]`
+**Scene**：`id`、`title`、`script`、`characters[]`、`location`、`props[]`、`costumes[]`、`intent`、`shots[]`
 
 **Character**：`id`、`name`、`description`、`visual.base`、`visual.references[]`、`states.default`
 
@@ -112,4 +121,4 @@ my-project/
 - 继续用现有 Next.js App Router + TypeScript + Zod + Vitest + Playwright。本地 Web 即可；桌面壳后期再加。
 - 存储为工作区根目录下的项目文件夹 + JSON。不再以 SQLite 为项目真相。
 - AI / 生图走 OpenAI 兼容优先的适配层；用户自备 Key（Settings 或环境变量）。
-- 「解析 → 分镜 → 生图 → 带约束重生成」主链已通；后续只补明确写入切片的缺口。
+- 「解析 → 分镜 → 生图 → 带约束重生成」主链已通；后续只补本页已写缺口与用户新补的必做/限制。

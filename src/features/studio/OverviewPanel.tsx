@@ -20,6 +20,8 @@ export function OverviewPanel({
     scenes: number;
     characters: number;
     locations: number;
+    props: number;
+    costumes: number;
   } | null>(null);
   const [error, setError] = useState("");
 
@@ -30,8 +32,10 @@ export function OverviewPanel({
         getStudioTree(project.id),
         listStudioEntities(project.id, "character"),
         listStudioEntities(project.id, "location"),
+        listStudioEntities(project.id, "prop"),
+        listStudioEntities(project.id, "costume"),
       ])
-        .then(([tree, characters, locations]) => {
+        .then(([tree, characters, locations, props, costumes]) => {
           if (cancelled) {
             return;
           }
@@ -39,6 +43,8 @@ export function OverviewPanel({
             ...countStoryTree(tree),
             characters: characters.length,
             locations: locations.length,
+            props: props.length,
+            costumes: costumes.length,
           });
         })
         .catch((cause) => {
@@ -61,6 +67,8 @@ export function OverviewPanel({
         { label: t("Scenes"), value: counts.scenes },
         { label: t("Characters"), value: counts.characters },
         { label: t("Locations"), value: counts.locations },
+        { label: t("Props"), value: counts.props },
+        { label: t("Costumes"), value: counts.costumes },
       ]
     : [];
 
@@ -87,7 +95,7 @@ export function OverviewPanel({
                 <dd className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-ink">{formatNumber(item.value)}</dd>
               </div>
             ))
-          : ["volumes", "chapters", "scenes", "characters", "locations"].map((key) => (
+          : ["volumes", "chapters", "scenes", "characters", "locations", "props", "costumes"].map((key) => (
               <div key={key} className="h-24 animate-pulse rounded-xl border border-line bg-surface-muted" />
             ))}
       </dl>

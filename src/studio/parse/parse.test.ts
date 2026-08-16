@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { StudioAiError, StudioNotFoundError } from "../errors";
-import { createChapter, createProject, createVolume, getWorkspaceRoot, listEntities, readScene, readTree } from "../fs";
+import {
+  createChapter,
+  createEntity,
+  createProject,
+  createVolume,
+  getWorkspaceRoot,
+  listEntities,
+  readScene,
+  readTree,
+} from "../fs";
 import { confirmParseRun } from "./confirm-parse-run";
 import { parsePastedText } from "./parse-pasted-text";
 import type { CompleteJson, LlmParseProposal } from "./schemas";
@@ -64,6 +73,23 @@ describe("parse pasted text", () => {
     expect(readTree(project.id).volumes[0]?.chapters[0]?.scenes).toHaveLength(1);
   });
 
+  it("includes an existing entity catalog in the completeJson user prompt", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    createEntity(project.id, { kind: "costume", name: "Wool coat" });
+
+    let capturedPrompt = "";
+    const run = await parsePastedText(project.id, "Jill waits on the harbor in a Wool coat.", async (_schema, prompt) => {
+      capturedPrompt = prompt;
+      return harborProposal();
+    });
+
+    expect(capturedPrompt).toContain("costume: Wool coat");
+    expect(capturedPrompt).toContain("Existing reusable entities");
+    expect(capturedPrompt).toContain("Jill waits on the harbor in a Wool coat.");
+    expect(run.status).toBe("pending");
+    expect(existsSync(path.join(getWorkspaceRoot(), project.id, "imports", "parse-runs", `${run.id}.json`))).toBe(true);
+  });
+
   it("does not write a parse run when the model JSON is invalid", async () => {
     const project = createProject({ title: "Harbor Night" });
     const projectDir = path.join(getWorkspaceRoot(), project.id);
@@ -87,25 +113,35 @@ describe("parse pasted text", () => {
           title: "Harbor watch",
           characterNames: ["Jill"],
           locationName: "Harbor",
+          propNames: ["Lantern"],
+          costumeNames: ["Watch coat"],
           extra: "drop",
         },
       ],
-      entities: [{ id: "Jill", kind: "Character", name: "Jill" }],
+      entities: [
+        { id: "Jill", kind: "Character", name: "Jill" },
+        { kind: "道具", name: "Lantern", description: "Oil lamp." },
+        { kind: "服饰", name: "Watch coat", description: "Heavy navy coat." },
+      ],
     }));
 
     expect(run.status).toBe("pending");
     expect(run.proposedScenes).toHaveLength(1);
-    expect(run.proposedEntities).toHaveLength(1);
+    expect(run.proposedEntities).toHaveLength(3);
 
     const scene = run.proposedScenes[0]!;
     const entity = run.proposedEntities[0]!;
+    const prop = run.proposedEntities[1]!;
+    const costume = run.proposedEntities[2]!;
 
     expect(scene.key).toMatch(/^[a-z][a-z0-9-]{0,62}$/);
     expect(scene.title).toBe("Harbor watch");
-    expect(scene.script).toBe("");
+    expect(scene.script).toBe("Jill waits on the harbor.");
     expect(scene.intent).toBe("");
     expect(scene.characterNames).toEqual(["Jill"]);
     expect(scene.locationName).toBe("Harbor");
+    expect(scene.propNames).toEqual(["Lantern"]);
+    expect(scene.costumeNames).toEqual(["Watch coat"]);
     expect(scene).not.toHaveProperty("extra");
     expect(scene).not.toHaveProperty("id");
 
@@ -114,12 +150,191 @@ describe("parse pasted text", () => {
     expect(entity.name).toBe("Jill");
     expect(entity.description).toBe("");
     expect(entity).not.toHaveProperty("id");
+    expect(prop.kind).toBe("prop");
+    expect(prop.name).toBe("Lantern");
+    expect(costume.kind).toBe("costume");
+    expect(costume.name).toBe("Watch coat");
+  });
+
+  it("normalizes snake_case, Chinese kinds, and drops unknown entities", async () => {
+    const project = createProject({ title: "Harbor Night" });
+
+    const run = await parsePastedText(project.id, "Jill waits on the harbor.", async () => ({
+      proposed_scenes: [
+        {
+          name: "Harbor watch",
+          characters: ["Jill"],
+        },
+      ],
+      proposed_entities: [
+        { kind: "角色", name: "Jill" },
+        { kind: "地点", title: "Harbor" },
+        { kind: "组织", name: "Guild" },
+      ],
+    }));
+
+    expect(run.status).toBe("pending");
+    expect(run.proposedScenes).toHaveLength(1);
+    expect(run.proposedEntities).toHaveLength(2);
+
+    const scene = run.proposedScenes[0]!;
+    expect(scene.title).toBe("Harbor watch");
+    expect(scene.characterNames).toEqual(["Jill"]);
+    expect(scene.propNames).toEqual([]);
+    expect(scene.costumeNames).toEqual([]);
+    expect(scene).toHaveProperty("propNames");
+    expect(scene).toHaveProperty("costumeNames");
+
+    expect(run.proposedEntities.map((entity) => entity.kind).sort()).toEqual(["character", "location"]);
+    expect(run.proposedEntities.find((entity) => entity.kind === "character")?.name).toBe("Jill");
+    expect(run.proposedEntities.find((entity) => entity.kind === "location")?.name).toBe("Harbor");
+    expect(run.proposedEntities.some((entity) => entity.name === "Guild")).toBe(false);
+  });
+
+  it("replaces abridged model scripts with the full pasted source", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const sourceText = [
+      "Night on the quay.",
+      'Jill: "Any ships?"',
+      'Tom: "None yet."',
+    ].join("\n");
+
+    const run = await parsePastedText(
+      project.id,
+      sourceText,
+      fakeCompleteJson({
+        proposedScenes: [
+          {
+            key: "scene-a",
+            title: "Harbor watch",
+            script: "Jill waits.",
+            intent: "Establish Jill at night.",
+            characterNames: ["Jill"],
+            locationName: "Harbor",
+            propNames: [],
+            costumeNames: [],
+          },
+        ],
+        proposedEntities: [
+          { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
+          { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
+        ],
+      }),
+    );
+
+    expect(run.proposedScenes).toHaveLength(1);
+    expect(run.proposedScenes[0]!.script).toBe(sourceText);
+    expect(run.proposedScenes[0]!.key).toBe("scene-a");
+    expect(run.proposedScenes[0]!.title).toBe("Harbor watch");
+    expect(run.proposedEntities).toHaveLength(2);
+  });
+
+  it("keeps model scripts when they already cover the source dialogue", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const sourceText = [
+      "Night on the quay.",
+      'Jill: "Any ships?"',
+      'Tom: "None yet."',
+    ].join("\n");
+    const modelScript = [
+      "Night on the quay.",
+      'Jill: "Any ships?"',
+      'Tom: "None yet."',
+    ].join("\n");
+
+    const run = await parsePastedText(
+      project.id,
+      sourceText,
+      fakeCompleteJson({
+        proposedScenes: [
+          {
+            key: "scene-a",
+            title: "Harbor watch",
+            script: modelScript,
+            intent: "Establish Jill at night.",
+            characterNames: ["Jill", "Tom"],
+            locationName: "Harbor",
+            propNames: [],
+            costumeNames: [],
+          },
+        ],
+        proposedEntities: [
+          { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
+          { key: "ent-tom", kind: "character", name: "Tom", description: "A deckhand." },
+          { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
+        ],
+      }),
+    );
+
+    expect(run.proposedScenes).toHaveLength(1);
+    expect(run.proposedScenes[0]!.script).toBe(modelScript);
+    expect(run.proposedScenes[0]!.characterNames).toEqual(["Jill", "Tom"]);
+  });
+
+  it("collapses thin multi-scene synopses into one scene with the full source", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const sourceText = [
+      "INT. HARBOR - NIGHT",
+      'Jill: "Any ships on the horizon?"',
+      "Tom checks the glass.",
+      'Tom: "Fog only. We wait."',
+      "Jill nods and keeps watch.",
+    ].join("\n");
+
+    const run = await parsePastedText(
+      project.id,
+      sourceText,
+      fakeCompleteJson({
+        proposedScenes: [
+          {
+            key: "scene-a",
+            title: "Harbor watch",
+            script: "Jill asks about ships.",
+            intent: "Open.",
+            characterNames: ["Jill"],
+            locationName: "Harbor",
+            propNames: ["Lantern"],
+            costumeNames: [],
+          },
+          {
+            key: "scene-b",
+            title: "Fog reply",
+            script: "Tom answers.",
+            intent: "Reply.",
+            characterNames: ["Tom"],
+            locationName: null,
+            propNames: [],
+            costumeNames: ["Watch coat"],
+          },
+        ],
+        proposedEntities: [
+          { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
+          { key: "ent-tom", kind: "character", name: "Tom", description: "A deckhand." },
+          { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
+        ],
+      }),
+    );
+
+    expect(run.proposedScenes).toHaveLength(1);
+    expect(run.proposedScenes[0]!.script).toBe(sourceText);
+    expect(run.proposedScenes[0]!.key).toBe("scene-a");
+    expect(run.proposedScenes[0]!.title).toBe("Harbor watch");
+    expect(run.proposedScenes[0]!.characterNames).toEqual(["Jill", "Tom"]);
+    expect(run.proposedScenes[0]!.locationName).toBe("Harbor");
+    expect(run.proposedScenes[0]!.propNames).toEqual(["Lantern"]);
+    expect(run.proposedScenes[0]!.costumeNames).toEqual(["Watch coat"]);
+    expect(run.proposedEntities).toEqual([
+      { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
+      { key: "ent-tom", kind: "character", name: "Tom", description: "A deckhand." },
+      { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
+    ]);
   });
 });
 
 describe("confirm parse run", () => {
-  it("writes scene, character, and location files matching the proposal", async () => {
+  it("writes scene, character, location, prop, and costume files matching the proposal", async () => {
     const project = createProject({ title: "Harbor Night" });
+    const projectDir = path.join(getWorkspaceRoot(), project.id);
     const proposal = harborProposal();
     const run = await parsePastedText(project.id, "Jill waits on the harbor.", fakeCompleteJson(proposal));
 
@@ -129,24 +344,36 @@ describe("confirm parse run", () => {
     const proposedScene = proposal.proposedScenes[0]!;
     const proposedJill = proposal.proposedEntities.find((entity) => entity.kind === "character")!;
     const proposedHarbor = proposal.proposedEntities.find((entity) => entity.kind === "location")!;
+    const proposedLantern = proposal.proposedEntities.find((entity) => entity.kind === "prop")!;
+    const proposedCoat = proposal.proposedEntities.find((entity) => entity.kind === "costume")!;
 
     const scene = findSceneByTitle(project.id, proposedScene.title);
     const jill = listEntities(project.id, "character").find((entity) => namesEqual(entity.name, proposedJill.name));
     const harbor = listEntities(project.id, "location").find((entity) => namesEqual(entity.name, proposedHarbor.name));
+    const lantern = listEntities(project.id, "prop").find((entity) => namesEqual(entity.name, proposedLantern.name));
+    const coat = listEntities(project.id, "costume").find((entity) => namesEqual(entity.name, proposedCoat.name));
 
     expect(scene).toBeDefined();
     expect(jill).toBeDefined();
     expect(harbor).toBeDefined();
+    expect(lantern).toBeDefined();
+    expect(coat).toBeDefined();
+    expect(existsSync(path.join(projectDir, "entities", "props", `${lantern!.id}.json`))).toBe(true);
+    expect(existsSync(path.join(projectDir, "entities", "costumes", `${coat!.id}.json`))).toBe(true);
     expect(scene?.script).toBe(proposedScene.script);
     expect(scene?.intent).toBe(proposedScene.intent);
     expect(scene?.title).toBe(proposedScene.title);
     expect(scene?.characters).toEqual([jill!.id]);
     expect(scene?.location).toBe(harbor!.id);
+    expect(scene?.props).toEqual([lantern!.id]);
+    expect(scene?.costumes).toEqual([coat!.id]);
     expect(scene?.shots).toEqual([]);
     expect(scene?.provenance).toMatchObject({ source: "parse", parseRunId: run.id });
     expect(scene?.canonFields).toEqual(expect.arrayContaining(["title", "script", "intent"]));
     expect(jill?.description).toBe(proposedJill.description);
     expect(harbor?.description).toBe(proposedHarbor.description);
+    expect(lantern?.description).toBe(proposedLantern.description);
+    expect(coat?.description).toBe(proposedCoat.description);
     expect(jill?.provenance).toMatchObject({ source: "parse", parseRunId: run.id });
     expect(jill?.canonFields).toEqual(expect.arrayContaining(["name", "description"]));
   });
@@ -272,11 +499,15 @@ function harborProposal(): LlmParseProposal {
         intent: "Establish Jill at night.",
         characterNames: ["Jill"],
         locationName: "Harbor",
+        propNames: ["Lantern"],
+        costumeNames: ["Watch coat"],
       },
     ],
     proposedEntities: [
       { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
       { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
+      { key: "ent-lantern", kind: "prop", name: "Lantern", description: "Oil lamp." },
+      { key: "ent-coat", kind: "costume", name: "Watch coat", description: "Heavy navy coat." },
     ],
   };
 }

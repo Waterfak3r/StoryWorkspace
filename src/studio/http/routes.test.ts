@@ -8,8 +8,12 @@ import { POST as postProject } from "@/app/api/studio/projects/route";
 import { GET as getProject } from "@/app/api/studio/projects/[projectId]/route";
 import { GET as getTree } from "@/app/api/studio/projects/[projectId]/tree/route";
 import { POST as postVolume } from "@/app/api/studio/projects/[projectId]/volumes/route";
+import { DELETE as deleteVolume } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/route";
+import { POST as postChapter } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/route";
+import { DELETE as deleteChapter } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/route";
 import { POST as postScene } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/route";
 import {
+  DELETE as deleteScene,
   GET as getScene,
   PATCH as patchScene,
 } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/route";
@@ -437,6 +441,142 @@ describe("studio HTTP routes", () => {
       "character-01",
       "location-01",
     ]);
+  });
+
+  it("DELETEs a scene, chapter, and volume and removes them from the tree", async () => {
+    await postProject(jsonRequest("http://localhost/api/studio/projects", "POST", { title: "Harbor Night" }));
+
+    const secondScene = await postScene(
+      jsonRequest("http://localhost/api/studio/scenes", "POST", { title: "Second scene" }),
+      {
+        params: Promise.resolve({
+          projectId: "harbor-night",
+          volumeId: "volume-01",
+          chapterId: "chapter-01",
+        }),
+      },
+    );
+    const secondSceneBody = await secondScene.json();
+    expect(secondScene.status).toBe(201);
+    const secondSceneId = secondSceneBody.data.scene.id as string;
+
+    const deletedScene = await deleteScene(
+      new Request(`http://localhost/api/studio/scenes/${secondSceneId}`, { method: "DELETE" }),
+      sceneParams({ sceneId: secondSceneId }),
+    );
+    const deletedSceneBody = await deletedScene.json();
+    expect(deletedScene.status).toBe(200);
+    expect(deletedSceneBody.data).toEqual({ deleted: true });
+
+    let tree = await getTree(new Request("http://localhost/api/studio/projects/harbor-night/tree"), projectParams());
+    let treeBody = await tree.json();
+    expect(treeBody.data.volumes[0]?.chapters[0]?.scenes.map((scene: { id: string }) => scene.id)).toEqual([
+      "scene-01",
+    ]);
+
+    const chapter = await postChapter(
+      jsonRequest("http://localhost/api/studio/chapters", "POST", { title: "Chapter 2" }),
+      {
+        params: Promise.resolve({ projectId: "harbor-night", volumeId: "volume-01" }),
+      },
+    );
+    const chapterBody = await chapter.json();
+    expect(chapter.status).toBe(201);
+    const chapterId = chapterBody.data.chapter.id as string;
+
+    const deletedChapter = await deleteChapter(
+      new Request(`http://localhost/api/studio/chapters/${chapterId}`, { method: "DELETE" }),
+      {
+        params: Promise.resolve({
+          projectId: "harbor-night",
+          volumeId: "volume-01",
+          chapterId,
+        }),
+      },
+    );
+    const deletedChapterBody = await deletedChapter.json();
+    expect(deletedChapter.status).toBe(200);
+    expect(deletedChapterBody.data).toEqual({ deleted: true });
+
+    tree = await getTree(new Request("http://localhost/api/studio/projects/harbor-night/tree"), projectParams());
+    treeBody = await tree.json();
+    expect(treeBody.data.volumes[0]?.chapters.map((item: { id: string }) => item.id)).toEqual(["chapter-01"]);
+
+    const volume = await postVolume(
+      jsonRequest("http://localhost/api/studio/volumes", "POST", { title: "Volume 2" }),
+      projectParams(),
+    );
+    const volumeBody = await volume.json();
+    expect(volume.status).toBe(201);
+    const volumeId = volumeBody.data.volume.id as string;
+
+    const deletedVolume = await deleteVolume(
+      new Request(`http://localhost/api/studio/volumes/${volumeId}`, { method: "DELETE" }),
+      {
+        params: Promise.resolve({ projectId: "harbor-night", volumeId }),
+      },
+    );
+    const deletedVolumeBody = await deletedVolume.json();
+    expect(deletedVolume.status).toBe(200);
+    expect(deletedVolumeBody.data).toEqual({ deleted: true });
+
+    tree = await getTree(new Request("http://localhost/api/studio/projects/harbor-night/tree"), projectParams());
+    treeBody = await tree.json();
+    expect(treeBody.data.volumes.map((item: { id: string }) => item.id)).toEqual(["volume-01"]);
+  });
+
+  it("returns 404 for missing story nodes and 400 for illegal ids without leaking outside paths", async () => {
+    await postProject(jsonRequest("http://localhost/api/studio/projects", "POST", { title: "Harbor Night" }));
+
+    const missingScene = await deleteScene(
+      new Request("http://localhost/api/studio/scenes/scene-missing", { method: "DELETE" }),
+      sceneParams({ sceneId: "scene-missing" }),
+    );
+    const missingSceneBody = await missingScene.json();
+    expect(missingScene.status).toBe(404);
+    expect(missingSceneBody.error.code).toBe("NOT_FOUND");
+
+    const missingChapter = await deleteChapter(
+      new Request("http://localhost/api/studio/chapters/chapter-missing", { method: "DELETE" }),
+      {
+        params: Promise.resolve({
+          projectId: "harbor-night",
+          volumeId: "volume-01",
+          chapterId: "chapter-missing",
+        }),
+      },
+    );
+    expect(missingChapter.status).toBe(404);
+    expect((await missingChapter.json()).error.code).toBe("NOT_FOUND");
+
+    const missingVolume = await deleteVolume(
+      new Request("http://localhost/api/studio/volumes/volume-missing", { method: "DELETE" }),
+      {
+        params: Promise.resolve({ projectId: "harbor-night", volumeId: "volume-missing" }),
+      },
+    );
+    expect(missingVolume.status).toBe(404);
+    expect((await missingVolume.json()).error.code).toBe("NOT_FOUND");
+
+    const outsideDir = mkdtempSync(path.join(tmpdir(), "studio-http-delete-outside-"));
+    const secretPath = path.join(outsideDir, "secret.txt");
+    writeFileSync(secretPath, "do-not-leak", "utf8");
+
+    try {
+      const badId = "../";
+      const response = await deleteScene(
+        new Request("http://localhost/api/studio/scenes/x", { method: "DELETE" }),
+        sceneParams({ sceneId: badId }),
+      );
+      const raw = await response.text();
+      expect(response.status).toBe(400);
+      const body = JSON.parse(raw) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+      expect(raw).not.toContain(outsideDir);
+      expect(raw).not.toContain(secretPath);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -20,6 +20,8 @@ Context Resolver（纯快照，Slice 03）
 
 假 adapter 必须写出一个真实文件（哪怕是 1×1 PNG 或固定字节），并把相对项目根的路径写回 `selected_image`。空结果或抛错算缺陷，测试不得跳过。
 
+真 adapter 请求体含 `quality`、`n: 1`、`response_format: "b64_json"` 与 `moderation: "low"`，超时 300s（同步 Images API，无 polling）。
+
 ## 磁盘
 
 ```

@@ -5,28 +5,68 @@ import { resolveImageProvider } from "../settings";
 import type { ImageAdapterInput, ImageAdapterResult } from "./adapter";
 import { writeShotImageFile } from "./image-output";
 
-const MAX_IMAGE_PAYLOAD_BYTES = 15 * 1024 * 1024;
-const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_IMAGE_PAYLOAD_BYTES = 40 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 300_000;
 
-function errorForStatus(status: number) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function providerErrorMessage(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !isRecord(payload.error)) {
+    return undefined;
+  }
+  const message = payload.error.message;
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  const trimmed = message.trim();
+  return trimmed || undefined;
+}
+
+function errorForStatus(status: number, providerMessage?: string) {
   if (status === 401 || status === 403) {
-    return new StudioAiError("AI_AUTHENTICATION_ERROR", "The image provider rejected the configured credentials.", 502, false);
+    return new StudioAiError(
+      "AI_AUTHENTICATION_ERROR",
+      providerMessage ?? "The image provider rejected the configured credentials.",
+      502,
+      false,
+    );
   }
   if (status === 429) {
-    return new StudioAiError("AI_RATE_LIMITED", "The image provider is rate limited. Try again shortly.", 429, true);
+    return new StudioAiError(
+      "AI_RATE_LIMITED",
+      providerMessage ?? "The image provider is rate limited. Try again shortly.",
+      429,
+      false,
+    );
+  }
+  if (status === 400) {
+    return new StudioAiError(
+      "AI_PROVIDER_ERROR",
+      providerMessage ?? "The image provider could not complete this request. Try again.",
+      502,
+      false,
+    );
   }
   if (status === 408 || status === 504) {
-    return new StudioAiError("AI_TIMEOUT", "The image provider took too long to respond. Try again.", 504, true);
+    return new StudioAiError(
+      "AI_TIMEOUT",
+      providerMessage ?? "The image provider took too long to respond. Try again.",
+      504,
+      true,
+    );
   }
-  return new StudioAiError("AI_PROVIDER_ERROR", "The image provider could not complete this request. Try again.", 502, true);
+  return new StudioAiError(
+    "AI_PROVIDER_ERROR",
+    providerMessage ?? "The image provider could not complete this request. Try again.",
+    502,
+    true,
+  );
 }
 
 function invalidResponse() {
   return new StudioAiError("AI_INVALID_RESPONSE", "The image provider returned an invalid result. Try again.", 502, true);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
@@ -77,7 +117,7 @@ async function bytesFromGenerationPayload(payload: unknown): Promise<Buffer> {
   if (typeof first.url === "string" && first.url.trim()) {
     const response = await fetchWithTimeout(first.url.trim(), { method: "GET" });
     if (!response.ok) {
-      throw errorForStatus(response.status);
+      throw await errorFromHttpResponse(response);
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length === 0 || buffer.length > MAX_IMAGE_PAYLOAD_BYTES) {
@@ -89,6 +129,19 @@ async function bytesFromGenerationPayload(payload: unknown): Promise<Buffer> {
   throw invalidResponse();
 }
 
+async function errorFromHttpResponse(response: Response): Promise<StudioAiError> {
+  let providerMessage: string | undefined;
+  try {
+    const raw = await response.text();
+    if (raw.trim()) {
+      providerMessage = providerErrorMessage(JSON.parse(raw) as unknown);
+    }
+  } catch {
+    providerMessage = undefined;
+  }
+  return errorForStatus(response.status, providerMessage);
+}
+
 export async function openaiCompatibleImageAdapter(input: ImageAdapterInput): Promise<ImageAdapterResult> {
   const image = resolveImageProvider();
   if (!image.apiKey || !image.model) {
@@ -97,6 +150,7 @@ export async function openaiCompatibleImageAdapter(input: ImageAdapterInput): Pr
 
   const model = input.provider.model.trim() || image.model;
   const size = input.provider.size.trim() || image.size;
+  const quality = input.provider.quality.trim() || image.quality;
   const response = await fetchWithTimeout(`${image.baseUrl.replace(/\/+$/, "")}/images/generations`, {
     method: "POST",
     headers: {
@@ -107,11 +161,15 @@ export async function openaiCompatibleImageAdapter(input: ImageAdapterInput): Pr
       model,
       prompt: input.prompt,
       size,
+      quality,
+      n: 1,
+      response_format: "b64_json",
+      moderation: "low",
     }),
   });
 
   if (!response.ok) {
-    throw errorForStatus(response.status);
+    throw await errorFromHttpResponse(response);
   }
 
   const rawPayload = await response.text();

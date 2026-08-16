@@ -1,12 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { Trash, X } from "@phosphor-icons/react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import type { StudioEntity, StudioScene, StudioStoryTree } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
 import {
   createStudioChapter,
   createStudioScene,
   createStudioVolume,
+  deleteStudioChapter,
+  deleteStudioScene,
+  deleteStudioVolume,
   firstStorySelection,
   getStudioScene,
   getStudioTree,
@@ -31,18 +41,28 @@ const fieldClassName =
 
 const emptyDraft: SceneDraft = { title: "", script: "", intent: "" };
 
+type DeleteTarget =
+  | { kind: "volume"; volumeId: string; title: string }
+  | { kind: "chapter"; volumeId: string; chapterId: string; title: string }
+  | { kind: "scene"; volumeId: string; chapterId: string; sceneId: string; title: string };
+
 export function StoryPanel({
   projectId,
   flushRef,
+  active,
+  onParseBusyChange,
 }: {
   projectId: string;
   flushRef: MutableRefObject<(() => Promise<boolean>) | null>;
+  active: boolean;
+  onParseBusyChange?: (busy: boolean) => void;
 }) {
   const { t } = useI18n();
   const [tree, setTree] = useState<StudioStoryTree | null>(null);
   const [treeError, setTreeError] = useState("");
   const [selected, setSelected] = useState<StorySelection | null>(null);
   const [mutating, setMutating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const editorFlushRef = useRef<(() => Promise<boolean>) | null>(null);
 
   const flush = useCallback(async () => {
@@ -53,13 +73,14 @@ export function StoryPanel({
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     flushRef.current = flush;
     return () => {
       if (flushRef.current === flush) {
         flushRef.current = null;
       }
     };
-  }, [flush, flushRef]);
+  }, [active, flush, flushRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -165,9 +186,65 @@ export function StoryPanel({
     }
   }
 
+  function openDelete(target: DeleteTarget) {
+    setTreeError("");
+    setDeleteTarget(target);
+  }
+
+  function closeDeleteDialog() {
+    if (mutating) {
+      return;
+    }
+    setDeleteTarget(null);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) {
+      return;
+    }
+
+    setMutating(true);
+    try {
+      if (!shouldSkipFlushForDelete(selected, deleteTarget)) {
+        const ok = await flush();
+        if (!ok) {
+          return;
+        }
+      }
+
+      if (deleteTarget.kind === "volume") {
+        await deleteStudioVolume(projectId, deleteTarget.volumeId);
+      } else if (deleteTarget.kind === "chapter") {
+        await deleteStudioChapter(projectId, deleteTarget.volumeId, deleteTarget.chapterId);
+      } else {
+        await deleteStudioScene(
+          projectId,
+          deleteTarget.volumeId,
+          deleteTarget.chapterId,
+          deleteTarget.sceneId,
+        );
+      }
+
+      setDeleteTarget(null);
+      setTreeError("");
+      await refreshTree();
+    } catch (error) {
+      setTreeError(error instanceof Error ? error.message : t("The request could not be completed."));
+    } finally {
+      setMutating(false);
+    }
+  }
+
   const parseTarget = parseTargetFromSelection(tree, selected);
   const hasVolume = Boolean(selected?.volumeId ?? tree?.volumes[0]);
   const canAddScene = selected !== null && selected.kind !== "volume";
+  const deleteDescription = deleteTarget
+    ? deleteTarget.kind === "volume"
+      ? t("This will permanently delete this volume, including its chapters, scenes, shots, generated images, and workflow nodes.")
+      : deleteTarget.kind === "chapter"
+        ? t("This will permanently delete this chapter, including its scenes, shots, generated images, and workflow nodes.")
+        : t("This will permanently delete this scene, including its shots, generated images, and workflow nodes.")
+    : "";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -206,45 +283,78 @@ export function StoryPanel({
           targetChapterTitle={parseTarget.chapterTitle}
           onBeforeMutate={flush}
           onProjectRecordsChanged={() => refreshTree(selected)}
+          onParseBusyChange={onParseBusyChange}
         />
         <nav aria-label={t("Story")} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {treeError ? <p role="alert" className="px-2 text-sm text-danger">{treeError}</p> : null}
           {tree ? (
             <ol className="space-y-3">
               {tree.volumes.map((volume) => {
+                const volumeTitle = volume.title || volume.id;
                 const volumeActive = selected?.kind === "volume" && selected.volumeId === volume.id;
                 return (
                   <li key={volume.id}>
-                    <button
-                      type="button"
-                      onClick={() => void selectNode({ kind: "volume", volumeId: volume.id })}
-                      aria-pressed={volumeActive}
-                      className={treeButtonClass(volumeActive)}
-                    >
-                      <span className="truncate">{volume.title || volume.id}</span>
-                    </button>
+                    <div className={`flex min-w-0 items-stretch rounded-lg ${volumeActive ? "bg-accent-soft" : ""}`}>
+                      <button
+                        type="button"
+                        onClick={() => void selectNode({ kind: "volume", volumeId: volume.id })}
+                        aria-pressed={volumeActive}
+                        disabled={mutating}
+                        className={treeSelectButtonClass(volumeActive)}
+                      >
+                        <span className="truncate">{volumeTitle}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDelete({ kind: "volume", volumeId: volume.id, title: volumeTitle })}
+                        disabled={mutating}
+                        aria-label={t("Delete {title}", { title: volumeTitle })}
+                        className={treeDeleteButtonClass()}
+                      >
+                        <Trash size={14} weight="regular" aria-hidden="true" />
+                      </button>
+                    </div>
                     <ol className="mt-1 space-y-2">
                       {volume.chapters.map((chapter) => {
+                        const chapterTitle = chapter.title || chapter.id;
                         const chapterActive =
                           selected?.kind === "chapter"
                           && selected.volumeId === volume.id
                           && selected.chapterId === chapter.id;
                         return (
                           <li key={chapter.id} className="pl-2">
-                            <button
-                              type="button"
-                              onClick={() => void selectNode({
-                                kind: "chapter",
-                                volumeId: volume.id,
-                                chapterId: chapter.id,
-                              })}
-                              aria-pressed={chapterActive}
-                              className={treeButtonClass(chapterActive)}
-                            >
-                              <span className="truncate">{chapter.title || chapter.id}</span>
-                            </button>
+                            <div className={`flex min-w-0 items-stretch rounded-lg ${chapterActive ? "bg-accent-soft" : ""}`}>
+                              <button
+                                type="button"
+                                onClick={() => void selectNode({
+                                  kind: "chapter",
+                                  volumeId: volume.id,
+                                  chapterId: chapter.id,
+                                })}
+                                aria-pressed={chapterActive}
+                                disabled={mutating}
+                                className={treeSelectButtonClass(chapterActive)}
+                              >
+                                <span className="truncate">{chapterTitle}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openDelete({
+                                  kind: "chapter",
+                                  volumeId: volume.id,
+                                  chapterId: chapter.id,
+                                  title: chapterTitle,
+                                })}
+                                disabled={mutating}
+                                aria-label={t("Delete {title}", { title: chapterTitle })}
+                                className={treeDeleteButtonClass()}
+                              >
+                                <Trash size={14} weight="regular" aria-hidden="true" />
+                              </button>
+                            </div>
                             <ol className="mt-1 space-y-1">
                               {chapter.scenes.map((item) => {
+                                const sceneTitle = item.title || item.id;
                                 const path: StorySelection = {
                                   kind: "scene",
                                   volumeId: volume.id,
@@ -254,14 +364,32 @@ export function StoryPanel({
                                 const active = selected !== null && sameSelection(selected, path);
                                 return (
                                   <li key={item.id} className="pl-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => void selectNode(path)}
-                                      aria-pressed={active}
-                                      className={treeButtonClass(active)}
-                                    >
-                                      <span className="truncate">{item.title || item.id}</span>
-                                    </button>
+                                    <div className={`flex min-w-0 items-stretch rounded-lg ${active ? "bg-accent-soft" : ""}`}>
+                                      <button
+                                        type="button"
+                                        onClick={() => void selectNode(path)}
+                                        aria-pressed={active}
+                                        disabled={mutating}
+                                        className={treeSelectButtonClass(active)}
+                                      >
+                                        <span className="truncate">{sceneTitle}</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openDelete({
+                                          kind: "scene",
+                                          volumeId: volume.id,
+                                          chapterId: chapter.id,
+                                          sceneId: item.id,
+                                          title: sceneTitle,
+                                        })}
+                                        disabled={mutating}
+                                        aria-label={t("Delete {title}", { title: sceneTitle })}
+                                        className={treeDeleteButtonClass()}
+                                      >
+                                        <Trash size={14} weight="regular" aria-hidden="true" />
+                                      </button>
+                                    </div>
                                   </li>
                                 );
                               })}
@@ -305,7 +433,170 @@ export function StoryPanel({
           )}
         </section>
       )}
+
+      {deleteTarget ? (
+        <ConfirmDeleteDialog
+          title={t("Delete {title}?", { title: deleteTarget.title })}
+          description={deleteDescription}
+          confirming={mutating}
+          onClose={closeDeleteDialog}
+          onConfirm={() => void confirmDelete()}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function ConfirmDeleteDialog({
+  title,
+  description,
+  confirming,
+  onClose,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  confirming: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useI18n();
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previousActiveElement = document.activeElement as HTMLElement | null;
+    const focusableSelector =
+      "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href]";
+    const firstFocusable = dialog?.querySelector<HTMLElement>(focusableSelector);
+    firstFocusable?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (!confirming) {
+          onClose();
+        }
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialog) {
+        return;
+      }
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+      if (focusable.length === 0) {
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousActiveElement?.focus();
+    };
+  }, [confirming, onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid min-h-[100dvh] place-items-center bg-ink/45 px-4 py-8"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !confirming) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="studio-story-delete-dialog-title"
+        aria-describedby="studio-story-delete-dialog-description"
+        className="w-full max-w-lg rounded-xl border border-line bg-surface-raised p-6 shadow-[0_24px_80px_rgb(12_20_26_/_22%)]"
+      >
+        <div className="flex items-start justify-between gap-5">
+          <div>
+            <h2 id="studio-story-delete-dialog-title" className="text-xl font-semibold tracking-[-0.02em] text-ink">
+              {title}
+            </h2>
+            <p
+              id="studio-story-delete-dialog-description"
+              className="mt-2 max-w-[44ch] text-sm leading-6 text-ink-muted"
+            >
+              {description}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label={t("Close dialog")}
+            onClick={onClose}
+            disabled={confirming}
+            className="grid size-11 shrink-0 place-items-center rounded-lg text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink disabled:opacity-60"
+          >
+            <X size={20} weight="regular" />
+          </button>
+        </div>
+        <div className="mt-6 flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={confirming}
+            className="min-h-11 rounded-lg border border-line px-4 text-sm font-semibold text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink disabled:opacity-60"
+          >
+            {t("Cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={confirming}
+            className="min-h-11 rounded-lg bg-danger px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-danger/90 disabled:opacity-60"
+          >
+            {t("Delete")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function shouldSkipFlushForDelete(selected: StorySelection | null, target: DeleteTarget): boolean {
+  if (!selected) {
+    return true;
+  }
+
+  if (target.kind === "volume") {
+    return selected.volumeId === target.volumeId;
+  }
+
+  if (target.kind === "chapter") {
+    if (selected.volumeId !== target.volumeId) {
+      return false;
+    }
+    if (selected.kind === "volume") {
+      return false;
+    }
+    return selected.chapterId === target.chapterId;
+  }
+
+  if (selected.kind !== "scene") {
+    return false;
+  }
+
+  return (
+    selected.volumeId === target.volumeId
+    && selected.chapterId === target.chapterId
+    && selected.sceneId === target.sceneId
   );
 }
 
@@ -700,8 +991,12 @@ function sameSelection(left: StorySelection, right: StorySelection) {
   return left.sceneId === right.sceneId;
 }
 
-function treeButtonClass(active: boolean) {
-  return `flex min-h-10 w-full items-center rounded-lg px-2 text-left text-sm transition-colors ${active ? "bg-accent-soft font-semibold text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`;
+function treeSelectButtonClass(active: boolean) {
+  return `flex min-h-10 min-w-0 flex-1 items-center rounded-l-lg px-2 text-left text-sm transition-colors disabled:opacity-60 ${active ? "font-semibold text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`;
+}
+
+function treeDeleteButtonClass() {
+  return "inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-r-lg text-ink-faint transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50";
 }
 
 function parseTargetFromSelection(
@@ -783,8 +1078,12 @@ function SceneEntityRail({
   const { t } = useI18n();
   const [characters, setCharacters] = useState<StudioEntity[]>([]);
   const [locations, setLocations] = useState<StudioEntity[]>([]);
+  const [props, setProps] = useState<StudioEntity[]>([]);
+  const [costumes, setCostumes] = useState<StudioEntity[]>([]);
   const [characterQuery, setCharacterQuery] = useState("");
   const [locationQuery, setLocationQuery] = useState("");
+  const [propQuery, setPropQuery] = useState("");
+  const [costumeQuery, setCostumeQuery] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -794,11 +1093,15 @@ function SceneEntityRail({
       void Promise.all([
         listStudioEntities(projectId, "character"),
         listStudioEntities(projectId, "location"),
+        listStudioEntities(projectId, "prop"),
+        listStudioEntities(projectId, "costume"),
       ])
-        .then(([nextCharacters, nextLocations]) => {
+        .then(([nextCharacters, nextLocations, nextProps, nextCostumes]) => {
           if (!cancelled) {
             setCharacters(nextCharacters);
             setLocations(nextLocations);
+            setProps(nextProps);
+            setCostumes(nextCostumes);
           }
         })
         .catch((loadError) => {
@@ -814,7 +1117,12 @@ function SceneEntityRail({
     };
   }, [projectId, t]);
 
-  async function patchLinks(patch: { characters?: string[]; location?: string | null }) {
+  async function patchLinks(patch: {
+    characters?: string[];
+    location?: string | null;
+    props?: string[];
+    costumes?: string[];
+  }) {
     if (busy) {
       return;
     }
@@ -846,6 +1154,12 @@ function SceneEntityRail({
   );
   const unusedLocations = locations.filter((entity) =>
     entity.id !== scene?.location && matchesEntityQuery(entity.name, locationQuery),
+  );
+  const unusedProps = props.filter((entity) =>
+    !scene?.props.includes(entity.id) && matchesEntityQuery(entity.name, propQuery),
+  );
+  const unusedCostumes = costumes.filter((entity) =>
+    !scene?.costumes.includes(entity.id) && matchesEntityQuery(entity.name, costumeQuery),
   );
 
   return (
@@ -945,6 +1259,122 @@ function SceneEntityRail({
                 <button
                   type="button"
                   onClick={() => void patchLinks({ location: entity.id })}
+                  disabled={busy || !scene}
+                  aria-label={`${t("Add to scene")}: ${entity.name}`}
+                  className="flex min-h-9 w-full items-center rounded-lg px-2 text-left text-xs text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink disabled:opacity-60"
+                >
+                  <span className="truncate">{entity.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <h2 className="mt-6 text-sm font-semibold text-ink">{t("Props")}</h2>
+      {scene?.props.length ? (
+        <ul className="mt-2 space-y-2 text-sm text-ink">
+          {scene.props.map((id) => (
+            <li key={id} className="flex items-start justify-between gap-2">
+              <span className="min-w-0 truncate">{entityLabel(props, id)}</span>
+              <button
+                type="button"
+                onClick={() => void patchLinks({ props: scene.props.filter((item) => item !== id) })}
+                disabled={busy}
+                className="shrink-0 text-xs font-semibold text-ink-muted hover:text-ink disabled:opacity-60"
+              >
+                {t("Remove from scene")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs text-ink-faint">{t("None")}</p>
+      )}
+      <div className="mt-3 space-y-2">
+        <label htmlFor="search-props" className="block text-xs font-semibold text-ink-muted">
+          {t("Search props")}
+        </label>
+        <input
+          id="search-props"
+          value={propQuery}
+          onChange={(event) => setPropQuery(event.target.value)}
+          autoComplete="off"
+          className={`${fieldClassName} min-h-9`}
+        />
+        {unusedProps.length === 0 ? (
+          <p className="text-xs text-ink-faint">{t("No matching entities")}</p>
+        ) : (
+          <ul className="space-y-1">
+            {unusedProps.map((entity) => (
+              <li key={entity.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const current = readScene();
+                    if (!current || current.props.includes(entity.id)) {
+                      return;
+                    }
+                    void patchLinks({ props: [...current.props, entity.id] });
+                  }}
+                  disabled={busy || !scene}
+                  aria-label={`${t("Add to scene")}: ${entity.name}`}
+                  className="flex min-h-9 w-full items-center rounded-lg px-2 text-left text-xs text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink disabled:opacity-60"
+                >
+                  <span className="truncate">{entity.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <h2 className="mt-6 text-sm font-semibold text-ink">{t("Costumes")}</h2>
+      {scene?.costumes.length ? (
+        <ul className="mt-2 space-y-2 text-sm text-ink">
+          {scene.costumes.map((id) => (
+            <li key={id} className="flex items-start justify-between gap-2">
+              <span className="min-w-0 truncate">{entityLabel(costumes, id)}</span>
+              <button
+                type="button"
+                onClick={() => void patchLinks({ costumes: scene.costumes.filter((item) => item !== id) })}
+                disabled={busy}
+                className="shrink-0 text-xs font-semibold text-ink-muted hover:text-ink disabled:opacity-60"
+              >
+                {t("Remove from scene")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs text-ink-faint">{t("None")}</p>
+      )}
+      <div className="mt-3 space-y-2">
+        <label htmlFor="search-costumes" className="block text-xs font-semibold text-ink-muted">
+          {t("Search costumes")}
+        </label>
+        <input
+          id="search-costumes"
+          value={costumeQuery}
+          onChange={(event) => setCostumeQuery(event.target.value)}
+          autoComplete="off"
+          className={`${fieldClassName} min-h-9`}
+        />
+        {unusedCostumes.length === 0 ? (
+          <p className="text-xs text-ink-faint">{t("No matching entities")}</p>
+        ) : (
+          <ul className="space-y-1">
+            {unusedCostumes.map((entity) => (
+              <li key={entity.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const current = readScene();
+                    if (!current || current.costumes.includes(entity.id)) {
+                      return;
+                    }
+                    void patchLinks({ costumes: [...current.costumes, entity.id] });
+                  }}
                   disabled={busy || !scene}
                   aria-label={`${t("Add to scene")}: ${entity.name}`}
                   className="flex min-h-9 w-full items-center rounded-lg px-2 text-left text-xs text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink disabled:opacity-60"

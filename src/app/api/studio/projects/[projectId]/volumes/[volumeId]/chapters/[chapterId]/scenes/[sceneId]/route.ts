@@ -1,5 +1,5 @@
 import { updateSceneInputSchema } from "@/studio/domain";
-import { readScene, updateScene } from "@/studio/fs";
+import { deleteScene, readScene, updateScene } from "@/studio/fs";
 import { parseStudioBody, runStudioRoute, studioDataResponse } from "@/studio/http";
 
 export const runtime = "nodejs";
@@ -28,5 +28,13 @@ export async function PATCH(request: Request, context: SceneRouteContext) {
     const input = await parseStudioBody(request, updateSceneInputSchema);
     const scene = updateScene(projectId, volumeId, chapterId, sceneId, input);
     return studioDataResponse({ scene });
+  });
+}
+
+export async function DELETE(_request: Request, context: SceneRouteContext) {
+  return runStudioRoute(async () => {
+    const { projectId, volumeId, chapterId, sceneId } = await context.params;
+    const result = deleteScene(projectId, volumeId, chapterId, sceneId);
+    return studioDataResponse(result);
   });
 }

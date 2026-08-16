@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import { StudioAiError } from "../errors";
 import { writeProviderSettings } from "../settings";
 import { completeJsonWithFetch, prefersChatCompletions } from "./complete-json";
 
@@ -22,9 +23,14 @@ const proposal = {
       intent: "Night.",
       characterNames: ["Jill"],
       locationName: "Harbor",
+      propNames: ["Lantern"],
+      costumeNames: [],
     },
   ],
-  proposedEntities: [{ key: "ent-jill", kind: "character", name: "Jill", description: "Lookout" }],
+  proposedEntities: [
+    { key: "ent-jill", kind: "character", name: "Jill", description: "Lookout" },
+    { key: "ent-lantern", kind: "prop", name: "Lantern", description: "Oil lamp" },
+  ],
 };
 
 const proposalSchema = z.object({
@@ -93,6 +99,9 @@ describe("completeJsonWithFetch", () => {
     expect(urls).toEqual(["https://opencode.ai/zen/go/v1/chat/completions"]);
     expect(bodies[0]).toMatchObject({
       model: "glm-5.3",
+      max_tokens: 32_768,
+      response_format: { type: "json_object" },
+      thinking: { type: "disabled" },
       messages: [
         { role: "system" },
         { role: "user", content: "Jill waits on the harbor." },
@@ -102,6 +111,16 @@ describe("completeJsonWithFetch", () => {
     expect(messages.some((message) => typeof message.content === "string" && message.content.includes("proposedScenes"))).toBe(
       true,
     );
+    const systemContent = messages.find((message) => message.content?.includes("proposedScenes"))?.content ?? "";
+    expect(systemContent).toContain("Do not summarize");
+    expect(systemContent).toContain("prop");
+    expect(systemContent).toContain("costume");
+    expect(systemContent).toMatch(/propNames/);
+    expect(systemContent).toMatch(/"kind":"costume"/);
+    expect(systemContent).toMatch(/"costumeNames":\[[^\]]+/);
+    expect(systemContent).not.toContain('"costumeNames":[]');
+    expect(systemContent).not.toContain('"Jill waits."');
+    expect(/Jill:|\\"/.test(systemContent)).toBe(true);
     expect(result).toEqual(proposal);
   });
 
@@ -128,6 +147,40 @@ describe("completeJsonWithFetch", () => {
     });
 
     expect(urls).toEqual(["https://api.openai.com/v1/responses"]);
+    expect(result).toEqual(proposal);
+  });
+
+  it("retries chat once without response_format and thinking after HTTP 400", async () => {
+    writeProviderSettings({
+      text: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: "sk-test-ocgo",
+        model: "deepseek-v4-flash",
+        protocol: "chat",
+      },
+      image: { baseUrl: "", apiKey: "", model: "", size: "" },
+    });
+
+    const bodies: unknown[] = [];
+    const result = await completeJsonWithFetch(proposalSchema, "Jill waits on the harbor.", async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if (bodies.length === 1) {
+        return jsonResponse({ error: { message: "unknown field thinking" } }, 400);
+      }
+      return jsonResponse({
+        choices: [{ message: { content: JSON.stringify(proposal) } }],
+      });
+    });
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toMatchObject({
+      max_tokens: 32_768,
+      response_format: { type: "json_object" },
+      thinking: { type: "disabled" },
+    });
+    expect(bodies[1]).not.toHaveProperty("response_format");
+    expect(bodies[1]).not.toHaveProperty("thinking");
     expect(result).toEqual(proposal);
   });
 
@@ -211,6 +264,112 @@ describe("completeJsonWithFetch", () => {
     expect(result).toEqual(proposal);
   });
 
+  it("parses JSON from reasoning_content when content is non-empty prose", async () => {
+    writeProviderSettings({
+      text: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: "sk-test-ocgo",
+        model: "deepseek-v4-flash",
+        protocol: "chat",
+      },
+      image: { baseUrl: "", apiKey: "", model: "", size: "" },
+    });
+
+    const result = await completeJsonWithFetch(proposalSchema, "Jill waits on the harbor.", async () =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: "I will split the story into scenes next.",
+              reasoning_content: JSON.stringify(proposal),
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual(proposal);
+  });
+
+  it("parses JSON from OpenCode message.reasoning", async () => {
+    writeProviderSettings({
+      text: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: "sk-test-ocgo",
+        model: "deepseek-v4-flash",
+        protocol: "chat",
+      },
+      image: { baseUrl: "", apiKey: "", model: "", size: "" },
+    });
+
+    const result = await completeJsonWithFetch(proposalSchema, "Jill waits on the harbor.", async () =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: "",
+              reasoning: JSON.stringify(proposal),
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual(proposal);
+  });
+
+  it("ignores example braces inside think blocks and returns the later proposal", async () => {
+    writeProviderSettings({
+      text: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: "sk-test-ocgo",
+        model: "deepseek-v4-flash",
+        protocol: "chat",
+      },
+      image: { baseUrl: "", apiKey: "", model: "", size: "" },
+    });
+
+    const result = await completeJsonWithFetch(proposalSchema, "Jill waits on the harbor.", async () =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: `<think>example { "nope": true }</think>\n${JSON.stringify(proposal)}`,
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual(proposal);
+  });
+
+  it("prefers the last proposal-shaped object over earlier brace examples", async () => {
+    writeProviderSettings({
+      text: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: "sk-test-ocgo",
+        model: "deepseek-v4-flash",
+        protocol: "chat",
+      },
+      image: { baseUrl: "", apiKey: "", model: "", size: "" },
+    });
+
+    const result = await completeJsonWithFetch(proposalSchema, "Jill waits on the harbor.", async () =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: `{ "nope": true }\n${JSON.stringify(proposal)}`,
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual(proposal);
+  });
+
   it("decodes prose plus fenced JSON that is not the entire string", async () => {
     writeProviderSettings({
       text: {
@@ -235,6 +394,35 @@ describe("completeJsonWithFetch", () => {
     );
 
     expect(result).toEqual(proposal);
+  });
+
+  it("maps a hanging fetch abort to AI_TIMEOUT", async () => {
+    const pending = completeJsonWithFetch(
+      proposalSchema,
+      "Jill waits on the harbor.",
+      async (_input, init) => {
+        const signal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          const abort = () => {
+            reject(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+          };
+          if (signal?.aborted) {
+            abort();
+            return;
+          }
+          signal?.addEventListener("abort", abort, { once: true });
+        });
+      },
+      40,
+    );
+
+    await expect(pending).rejects.toBeInstanceOf(StudioAiError);
+    await expect(pending).rejects.toMatchObject({
+      name: "StudioAiError",
+      code: "AI_TIMEOUT",
+      status: 504,
+      retryable: true,
+    });
   });
 });
 

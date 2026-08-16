@@ -1,5 +1,7 @@
 import "server-only";
 
+import { StudioAiError } from "../errors";
+
 export type ImageAdapterInput = {
   projectId: string;
   sceneId: string;
@@ -9,6 +11,7 @@ export type ImageAdapterInput = {
   provider: {
     model: string;
     size: string;
+    quality: string;
   };
 };
 
@@ -32,6 +35,9 @@ export function withImageAdapterRetry(adapter: ImageAdapter, attempts = DEFAULT_
         return result;
       } catch (error) {
         lastError = error;
+        if (error instanceof StudioAiError && error.retryable === false) {
+          break;
+        }
       }
     }
 

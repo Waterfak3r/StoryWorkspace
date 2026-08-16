@@ -12,12 +12,14 @@ import {
   createProjectInputSchema,
   createSceneInputSchema,
   createVolumeInputSchema,
+  ENTITY_KIND_DIRS,
   entityKindSchema,
   entityRecordSchema,
   nextNumberedId,
   projectRecordSchema,
   sceneRecordSchema,
   slugifyTitle,
+  STUDIO_ENTITY_KINDS,
   STUDIO_SCHEMA_VERSION,
   styleRecordSchema,
   updateChapterInputSchema,
@@ -53,6 +55,7 @@ import {
   type UpdateVolumeInput,
 } from "../domain";
 import { StudioEditConflictError, StudioIdConflictError, StudioNotFoundError, StudioValidationError } from "../errors";
+import { deleteWorkflowNode } from "../generate/workflow-store";
 import { ensureDirectory, parseJsonRecord, writeJsonFile } from "./json";
 import { assertStudioId, constrainToWorkspaceRoot, resolveUnderWorkspace } from "./paths";
 import { getWorkspaceRoot } from "./workspace";
@@ -228,6 +231,14 @@ export function updateVolume(projectId: string, volumeId: string, input: UpdateV
   return next;
 }
 
+export function deleteVolume(projectId: string, volumeId: string): { deleted: true } {
+  const ctx = requireVolume(projectId, volumeId);
+  const artifacts = collectVolumeArtifacts(ctx);
+  removePathSafe(ctx.volumeDir);
+  cleanupSceneArtifacts(ctx, artifacts);
+  return { deleted: true };
+}
+
 export function createChapter(projectId: string, volumeId: string, input: CreateChapterInput = {}): StudioChapter {
   const ctx = requireVolume(projectId, volumeId);
   const values = parseInput(createChapterInputSchema, input);
@@ -268,6 +279,18 @@ export function updateChapter(
   return next;
 }
 
+export function deleteChapter(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+): { deleted: true } {
+  const ctx = requireChapter(projectId, volumeId, chapterId);
+  const artifacts = collectChapterArtifacts(ctx);
+  removePathSafe(ctx.chapterDir);
+  cleanupSceneArtifacts(ctx, artifacts);
+  return { deleted: true };
+}
+
 export function createScene(
   projectId: string,
   volumeId: string,
@@ -290,6 +313,19 @@ export function readScene(projectId: string, volumeId: string, chapterId: string
   return requireScene(projectId, volumeId, chapterId, sceneId).scene;
 }
 
+export function deleteScene(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+): { deleted: true } {
+  const ctx = requireScene(projectId, volumeId, chapterId, sceneId);
+  const artifacts = collectSceneArtifacts(ctx.scene);
+  removePathSafe(ctx.sceneFile);
+  cleanupSceneArtifacts(ctx, artifacts);
+  return { deleted: true };
+}
+
 export function updateScene(
   projectId: string,
   volumeId: string,
@@ -309,6 +345,7 @@ export function updateScene(
     characters: values.characters ?? ctx.scene.characters,
     location: values.location === undefined ? ctx.scene.location : values.location,
     props: values.props ?? ctx.scene.props,
+    costumes: values.costumes ?? ctx.scene.costumes,
     shots: ctx.scene.shots,
     updatedAt: nowIso(ctx.scene.updatedAt),
     provenance: values.provenance ?? ctx.scene.provenance,
@@ -401,10 +438,7 @@ export function listEntities(projectId: string, kind: StudioEntityKind): StudioE
 export function createEntity(projectId: string, input: CreateEntityInput): StudioEntity {
   const ctx = requireProject(projectId);
   const values = parseInput(createEntityInputSchema, input);
-  const existing = [
-    ...listChildIds(entityKindDir(ctx, "character"), { files: true }),
-    ...listChildIds(entityKindDir(ctx, "location"), { files: true }),
-  ];
+  const existing = STUDIO_ENTITY_KINDS.flatMap((kind) => listChildIds(entityKindDir(ctx, kind), { files: true }));
   const id = values.id
     ? assertStudioId(values.id, "id")
     : nextNumberedId(values.kind, listChildIds(entityKindDir(ctx, values.kind), { files: true }));
@@ -420,7 +454,9 @@ export function createEntity(projectId: string, input: CreateEntityInput): Studi
     updatedAt: nowIso(),
   };
 
-  writeJsonFile(path.join(entityKindDir(ctx, values.kind), `${id}.json`), entity);
+  const entityDir = entityKindDir(ctx, values.kind);
+  ensureDirectory(entityDir);
+  writeJsonFile(path.join(entityDir, `${id}.json`), entity);
   return entity;
 }
 
@@ -532,9 +568,8 @@ function requireScene(projectId: string, volumeId: string, chapterId: string, sc
 function requireEntity(projectId: string, entityId: string) {
   const ctx = requireProject(projectId);
   const id = assertStudioId(entityId, "entityId");
-  const kinds: StudioEntityKind[] = ["character", "location"];
 
-  for (const kind of kinds) {
+  for (const kind of STUDIO_ENTITY_KINDS) {
     const entityFile = path.join(entityKindDir(ctx, kind), `${id}.json`);
     if (!fs.existsSync(entityFile)) {
       continue;
@@ -687,6 +722,7 @@ function writeDefaultProjectTree(projectDir: string, project: StudioProject, now
   ensureDirectory(path.join(projectDir, "entities", "characters"));
   ensureDirectory(path.join(projectDir, "entities", "locations"));
   ensureDirectory(path.join(projectDir, "entities", "props"));
+  ensureDirectory(path.join(projectDir, "entities", "costumes"));
   writeJsonFile(path.join(projectDir, "styles", "default.json"), {
     id: "default",
     label: "Default",
@@ -704,6 +740,7 @@ function defaultScene(id: string, title: string, updatedAt: string): StudioScene
     characters: [],
     location: null,
     props: [],
+    costumes: [],
     shots: [],
     updatedAt,
   };
@@ -714,7 +751,7 @@ function projectFile(ctx: ProjectContext, ...segments: string[]): string {
 }
 
 function entityKindDir(ctx: ProjectContext, kind: StudioEntityKind): string {
-  return projectFile(ctx, "entities", kind === "character" ? "characters" : "locations");
+  return projectFile(ctx, "entities", ENTITY_KIND_DIRS[kind]);
 }
 
 function listChildIds(
@@ -822,6 +859,87 @@ function entryLooksLikeDirectory(parent: string, entry: fs.Dirent): boolean {
 
 function removePathSafe(target: string): void {
   fs.rmSync(target, { recursive: true, force: true });
+}
+
+type SceneArtifacts = {
+  sceneIds: string[];
+  shotIds: string[];
+};
+
+function collectSceneArtifacts(scene: StudioScene): SceneArtifacts {
+  return {
+    sceneIds: [scene.id],
+    shotIds: scene.shots.map((shot) => shot.id),
+  };
+}
+
+function collectChapterArtifacts(ctx: ChapterContext): SceneArtifacts {
+  const scenesDir = path.join(ctx.chapterDir, "scenes");
+  const sceneIds: string[] = [];
+  const shotIds: string[] = [];
+
+  for (const id of listChildIds(scenesDir, { files: true })) {
+    const scene = tryReadSceneFile(path.join(scenesDir, `${id}.json`), id);
+    if (scene) {
+      sceneIds.push(scene.id);
+      for (const shot of scene.shots) {
+        shotIds.push(shot.id);
+      }
+    } else {
+      sceneIds.push(id);
+    }
+  }
+
+  return { sceneIds, shotIds };
+}
+
+function collectVolumeArtifacts(ctx: VolumeContext): SceneArtifacts {
+  const chaptersDir = path.join(ctx.volumeDir, "chapters");
+  const sceneIds: string[] = [];
+  const shotIds: string[] = [];
+
+  for (const chapterId of listChildIds(chaptersDir, { directories: true })) {
+    try {
+      assertStudioId(chapterId, "chapterId");
+    } catch {
+      continue;
+    }
+
+    const chapterDir = constrainToWorkspaceRoot(ctx.root, path.resolve(chaptersDir, chapterId));
+    const scenesDir = path.join(chapterDir, "scenes");
+    for (const sceneId of listChildIds(scenesDir, { files: true })) {
+      const scene = tryReadSceneFile(path.join(scenesDir, `${sceneId}.json`), sceneId);
+      if (scene) {
+        sceneIds.push(scene.id);
+        for (const shot of scene.shots) {
+          shotIds.push(shot.id);
+        }
+      } else {
+        sceneIds.push(sceneId);
+      }
+    }
+  }
+
+  return { sceneIds, shotIds };
+}
+
+function cleanupSceneArtifacts(ctx: ProjectContext, artifacts: SceneArtifacts): void {
+  for (const sceneId of artifacts.sceneIds) {
+    try {
+      const id = assertStudioId(sceneId, "sceneId");
+      removePathSafe(projectFile(ctx, "outputs", "images", id));
+    } catch {
+      // Ignore invalid ids left on disk; structure deletion already completed.
+    }
+  }
+
+  for (const shotId of artifacts.shotIds) {
+    try {
+      deleteWorkflowNode(ctx.projectId, shotId);
+    } catch {
+      // Missing or invalid workflow node paths are non-fatal.
+    }
+  }
 }
 
 function isAlreadyExists(error: unknown): boolean {

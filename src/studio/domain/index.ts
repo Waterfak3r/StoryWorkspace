@@ -9,6 +9,8 @@ export {
 
 export {
   STUDIO_SCHEMA_VERSION,
+  STUDIO_ENTITY_KINDS,
+  ENTITY_KIND_DIRS,
   chapterRecordSchema,
   contextSnapshotEntitySchema,
   contextSnapshotSchema,

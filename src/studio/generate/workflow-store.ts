@@ -58,6 +58,14 @@ export function writeWorkflowNode(projectId: string, node: StudioWorkflowNode): 
   return node;
 }
 
+export function deleteWorkflowNode(projectId: string, shotId: string): void {
+  const file = workflowNodeFile(projectId, shotId);
+  if (!fs.existsSync(file)) {
+    return;
+  }
+  fs.rmSync(file, { force: true });
+}
+
 export function writeWorkflowRun(projectId: string, run: StudioWorkflowRun): StudioWorkflowRun {
   writeJsonFile(workflowRunFile(projectId, run.id), workflowRunSchema.parse(run));
   return run;
@@ -73,6 +81,8 @@ export function nodeFromShot(input: {
   continuityConstraints?: string;
   previous?: StudioWorkflowNode | null;
 }): StudioWorkflowNode {
+  const previous = input.previous;
+
   return workflowNodeSchema.parse({
     id: input.shot.id,
     shotId: input.shot.id,
@@ -81,7 +91,7 @@ export function nodeFromShot(input: {
     statusLabel: statusLabelFor(input.shot.status),
     locked: input.shot.status === "locked",
     selectedImage: input.shot.selected_image ?? "",
-    continuityConstraints: input.continuityConstraints ?? input.previous?.continuityConstraints ?? "",
+    continuityConstraints: input.continuityConstraints ?? previous?.continuityConstraints ?? "",
     updatedAt: input.shot.updatedAt,
   });
 }

@@ -6,25 +6,37 @@ import { StudioAiError } from "../errors";
 import { resolveTextProvider, type TextProtocol } from "../settings";
 import type { CompleteJson } from "./schemas";
 
-const MAX_PROVIDER_PAYLOAD_BYTES = 256 * 1024;
-const SYSTEM_PROMPT = "Extract proposed scenes and entities. Return JSON only. Do not include secrets or API keys.";
+const MAX_PROVIDER_PAYLOAD_BYTES = 4 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 300_000;
+const SYSTEM_PROMPT = `Split the story into scenes and list entities. Return JSON only. Do not include secrets or API keys.
+Each scene script must copy the original wording for that scene, including ALL dialogue and action lines.
+Do not summarize, paraphrase, or omit spoken lines. Keep the source language.
+title and intent may be short; script may not.
+Clothing and wearable items are kind "costume" entities: put them in proposedEntities and attach via costumeNames.
+Do not fold clothing only into a character description or outfit text.`;
 
 const CHAT_JSON_CONTRACT = `Return JSON only with exactly these top-level keys: proposedScenes, proposedEntities.
 No extra keys.
 
-Scene fields: key, title, script, intent, characterNames, locationName
+Scene fields: key, title, script, intent, characterNames, locationName, propNames, costumeNames
 Entity fields: key, kind, name, description
 
 Rules:
 - key must match ^[a-z][a-z0-9-]{0,62}$
-- kind only "character" or "location"
+- kind only "character", "location", "prop", or "costume"
+- Clothing and wearable items are kind "costume" entities in proposedEntities; attach them with costumeNames
+- Do not fold clothing only into a character description or outfit text
 - locationName is a string or null
-- characterNames is an array of strings
+- characterNames, propNames, and costumeNames are arrays of strings
+- Each scene script must copy the original wording for that scene, including ALL dialogue and action lines
+- Do not summarize, paraphrase, or omit spoken lines
+- Keep the source language
+- title and intent may be short; script may not
 - No extra keys
 - Return JSON only
 
 Example:
-{"proposedScenes":[{"key":"scene-a","title":"Harbor watch","script":"Jill waits.","intent":"Night.","characterNames":["Jill"],"locationName":"Harbor"}],"proposedEntities":[{"key":"ent-jill","kind":"character","name":"Jill","description":"Lookout"}]}`;
+{"proposedScenes":[{"key":"scene-a","title":"Harbor watch","script":"Jill: \\"Any ships?\\"\\nJill: \\"None yet.\\"","intent":"Night.","characterNames":["Jill"],"locationName":"Harbor","propNames":["Lantern"],"costumeNames":["Watch coat"]}],"proposedEntities":[{"key":"ent-jill","kind":"character","name":"Jill","description":"Lookout"},{"key":"ent-lantern","kind":"prop","name":"Lantern","description":"Oil lamp"},{"key":"ent-coat","kind":"costume","name":"Watch coat","description":"Heavy navy coat"}]}`;
 
 const CHAT_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CHAT_JSON_CONTRACT}`;
 
@@ -106,42 +118,85 @@ function providerErrorMessage(payload: unknown): string | undefined {
   return undefined;
 }
 
-function extractFirstJsonObject(text: string): string | undefined {
-  const start = text.indexOf("{");
-  if (start < 0) {
-    return undefined;
+const PROPOSAL_OBJECT_KEYS = [
+  "proposedScenes",
+  "proposedEntities",
+  "scenes",
+  "entities",
+  "proposed_scenes",
+  "proposed_entities",
+] as const;
+
+function looksLikeProposal(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
   }
+  return PROPOSAL_OBJECT_KEYS.some((key) => key in value);
+}
 
-  let depth = 0;
-  let inString = false;
-  let escape = false;
+function isInvalidModelJson(error: unknown): boolean {
+  return error instanceof StudioAiError && error.code === "AI_INVALID_RESPONSE";
+}
 
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i]!;
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
+function stripThinkBlocks(text: string): string {
+  return text.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "").replace(/<think\b[^>]*>[\s\S]*$/gi, "");
+}
+
+function extractCompleteJsonObjects(text: string): unknown[] {
+  const parsed: unknown[] = [];
+  let offset = 0;
+
+  while (offset < text.length) {
+    const start = text.indexOf("{", offset);
+    if (start < 0) {
+      break;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let end: number | undefined;
+
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i]!;
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (ch === "\\") {
+          escape = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
       }
+
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === "{") {
+        depth += 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+
+    if (end === undefined) {
+      offset = start + 1;
       continue;
     }
 
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      depth += 1;
-    } else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, i + 1);
-      }
+    try {
+      parsed.push(JSON.parse(text.slice(start, end + 1)) as unknown);
+    } catch {
+      // Skip brace-balanced slices that are not valid JSON.
     }
+    offset = end + 1;
   }
 
-  return undefined;
+  return parsed;
 }
 
 function decodeChatContent(content: unknown): string {
@@ -209,36 +264,54 @@ function decodeChatJson(payload: unknown): unknown {
     throw invalidResponse();
   }
 
-  let content = decodeChatContent(first.message.content);
-  if (content.trim().length === 0 && typeof first.message.reasoning_content === "string") {
-    const reasoning = first.message.reasoning_content;
-    if (reasoning.trim().length > 0) {
-      content = reasoning;
-    }
+  const message = first.message;
+  const content = decodeChatContent(message.content);
+  const reasoningTexts: string[] = [];
+  if (typeof message.reasoning_content === "string") {
+    reasoningTexts.push(message.reasoning_content);
   }
-  if (content.trim().length === 0) {
-    throw invalidResponse();
+  if (typeof message.reasoning === "string") {
+    reasoningTexts.push(message.reasoning);
   }
 
-  return parseModelJson(content);
+  try {
+    return parseModelJson(content);
+  } catch (error) {
+    if (!isInvalidModelJson(error)) {
+      throw error;
+    }
+  }
+
+  for (const reasoning of reasoningTexts) {
+    try {
+      return parseModelJson(reasoning);
+    } catch (error) {
+      if (!isInvalidModelJson(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw invalidResponse();
 }
 
 function parseModelJson(raw: string): unknown {
-  const trimmed = raw.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  const body = fenced ? fenced[1] : trimmed;
+  const stripped = stripThinkBlocks(raw).trim();
+  const fenced = stripped.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const body = (fenced ? fenced[1] : stripped).trim();
   try {
     return JSON.parse(body) as unknown;
   } catch {
-    const extracted = extractFirstJsonObject(raw);
-    if (extracted === undefined) {
+    const objects = extractCompleteJsonObjects(body);
+    if (objects.length === 0) {
       throw invalidResponse();
     }
-    try {
-      return JSON.parse(extracted) as unknown;
-    } catch {
-      throw invalidResponse();
+    for (let i = objects.length - 1; i >= 0; i -= 1) {
+      if (looksLikeProposal(objects[i])) {
+        return objects[i];
+      }
     }
+    return objects[objects.length - 1];
   }
 }
 
@@ -305,19 +378,25 @@ function responsesBody(model: string, prompt: string, schema: z.ZodType) {
         schema: z.toJSONSchema(schema),
       },
     },
-    max_output_tokens: 4_000,
+    max_output_tokens: 32_768,
   };
 }
 
-function chatBody(model: string, prompt: string, includeResponseFormat: boolean) {
+function chatBody(model: string, prompt: string, includeStructuredHints: boolean) {
   return {
     model,
     temperature: 0,
+    max_tokens: 32_768,
     messages: [
       { role: "system", content: CHAT_SYSTEM_PROMPT },
       { role: "user", content: prompt },
     ],
-    ...(includeResponseFormat ? { response_format: { type: "json_object" } } : {}),
+    ...(includeStructuredHints
+      ? {
+          response_format: { type: "json_object" },
+          thinking: { type: "disabled" },
+        }
+      : {}),
   };
 }
 
@@ -357,6 +436,7 @@ export async function completeJsonWithFetch(
   schema: z.ZodType,
   prompt: string,
   fetchImpl: CompleteJsonFetch,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<unknown> {
   const { baseUrl, apiKey, model, protocol } = resolveTextProvider();
   if (!apiKey || !model) {
@@ -368,7 +448,7 @@ export async function completeJsonWithFetch(
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, 30_000);
+  }, timeoutMs);
 
   try {
     if (prefersChatCompletions(baseUrl, protocol)) {

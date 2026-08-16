@@ -51,7 +51,12 @@ export async function confirmParseRun(
     confirmedAt,
   };
 
-  const existingEntities = [...listEntities(projectId, "character"), ...listEntities(projectId, "location")];
+  const existingEntities = [
+    ...listEntities(projectId, "character"),
+    ...listEntities(projectId, "location"),
+    ...listEntities(projectId, "prop"),
+    ...listEntities(projectId, "costume"),
+  ];
   const writtenEntities: StudioEntity[] = [];
 
   for (const proposed of run.proposedEntities) {
@@ -143,8 +148,10 @@ function applyProposedScene(
   target: { volumeId: string; chapterId: string },
 ): StudioScene {
   const matched = existingScenes.find((entry) => namesEqual(entry.scene.title, proposed.title));
-  const characters = resolveCharacterIds(proposed.characterNames, entitiesByName);
+  const characters = resolveEntityIds("character", proposed.characterNames, entitiesByName);
   const location = resolveLocationId(proposed.locationName, entitiesByName);
+  const props = resolveEntityIds("prop", proposed.propNames, entitiesByName);
+  const costumes = resolveEntityIds("costume", proposed.costumeNames, entitiesByName);
 
   if (!matched) {
     const { volumeId, chapterId } = target;
@@ -155,6 +162,8 @@ function applyProposedScene(
       intent: proposed.intent,
       characters,
       location,
+      props,
+      costumes,
       expectedUpdatedAt: created.updatedAt,
       provenance,
       canonFields: [...SCENE_FIELDS],
@@ -219,10 +228,14 @@ function nameKey(kind: string, name: string): string {
   return `${kind}:${name.trim().toLowerCase()}`;
 }
 
-function resolveCharacterIds(names: string[], entitiesByName: Map<string, StudioEntity>): string[] {
+function resolveEntityIds(
+  kind: "character" | "prop" | "costume",
+  names: string[],
+  entitiesByName: Map<string, StudioEntity>,
+): string[] {
   const ids: string[] = [];
   for (const name of names) {
-    const entity = entitiesByName.get(nameKey("character", name));
+    const entity = entitiesByName.get(nameKey(kind, name));
     if (entity && !ids.includes(entity.id)) {
       ids.push(entity.id);
     }

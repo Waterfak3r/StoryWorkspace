@@ -65,13 +65,23 @@ export const sceneRecordSchema = z.strictObject({
   characters: z.array(z.string()),
   location: z.string().nullable(),
   props: z.array(z.string()),
+  costumes: z.array(z.string()).default([]),
   shots: z.array(shotRecordSchema).default([]),
   updatedAt: studioTimestampSchema,
   provenance: parseProvenanceSchema.optional(),
   canonFields: z.array(z.string()).optional(),
 });
 
-export const entityKindSchema = z.enum(["character", "location"]);
+export const STUDIO_ENTITY_KINDS = ["character", "location", "prop", "costume"] as const;
+
+export const entityKindSchema = z.enum(STUDIO_ENTITY_KINDS);
+
+export const ENTITY_KIND_DIRS: Record<(typeof STUDIO_ENTITY_KINDS)[number], string> = {
+  character: "characters",
+  location: "locations",
+  prop: "props",
+  costume: "costumes",
+};
 
 export const entityVisualSchema = z.strictObject({
   base: z.string(),
@@ -188,6 +198,7 @@ export const updateSceneInputSchema = z.strictObject({
   characters: z.array(z.string()).optional(),
   location: z.string().nullable().optional(),
   props: z.array(z.string()).optional(),
+  costumes: z.array(z.string()).optional(),
   provenance: parseProvenanceSchema.optional(),
   canonFields: z.array(z.string()).optional(),
   expectedUpdatedAt: studioTimestampSchema,

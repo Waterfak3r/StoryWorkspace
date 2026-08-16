@@ -9,6 +9,7 @@ import { createProject, getWorkspaceRoot } from "../fs";
 import {
   getProviderSettingsPath,
   readProviderSettings,
+  resolveImageProvider,
   resolveTextProvider,
   writeProviderSettings,
 } from "./providers";
@@ -24,6 +25,7 @@ const ENV_KEYS = [
   "IMAGE_API_KEY",
   "IMAGE_MODEL",
   "IMAGE_SIZE",
+  "IMAGE_QUALITY",
 ] as const;
 
 const previousEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]])) as Record<
@@ -52,6 +54,7 @@ beforeEach(() => {
   delete process.env.IMAGE_API_KEY;
   delete process.env.IMAGE_MODEL;
   delete process.env.IMAGE_SIZE;
+  delete process.env.IMAGE_QUALITY;
 });
 
 afterEach(() => {
@@ -126,6 +129,56 @@ describe("user provider settings", () => {
     expect(readProviderSettings().text.model).toBe("user-text-model-2");
     expect(isInsideDir(path.join(getWorkspaceRoot(), project.id), userConfigPath)).toBe(false);
     expect(userConfigPath.includes(`${path.sep}${project.id}${path.sep}`)).toBe(false);
+  });
+
+  it("resolves unset image quality to high by default", () => {
+    expect(process.env.IMAGE_QUALITY).toBeUndefined();
+    expect(resolveImageProvider().quality).toBe("high");
+    expect(resolveImageProvider().size).toBe("3840x2160");
+  });
+
+  it("PUT stores image quality high or low and GET never returns apiKey", async () => {
+    const putHigh = await putProviders(
+      jsonRequest("http://localhost/api/studio/settings/providers", "PUT", {
+        image: {
+          baseUrl: "https://naapi.cc/v1",
+          model: "gpt-image-2",
+          size: "3840x2160",
+          quality: "high",
+          apiKey: IMAGE_KEY,
+        },
+      }),
+    );
+    const highBody = await putHigh.json();
+    expect(putHigh.status).toBe(200);
+    expect(highBody.data.image).toMatchObject({
+      baseUrl: "https://naapi.cc/v1",
+      model: "gpt-image-2",
+      size: "3840x2160",
+      quality: "high",
+      apiKeyConfigured: true,
+      source: "user",
+    });
+    expect(highBody.data.image).not.toHaveProperty("apiKey");
+    expect(JSON.stringify(highBody)).not.toContain(IMAGE_KEY);
+
+    const putLow = await putProviders(
+      jsonRequest("http://localhost/api/studio/settings/providers", "PUT", {
+        image: { quality: "low" },
+      }),
+    );
+    const lowBody = await putLow.json();
+    expect(putLow.status).toBe(200);
+    expect(lowBody.data.image.quality).toBe("low");
+    expect(lowBody.data.image).not.toHaveProperty("apiKey");
+    expect(JSON.stringify(lowBody)).not.toContain(IMAGE_KEY);
+
+    const get = await getProviders();
+    const getBody = await get.json();
+    expect(get.status).toBe(200);
+    expect(getBody.data.image.quality).toBe("low");
+    expect(getBody.data.image).not.toHaveProperty("apiKey");
+    expect(JSON.stringify(getBody)).not.toContain(IMAGE_KEY);
   });
 
   it("resolves user text config over env after PUT", async () => {

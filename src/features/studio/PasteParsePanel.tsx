@@ -21,6 +21,7 @@ export function PasteParsePanel({
   targetChapterTitle,
   onBeforeMutate,
   onProjectRecordsChanged,
+  onParseBusyChange,
 }: {
   projectId: string;
   targetVolumeId: string | null;
@@ -29,6 +30,7 @@ export function PasteParsePanel({
   targetChapterTitle: string;
   onBeforeMutate: () => Promise<boolean>;
   onProjectRecordsChanged: () => Promise<void> | void;
+  onParseBusyChange?: (busy: boolean) => void;
 }) {
   const { t } = useI18n();
   const [text, setText] = useState("");
@@ -58,6 +60,16 @@ export function PasteParsePanel({
     };
   }, [projectId, t]);
 
+  useEffect(() => {
+    onParseBusyChange?.(busy === "parse");
+  }, [busy, onParseBusyChange]);
+
+  useEffect(() => {
+    return () => {
+      onParseBusyChange?.(false);
+    };
+  }, [onParseBusyChange]);
+
   const pending = runs.filter((run) => run.status === "pending");
 
   async function parse() {
@@ -66,6 +78,7 @@ export function PasteParsePanel({
       return;
     }
     setBusy("parse");
+    onParseBusyChange?.(true);
     setError("");
     try {
       const run = await parseStudioText(projectId, source);
@@ -77,6 +90,7 @@ export function PasteParsePanel({
       setError(parseError instanceof Error ? parseError.message : t("The text could not be parsed."));
     } finally {
       setBusy(null);
+      onParseBusyChange?.(false);
     }
   }
 
@@ -144,7 +158,7 @@ export function PasteParsePanel({
         disabled={busy !== null || text.trim() === ""}
         className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:opacity-60"
       >
-        {t("Parse")}
+        {t(busy === "parse" ? "Parsing…" : "Parse")}
       </button>
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
       {targetVolumeTitle && targetChapterTitle ? (
@@ -173,7 +187,9 @@ export function PasteParsePanel({
                 <p className="mt-2 text-xs font-semibold text-ink-muted">{t("Proposed entities")}</p>
                 <ul className="mt-1 space-y-1 text-sm text-ink">
                   {run.proposedEntities.map((entity) => (
-                    <li key={entity.key} className="truncate">{entity.name}</li>
+                    <li key={entity.key} className="truncate">
+                      {entity.name} · {entity.kind}
+                    </li>
                   ))}
                 </ul>
                 <div className="mt-3 flex flex-wrap gap-2">

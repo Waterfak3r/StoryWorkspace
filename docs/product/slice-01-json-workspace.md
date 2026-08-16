@@ -59,8 +59,11 @@ Next.js 16 写任何 route / page 前先读 `node_modules/next/dist/docs/`。
   entities/characters/
   entities/locations/
   entities/props/
+  entities/costumes/
   styles/default.json
 ```
+
+实体 kind：`character` | `location` | `prop` | `costume`。目录见 `ENTITY_KIND_DIRS`。
 
 路径必须 `realpath` 后仍落在工作区根下。`..`、绝对路径、盘符、UNC 一律 400。
 
@@ -97,12 +100,13 @@ Next.js 16 写任何 route / page 前先读 `node_modules/next/dist/docs/`。
   "characters": [],
   "location": null,
   "props": [],
+  "costumes": [],
   "shots": [],
   "updatedAt": "2026-03-27T00:00:00.000Z"
 }
 ```
 
-`characters` / `props` 是实体 `id` 数组。`location` 是实体 `id` 或 `null`。本切片保存剧本时**不校验**实体是否存在（下一刀再绑）。`shots` 本切片只读保留空数组，UI 不编镜头。
+`characters` / `props` / `costumes` 是实体 `id` 数组。`location` 是实体 `id` 或 `null`。本切片保存剧本时**不校验**实体是否存在（下一刀再绑）。`shots` 本切片只读保留空数组，UI 不编镜头。缺省 `costumes` 的旧 JSON 解析为 `[]`。
 
 ### `entities/characters/<id>.json`
 
@@ -153,8 +157,8 @@ Next.js 16 写任何 route / page 前先读 `node_modules/next/dist/docs/`。
 | PATCH | `.../chapters/:chapterId` | `{ title, expectedUpdatedAt }` |
 | POST | `.../chapters/:chapterId/scenes` | `{ title?, id? }` |
 | GET | `.../scenes/:sceneId` | 完整 scene JSON |
-| PATCH | `.../scenes/:sceneId` | `{ title?, script?, intent?, characters?, location?, props?, expectedUpdatedAt }` |
-| GET | `/api/studio/projects/:projectId/entities?kind=character\|location` | 列表 |
+| PATCH | `.../scenes/:sceneId` | `{ title?, script?, intent?, characters?, location?, props?, costumes?, expectedUpdatedAt }` |
+| GET | `/api/studio/projects/:projectId/entities?kind=character\|location\|prop\|costume` | 列表 |
 | POST | `/api/studio/projects/:projectId/entities` | `{ kind, name, id? }` |
 | GET | `/api/studio/projects/:projectId/entities/:entityId` | |
 | PATCH | `/api/studio/projects/:projectId/entities/:entityId` | 名称/描述/visual/states + `expectedUpdatedAt` |

@@ -12,6 +12,8 @@ export const proposedSceneSchema = z.strictObject({
   intent: z.string(),
   characterNames: z.array(z.string()),
   locationName: z.string().nullable(),
+  propNames: z.array(z.string()),
+  costumeNames: z.array(z.string()),
 });
 
 export const proposedEntitySchema = z.strictObject({

@@ -9,7 +9,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<StudioWorkflowNode[] | null>(null);
   const [error, setError] = useState("");
-  const [runningId, setRunningId] = useState<string | null>(null);
+  const [runningImageId, setRunningImageId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const next = await getStudioWorkflow(projectId);
@@ -33,18 +33,18 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
     };
   }, [refresh, t]);
 
-  async function rerun(node: StudioWorkflowNode) {
+  async function rerunImage(node: StudioWorkflowNode) {
     if (node.locked) {
       return;
     }
-    setRunningId(node.shotId);
+    setRunningImageId(node.shotId);
     try {
       await rerunStudioWorkflowNode(projectId, node.shotId);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
     } finally {
-      setRunningId(null);
+      setRunningImageId(null);
     }
   }
 
@@ -71,7 +71,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
       ) : (
         <ol className="mt-8 space-y-3">
           {nodes.map((node) => {
-            const busy = runningId === node.shotId;
+            const imageBusy = runningImageId === node.shotId;
             return (
               <li key={`${node.sceneId}-${node.shotId}`} className="rounded-xl border border-line bg-surface-raised px-4 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -79,9 +79,11 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
                     <p className="font-mono text-sm font-semibold text-ink">{node.shotId}</p>
                     <p className="mt-1 font-mono text-xs text-ink-faint">{node.sceneId}</p>
                   </div>
-                  <span className="rounded-full border border-line px-2.5 py-1 text-xs font-semibold text-ink">
-                    {node.statusLabel}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-line px-2.5 py-1 text-xs font-semibold text-ink">
+                      {node.statusLabel}
+                    </span>
+                  </div>
                 </div>
                 <div className="mt-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">{t("Continuity constraints")}</p>
@@ -89,14 +91,14 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
                     {node.continuityConstraints || t("No continuity constraints yet.")}
                   </p>
                 </div>
-                <div className="mt-4">
+                <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => void rerun(node)}
-                    disabled={node.locked || busy}
+                    onClick={() => void rerunImage(node)}
+                    disabled={node.locked || imageBusy}
                     className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {busy ? t("Rerunning") : t("Re-run")}
+                    {imageBusy ? t("Rerunning") : t("Re-run")}
                   </button>
                 </div>
               </li>

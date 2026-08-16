@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, GearSix, House, Images, Notebook, TreeStructure, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { StudioProject } from "@/studio/domain";
 import { LanguageSwitcher } from "@/features/i18n/LanguageSwitcher";
 import { useI18n } from "@/features/i18n/LocaleProvider";
@@ -14,7 +14,7 @@ import { OverviewPanel } from "./OverviewPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { StoryPanel } from "./StoryPanel";
 import { WorkflowPanel } from "./WorkflowPanel";
-import { studioSectionHref, type StudioSection } from "./sections";
+import { readSectionFromLocation, studioSectionHref, type StudioSection } from "./sections";
 
 const sectionItems: Array<{
   id: StudioSection;
@@ -40,14 +40,21 @@ export function StudioWorkspace({
   const router = useRouter();
   const [section, setSection] = useState(initialSection);
   const [seenSection, setSeenSection] = useState(initialSection);
+  const [mountedSections, setMountedSections] = useState(() => new Set<StudioSection>([initialSection]));
   if (seenSection !== initialSection) {
     setSeenSection(initialSection);
     setSection(initialSection);
+  }
+  if (!mountedSections.has(section)) {
+    const nextMounted = new Set(mountedSections);
+    nextMounted.add(section);
+    setMountedSections(nextMounted);
   }
 
   const [project, setProject] = useState<StudioProject | null>(null);
   const [loadError, setLoadError] = useState("");
   const [navigationPending, setNavigationPending] = useState(false);
+  const [parseBusy, setParseBusy] = useState(false);
   const flushRef = useRef<(() => Promise<boolean>) | null>(null);
 
   useEffect(() => {
@@ -90,11 +97,21 @@ export function StudioWorkspace({
         return;
       }
       setSection(next);
-      router.replace(studioSectionHref(projectId, next));
+      window.history.replaceState(window.history.state, "", studioSectionHref(projectId, next));
     } finally {
       setNavigationPending(false);
     }
-  }, [flushActive, projectId, router, section]);
+  }, [flushActive, projectId, section]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setSection(readSectionFromLocation(window.location));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, []);
 
   const goToLibrary = useCallback(async () => {
     setNavigationPending(true);
@@ -165,6 +182,20 @@ export function StudioWorkspace({
             />
           </div>
 
+          {parseBusy && section !== "story" ? (
+            <div className="flex items-center justify-between gap-3 border-b border-line bg-surface-muted px-4 py-2">
+              <p className="text-sm text-ink-muted">{t("Parse still running")}</p>
+              <button
+                type="button"
+                onClick={() => void goToSection("story")}
+                disabled={navigationPending}
+                className="inline-flex min-h-9 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface disabled:opacity-60"
+              >
+                {t("Back to Story")}
+              </button>
+            </div>
+          ) : null}
+
           <main className="flex min-h-0 flex-1 flex-col">
             {loadError ? (
               <div className="m-6 flex items-start gap-3 rounded-xl border border-danger/30 bg-danger/10 px-5 py-5">
@@ -176,17 +207,58 @@ export function StudioWorkspace({
               </div>
             ) : null}
 
-            {!loadError && section === "overview" && project ? (
-              <OverviewPanel project={project} onOpenSection={(next) => void goToSection(next)} />
+            {!loadError && mountedSections.has("overview") && project ? (
+              <KeepAlivePanel active={section === "overview"}>
+                <OverviewPanel project={project} onOpenSection={(next) => void goToSection(next)} />
+              </KeepAlivePanel>
             ) : null}
-            {!loadError && section === "story" ? <StoryPanel projectId={projectId} flushRef={flushRef} /> : null}
-            {!loadError && section === "entities" ? <EntitiesPanel projectId={projectId} flushRef={flushRef} /> : null}
-            {!loadError && section === "workflow" ? <WorkflowPanel projectId={projectId} /> : null}
-            {!loadError && section === "outputs" ? <OutputsPanel projectId={projectId} /> : null}
-            {!loadError && section === "settings" ? <SettingsPanel /> : null}
+            {!loadError && mountedSections.has("story") ? (
+              <KeepAlivePanel active={section === "story"}>
+                <StoryPanel
+                  projectId={projectId}
+                  flushRef={flushRef}
+                  active={section === "story"}
+                  onParseBusyChange={setParseBusy}
+                />
+              </KeepAlivePanel>
+            ) : null}
+            {!loadError && mountedSections.has("entities") ? (
+              <KeepAlivePanel active={section === "entities"}>
+                <EntitiesPanel projectId={projectId} flushRef={flushRef} active={section === "entities"} />
+              </KeepAlivePanel>
+            ) : null}
+            {!loadError && mountedSections.has("workflow") ? (
+              <KeepAlivePanel active={section === "workflow"}>
+                <WorkflowPanel projectId={projectId} />
+              </KeepAlivePanel>
+            ) : null}
+            {!loadError && mountedSections.has("outputs") ? (
+              <KeepAlivePanel active={section === "outputs"}>
+                <OutputsPanel projectId={projectId} />
+              </KeepAlivePanel>
+            ) : null}
+            {!loadError && mountedSections.has("settings") ? (
+              <KeepAlivePanel active={section === "settings"}>
+                <SettingsPanel />
+              </KeepAlivePanel>
+            ) : null}
           </main>
         </div>
       </div>
+    </div>
+  );
+}
+
+function KeepAlivePanel({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div hidden={!active} inert={!active} className={active ? "flex min-h-0 flex-1 flex-col" : undefined}>
+      {children}
     </div>
   );
 }

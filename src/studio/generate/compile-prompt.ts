@@ -3,13 +3,14 @@ import "server-only";
 import type { StudioContextSnapshot } from "../domain";
 import { resolveImageProvider } from "../settings";
 
-const DEFAULT_IMAGE_MODEL = "gpt-image-1";
+const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 export type CompiledImageRequest = {
   prompt: string;
   provider: {
     model: string;
     size: string;
+    quality: string;
   };
 };
 
@@ -40,9 +41,12 @@ export function compileImagePrompt(
   continuityConstraints = "",
 ): CompiledImageRequest {
   const entityLines = snapshot.entities.map((entity) => {
+    const kindLabel = entity.kind === "costume" ? "costume reference" : entity.kind;
+    const references = entity.visual.references.filter((ref) => ref.trim().length > 0);
     return [
-      `${entity.kind} ${entity.name}: ${entity.description}`.trim(),
+      `${kindLabel} ${entity.name}: ${entity.description}`.trim(),
       entity.visual.base ? `visual: ${entity.visual.base}` : "",
+      references.length > 0 ? `reference: ${references.join(", ")}` : "",
       entity.state.outfit ? `outfit: ${entity.state.outfit}` : "",
       entity.state.condition ? `condition: ${entity.state.condition}` : "",
     ]
@@ -72,6 +76,7 @@ export function compileImagePrompt(
     provider: {
       model: image.model || DEFAULT_IMAGE_MODEL,
       size: image.size,
+      quality: image.quality,
     },
   };
 }

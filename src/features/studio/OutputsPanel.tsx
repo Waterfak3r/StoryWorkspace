@@ -32,7 +32,7 @@ export function OutputsPanel({ projectId }: { projectId: string }) {
     };
   }, [projectId, t]);
 
-  const outputs = (nodes ?? []).filter((node) => node.selectedImage);
+  const imageOutputs = (nodes ?? []).filter((node) => node.selectedImage);
 
   return (
     <div className="mx-auto w-full max-w-[880px] px-5 py-10 sm:px-8">
@@ -52,12 +52,12 @@ export function OutputsPanel({ projectId }: { projectId: string }) {
             <div key={key} className="h-20 animate-pulse rounded-xl border border-line bg-surface-muted" />
           ))}
         </div>
-      ) : outputs.length === 0 ? (
+      ) : imageOutputs.length === 0 ? (
         <p className="mt-8 text-sm text-ink-muted">{t("No selected images yet.")}</p>
       ) : (
         <ul className="mt-8 space-y-3">
-          {outputs.map((node) => (
-            <li key={`${node.sceneId}-${node.shotId}`} className="rounded-xl border border-line bg-surface-raised px-4 py-4">
+          {imageOutputs.map((node) => (
+            <li key={`image-${node.sceneId}-${node.shotId}`} className="rounded-xl border border-line bg-surface-raised px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="font-mono text-sm font-semibold text-ink">{node.shotId}</p>
                 <span className="text-xs font-semibold text-ink-muted">{node.statusLabel}</span>

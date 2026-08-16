@@ -11,13 +11,17 @@ import {
 
 const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_MODEL = "glm-5.3";
+const NAAPI_BASE_URL = "https://naapi.cc/v1";
+const NAAPI_IMAGE_MODEL = "gpt-image-2";
+const NAAPI_IMAGE_SIZE = "3840x2160";
+const NAAPI_IMAGE_QUALITY = "high";
 
 const fieldClassName =
   "w-full rounded-lg border border-line bg-surface px-3.5 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-ink-faint focus:border-accent focus:ring-4 focus:ring-accent/15";
 
 const emptyView = (): PublicProviderSettings => ({
   text: { baseUrl: "", model: "", protocol: "auto", apiKeyConfigured: false, apiKeyHint: "", source: "default" },
-  image: { baseUrl: "", model: "", size: "", apiKeyConfigured: false, apiKeyHint: "", source: "default" },
+  image: { baseUrl: "", model: "", size: "", quality: "high", apiKeyConfigured: false, apiKeyHint: "", source: "default" },
 });
 
 export function SettingsPanel() {
@@ -30,6 +34,7 @@ export function SettingsPanel() {
   const [imageBaseUrl, setImageBaseUrl] = useState("");
   const [imageModel, setImageModel] = useState("");
   const [imageSize, setImageSize] = useState("");
+  const [imageQuality, setImageQuality] = useState("high");
   const [imageApiKey, setImageApiKey] = useState("");
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -68,6 +73,7 @@ export function SettingsPanel() {
     setImageBaseUrl(next.image.baseUrl);
     setImageModel(next.image.model);
     setImageSize(next.image.size);
+    setImageQuality(next.image.quality === "high" ? "high" : "low");
     setImageApiKey("");
   }
 
@@ -90,6 +96,7 @@ export function SettingsPanel() {
           baseUrl: imageBaseUrl,
           model: imageModel,
           size: imageSize,
+          quality: imageQuality,
           ...(imageApiKey.trim() ? { apiKey: imageApiKey.trim() } : {}),
         },
       });
@@ -201,6 +208,21 @@ export function SettingsPanel() {
           <fieldset className="rounded-xl border border-line bg-surface-raised px-4 py-5">
             <legend className="px-1 text-sm font-semibold text-ink">{t("Image API")}</legend>
             <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setImageBaseUrl(NAAPI_BASE_URL);
+                  setImageModel(NAAPI_IMAGE_MODEL);
+                  setImageSize(NAAPI_IMAGE_SIZE);
+                  setImageQuality(NAAPI_IMAGE_QUALITY);
+                }}
+                className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted"
+              >
+                {t("Use 钠API")}
+              </button>
+              <p className="text-xs leading-5 text-ink-faint">
+                {t("钠API uses the sync Images API. Default is gpt-image-2 at 3840x2160 high. If it times out, try https://us.naapi.cc/v1.")}
+              </p>
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">
                   {t("Base URL")}
@@ -236,6 +258,19 @@ export function SettingsPanel() {
                   autoComplete="off"
                   spellCheck={false}
                 />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">
+                  {t("Image quality")}
+                </span>
+                <select
+                  className={`${fieldClassName} min-h-11`}
+                  value={imageQuality}
+                  onChange={(event) => setImageQuality(event.target.value === "high" ? "high" : "low")}
+                >
+                  <option value="low">{t("Low")}</option>
+                  <option value="high">{t("High")}</option>
+                </select>
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">

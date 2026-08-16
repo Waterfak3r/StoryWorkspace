@@ -78,6 +78,7 @@ export type PublicImageProviderView = {
   baseUrl: string;
   model: string;
   size: string;
+  quality: string;
   apiKeyConfigured: boolean;
   apiKeyHint: string;
   source: ProviderKeySource;
@@ -100,6 +101,7 @@ export type ProviderSettingsUpdate = {
     baseUrl?: string;
     model?: string;
     size?: string;
+    quality?: string;
     apiKey?: string;
     clearApiKey?: boolean;
   };
@@ -128,6 +130,8 @@ export type ScenePatch = {
   intent?: string;
   characters?: string[];
   location?: string | null;
+  props?: string[];
+  costumes?: string[];
   expectedUpdatedAt: string;
 };
 
@@ -245,6 +249,31 @@ export async function createStudioScene(projectId: string, volumeId: string, cha
     { method: "POST", body: JSON.stringify({}) },
   );
   return data.scene;
+}
+
+export async function deleteStudioVolume(projectId: string, volumeId: string) {
+  return studioRequest<{ deleted: true }>(`/api/studio/projects/${projectId}/volumes/${volumeId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function deleteStudioChapter(projectId: string, volumeId: string, chapterId: string) {
+  return studioRequest<{ deleted: true }>(
+    `/api/studio/projects/${projectId}/volumes/${volumeId}/chapters/${chapterId}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function deleteStudioScene(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+) {
+  return studioRequest<{ deleted: true }>(
+    `/api/studio/projects/${projectId}/volumes/${volumeId}/chapters/${chapterId}/scenes/${sceneId}`,
+    { method: "DELETE" },
+  );
 }
 
 export function sceneUrl(projectId: string, path: ScenePath) {

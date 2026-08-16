@@ -22,3 +22,7 @@ export function readSectionParam(value: string | string[] | undefined) {
   }
   return parseStudioSection(value);
 }
+
+export function readSectionFromLocation(location: { pathname: string; search: string }): StudioSection {
+  return parseStudioSection(new URLSearchParams(location.search).get("section"));
+}

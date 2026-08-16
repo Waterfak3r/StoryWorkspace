@@ -36,6 +36,8 @@ describe("context snapshot evidence", () => {
     const project = createProject({ title: "Harbor Night" });
     const jill = createEntity(project.id, { kind: "character", name: "Jill" });
     const dock = createEntity(project.id, { kind: "location", name: "Dock" });
+    const lantern = createEntity(project.id, { kind: "prop", name: "Lantern" });
+    const coat = createEntity(project.id, { kind: "costume", name: "Watch coat" });
     updateEntity(project.id, jill.id, {
       description: "A harbor lookout",
       visual: { base: "wool coat", references: [] },
@@ -48,12 +50,24 @@ describe("context snapshot evidence", () => {
       states: { default: { outfit: "", condition: "wet cobbles" } },
       expectedUpdatedAt: dock.updatedAt,
     });
+    updateEntity(project.id, lantern.id, {
+      description: "Oil lamp",
+      visual: { base: "brass lantern", references: [] },
+      expectedUpdatedAt: lantern.updatedAt,
+    });
+    updateEntity(project.id, coat.id, {
+      description: "Heavy coat",
+      visual: { base: "navy wool", references: [] },
+      expectedUpdatedAt: coat.updatedAt,
+    });
     const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
     updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
       script: "Jill waits under a lantern.",
       intent: "Establish Jill waiting for a signal.",
       characters: [jill.id],
       location: dock.id,
+      props: [lantern.id],
+      costumes: [coat.id],
       expectedUpdatedAt: scene.updatedAt,
     });
 
@@ -84,6 +98,8 @@ describe("context snapshot evidence", () => {
     });
 
     expect(snapshot.entities.some((entity) => entity.id === jill.id && entity.state.outfit === "navy coat")).toBe(true);
+    expect(snapshot.entities.some((entity) => entity.id === lantern.id && entity.kind === "prop")).toBe(true);
+    expect(snapshot.entities.some((entity) => entity.id === coat.id && entity.kind === "costume")).toBe(true);
     expect(snapshot.intent).toBe("Establish Jill waiting for a signal.");
     expect(snapshot.continuity.from).toBe("shot-01");
     expect(snapshot.continuity.prior?.action).toBe("Jill stands under a lantern");

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type MutableRefObject } from "react";
 import type { StudioEntity, StudioEntityKind } from "@/studio/domain";
+import { STUDIO_ENTITY_KINDS } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
 import {
   createStudioEntity,
@@ -28,20 +29,55 @@ const emptyDraft: EntityDraft = {
   condition: "",
 };
 
+const KIND_LABELS: Record<StudioEntityKind, string> = {
+  character: "Characters",
+  location: "Locations",
+  prop: "Props",
+  costume: "Costumes",
+};
+
+const KIND_NAME_LABELS: Record<StudioEntityKind, string> = {
+  character: "Character name",
+  location: "Location name",
+  prop: "Prop name",
+  costume: "Costume name",
+};
+
+const KIND_CREATE_LABELS: Record<StudioEntityKind, string> = {
+  character: "New character",
+  location: "New location",
+  prop: "New prop",
+  costume: "New costume",
+};
+
+const emptyNameDrafts = (): Record<StudioEntityKind, string> => ({
+  character: "",
+  location: "",
+  prop: "",
+  costume: "",
+});
+
+const emptyEntityLists = (): Record<StudioEntityKind, StudioEntity[]> => ({
+  character: [],
+  location: [],
+  prop: [],
+  costume: [],
+});
+
 export function EntitiesPanel({
   projectId,
   flushRef,
+  active,
 }: {
   projectId: string;
   flushRef: MutableRefObject<(() => Promise<boolean>) | null>;
+  active: boolean;
 }) {
   const { t } = useI18n();
-  const [characters, setCharacters] = useState<StudioEntity[]>([]);
-  const [locations, setLocations] = useState<StudioEntity[]>([]);
+  const [entitiesByKind, setEntitiesByKind] = useState(emptyEntityLists);
   const [listError, setListError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [characterName, setCharacterName] = useState("");
-  const [locationName, setLocationName] = useState("");
+  const [nameDrafts, setNameDrafts] = useState(emptyNameDrafts);
   const [creating, setCreating] = useState<StudioEntityKind | null>(null);
   const editorFlushRef = useRef<(() => Promise<boolean>) | null>(null);
 
@@ -53,28 +89,40 @@ export function EntitiesPanel({
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     flushRef.current = flush;
     return () => {
       if (flushRef.current === flush) {
         flushRef.current = null;
       }
     };
-  }, [flush, flushRef]);
+  }, [active, flush, flushRef]);
 
   useEffect(() => {
     let cancelled = false;
     const requestId = window.setTimeout(() => {
-      void Promise.all([
-        listStudioEntities(projectId, "character"),
-        listStudioEntities(projectId, "location"),
-      ])
-        .then(([nextCharacters, nextLocations]) => {
+      void Promise.all(STUDIO_ENTITY_KINDS.map((kind) => listStudioEntities(projectId, kind)))
+        .then((lists) => {
           if (cancelled) {
             return;
           }
-          setCharacters(nextCharacters);
-          setLocations(nextLocations);
-          setSelectedId((current) => current ?? nextCharacters[0]?.id ?? nextLocations[0]?.id ?? null);
+          const next = emptyEntityLists();
+          STUDIO_ENTITY_KINDS.forEach((kind, index) => {
+            next[kind] = lists[index] ?? [];
+          });
+          setEntitiesByKind(next);
+          setSelectedId((current) => {
+            if (current) {
+              return current;
+            }
+            for (const kind of STUDIO_ENTITY_KINDS) {
+              const first = next[kind][0];
+              if (first) {
+                return first.id;
+              }
+            }
+            return null;
+          });
         })
         .catch((error) => {
           if (!cancelled) {
@@ -89,7 +137,8 @@ export function EntitiesPanel({
     };
   }, [projectId, t]);
 
-  const selectedEntity = [...characters, ...locations].find((item) => item.id === selectedId) ?? null;
+  const allEntities = STUDIO_ENTITY_KINDS.flatMap((kind) => entitiesByKind[kind]);
+  const selectedEntity = allEntities.find((item) => item.id === selectedId) ?? null;
 
   async function selectEntity(id: string) {
     if (id === selectedId) {
@@ -104,7 +153,7 @@ export function EntitiesPanel({
 
   async function createKind(event: FormEvent<HTMLFormElement>, kind: StudioEntityKind) {
     event.preventDefault();
-    const name = (kind === "character" ? characterName : locationName).trim();
+    const name = nameDrafts[kind].trim();
     if (!name) {
       return;
     }
@@ -115,13 +164,11 @@ export function EntitiesPanel({
     setCreating(kind);
     try {
       const created = await createStudioEntity(projectId, { kind, name });
-      if (kind === "character") {
-        setCharacterName("");
-        setCharacters((current) => upsertEntity(current, created));
-      } else {
-        setLocationName("");
-        setLocations((current) => upsertEntity(current, created));
-      }
+      setNameDrafts((current) => ({ ...current, [kind]: "" }));
+      setEntitiesByKind((current) => ({
+        ...current,
+        [kind]: upsertEntity(current[kind], created),
+      }));
       setSelectedId(created.id);
     } catch (error) {
       setListError(error instanceof Error ? error.message : t("The request could not be completed."));
@@ -134,81 +181,22 @@ export function EntitiesPanel({
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
       <aside className="flex min-h-0 flex-col gap-8 border-b border-line bg-surface px-4 py-5 lg:w-80 lg:shrink-0 lg:border-b-0 lg:border-r lg:overflow-y-auto">
         {listError ? <p role="alert" className="text-sm text-danger">{listError}</p> : null}
-        <section>
-          <h2 className="text-sm font-semibold text-ink">{t("Characters")}</h2>
-          <form className="mt-3 space-y-2" onSubmit={(event) => void createKind(event, "character")}>
-            <label htmlFor="character-name" className="block text-xs font-semibold text-ink-muted">
-              {t("Character name")}
-            </label>
-            <input
-              id="character-name"
-              value={characterName}
-              onChange={(event) => setCharacterName(event.target.value)}
-              autoComplete="off"
-              maxLength={120}
-              className={`${fieldClassName} min-h-11`}
-            />
-            <button
-              type="submit"
-              disabled={creating !== null || characterName.trim().length === 0}
-              className="inline-flex min-h-10 items-center rounded-lg bg-accent px-3 text-xs font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:opacity-60"
-            >
-              {t("New character")}
-            </button>
-          </form>
-          <ul className="mt-3 space-y-1">
-            {characters.map((item) => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  onClick={() => void selectEntity(item.id)}
-                  aria-pressed={selectedId === item.id}
-                  className={`flex min-h-10 w-full items-center rounded-lg px-2 text-left text-sm transition-colors ${selectedId === item.id ? "bg-accent-soft font-semibold text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`}
-                >
-                  <span className="truncate">{item.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-semibold text-ink">{t("Locations")}</h2>
-          <form className="mt-3 space-y-2" onSubmit={(event) => void createKind(event, "location")}>
-            <label htmlFor="location-name" className="block text-xs font-semibold text-ink-muted">
-              {t("Location name")}
-            </label>
-            <input
-              id="location-name"
-              value={locationName}
-              onChange={(event) => setLocationName(event.target.value)}
-              autoComplete="off"
-              maxLength={120}
-              className={`${fieldClassName} min-h-11`}
-            />
-            <button
-              type="submit"
-              disabled={creating !== null || locationName.trim().length === 0}
-              className="inline-flex min-h-10 items-center rounded-lg bg-accent px-3 text-xs font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:opacity-60"
-            >
-              {t("New location")}
-            </button>
-          </form>
-          <ul className="mt-3 space-y-1">
-            {locations.map((item) => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  onClick={() => void selectEntity(item.id)}
-                  aria-pressed={selectedId === item.id}
-                  className={`flex min-h-10 w-full items-center rounded-lg px-2 text-left text-sm transition-colors ${selectedId === item.id ? "bg-accent-soft font-semibold text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`}
-                >
-                  <span className="truncate">{item.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {STUDIO_ENTITY_KINDS.map((kind) => (
+          <EntityKindSection
+            key={kind}
+            kind={kind}
+            title={t(KIND_LABELS[kind])}
+            nameLabel={t(KIND_NAME_LABELS[kind])}
+            createLabel={t(KIND_CREATE_LABELS[kind])}
+            nameValue={nameDrafts[kind]}
+            onNameChange={(value) => setNameDrafts((current) => ({ ...current, [kind]: value }))}
+            entities={entitiesByKind[kind]}
+            selectedId={selectedId}
+            creating={creating}
+            onCreate={(event) => void createKind(event, kind)}
+            onSelect={(id) => void selectEntity(id)}
+          />
+        ))}
       </aside>
 
       {selectedId ? (
@@ -219,19 +207,89 @@ export function EntitiesPanel({
           initialEntity={selectedEntity}
           flushRef={editorFlushRef}
           onSaved={(saved) => {
-            if (saved.kind === "character") {
-              setCharacters((current) => upsertEntity(current, saved));
-            } else {
-              setLocations((current) => upsertEntity(current, saved));
-            }
+            setEntitiesByKind((current) => {
+              const next = emptyEntityLists();
+              for (const kind of STUDIO_ENTITY_KINDS) {
+                next[kind] = current[kind].filter((item) => item.id !== saved.id);
+              }
+              next[saved.kind] = upsertEntity(next[saved.kind], saved);
+              return next;
+            });
           }}
         />
       ) : (
         <section className="min-h-0 min-w-0 flex-1 px-5 py-6 sm:px-8">
-          <p className="text-sm text-ink-muted">{t("Select a character or location")}</p>
+          <p className="text-sm text-ink-muted">{t("Select an entity")}</p>
         </section>
       )}
     </div>
+  );
+}
+
+function EntityKindSection({
+  kind,
+  title,
+  nameLabel,
+  createLabel,
+  nameValue,
+  onNameChange,
+  entities,
+  selectedId,
+  creating,
+  onCreate,
+  onSelect,
+}: {
+  kind: StudioEntityKind;
+  title: string;
+  nameLabel: string;
+  createLabel: string;
+  nameValue: string;
+  onNameChange: (value: string) => void;
+  entities: StudioEntity[];
+  selectedId: string | null;
+  creating: StudioEntityKind | null;
+  onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onSelect: (id: string) => void;
+}) {
+  const inputId = `${kind}-name`;
+  return (
+    <section>
+      <h2 className="text-sm font-semibold text-ink">{title}</h2>
+      <form className="mt-3 space-y-2" onSubmit={onCreate}>
+        <label htmlFor={inputId} className="block text-xs font-semibold text-ink-muted">
+          {nameLabel}
+        </label>
+        <input
+          id={inputId}
+          value={nameValue}
+          onChange={(event) => onNameChange(event.target.value)}
+          autoComplete="off"
+          maxLength={120}
+          className={`${fieldClassName} min-h-11`}
+        />
+        <button
+          type="submit"
+          disabled={creating !== null || nameValue.trim().length === 0}
+          className="inline-flex min-h-10 items-center rounded-lg bg-accent px-3 text-xs font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:opacity-60"
+        >
+          {createLabel}
+        </button>
+      </form>
+      <ul className="mt-3 space-y-1">
+        {entities.map((item) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              onClick={() => onSelect(item.id)}
+              aria-pressed={selectedId === item.id}
+              className={`flex min-h-10 w-full items-center rounded-lg px-2 text-left text-sm transition-colors ${selectedId === item.id ? "bg-accent-soft font-semibold text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`}
+            >
+              <span className="truncate">{item.name}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
