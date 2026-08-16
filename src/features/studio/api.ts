@@ -7,6 +7,8 @@ import type {
   StudioProjectSummary,
   StudioScene,
   StudioShot,
+  StudioComicsBook,
+  StudioStoryOutline,
   StudioStoryTree,
   StudioStoryTreeVolume,
   StudioWorkflowNode,
@@ -227,6 +229,16 @@ export async function getStudioTree(projectId: string): Promise<StudioStoryTree>
   return { volumes: data.volumes };
 }
 
+export async function getStudioOutline(projectId: string): Promise<StudioStoryOutline> {
+  const data = await studioRequest<{ outline: StudioStoryOutline }>(`/api/studio/projects/${projectId}/outline`);
+  return data.outline;
+}
+
+export async function getStudioComics(projectId: string): Promise<StudioComicsBook> {
+  const data = await studioRequest<{ book: StudioComicsBook }>(`/api/studio/projects/${projectId}/comics`);
+  return data.book;
+}
+
 export async function createStudioVolume(projectId: string) {
   const data = await studioRequest<{ volume: { id: string; title: string; updatedAt: string } }>(
     `/api/studio/projects/${projectId}/volumes`,
@@ -347,6 +359,18 @@ export async function lockStudioShot(projectId: string, path: ScenePath, shotId:
   return data;
 }
 
+export function studioImageUrl(projectId: string, relativePath: string) {
+  const trimmed = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (
+    !trimmed.startsWith("outputs/images/")
+    && !trimmed.startsWith("outputs/comics/")
+    && !trimmed.startsWith("assets/images/")
+  ) {
+    return "";
+  }
+  return `/api/studio/projects/${projectId}/files/${trimmed.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 export async function getStudioWorkflow(projectId: string) {
   const data = await studioRequest<{ nodes: StudioWorkflowNode[] }>(`/api/studio/projects/${projectId}/workflow`);
   return data.nodes;
@@ -392,6 +416,41 @@ export async function createStudioEntity(projectId: string, input: { kind: Studi
 export async function getStudioEntity(projectId: string, entityId: string) {
   const data = await studioRequest<{ entity: StudioEntity }>(`/api/studio/projects/${projectId}/entities/${entityId}`);
   return data.entity;
+}
+
+export async function uploadStudioEntityReference(projectId: string, entityId: string, file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  let response: Response;
+  try {
+    response = await fetch(`/api/studio/projects/${projectId}/entities/${entityId}/references`, {
+      method: "POST",
+      body,
+      cache: "no-store",
+    });
+  } catch {
+    throw new StudioRequestError(0, "NETWORK_ERROR", "The request could not be completed.", { retryable: true });
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as Envelope<{ entity: StudioEntity }>;
+  if (!response.ok) {
+    throw new StudioRequestError(
+      response.status,
+      payload.error?.code ?? "INTERNAL_ERROR",
+      payload.error?.message ?? "The request could not be completed.",
+      {
+        fieldErrors: payload.error?.fieldErrors,
+        retryable: payload.error?.retryable ?? false,
+        current: (payload as { current?: unknown }).current,
+      },
+    );
+  }
+  if (!payload.data?.entity) {
+    throw new StudioRequestError(response.status, "INTERNAL_ERROR", "The workspace returned an empty response.", {
+      retryable: true,
+    });
+  }
+  return payload.data.entity;
 }
 
 export async function updateStudioEntity(

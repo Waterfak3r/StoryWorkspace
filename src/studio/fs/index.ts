@@ -18,6 +18,7 @@ export {
   readScene,
   readStyle,
   readTree,
+  updateStyle,
   replaceSceneShots,
   updateChapter,
   updateEntity,

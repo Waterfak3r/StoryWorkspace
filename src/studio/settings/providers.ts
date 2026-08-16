@@ -179,6 +179,11 @@ export function isImageProviderConfigured(stored = readProviderSettings()): bool
   return Boolean(image.apiKey && image.model);
 }
 
+export function isTextProviderConfigured(stored = readProviderSettings()): boolean {
+  const text = resolveTextProvider(stored);
+  return Boolean(text.apiKey && text.model);
+}
+
 export function toPublicProviderSettings(stored = readProviderSettings()): PublicProviderSettings {
   const text = resolveTextProvider(stored);
   const image = resolveImageProvider(stored);

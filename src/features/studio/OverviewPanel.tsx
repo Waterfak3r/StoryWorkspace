@@ -110,6 +110,13 @@ export function OverviewPanel({
         </button>
         <button
           type="button"
+          onClick={() => onOpenSection("outline")}
+          className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line px-4 text-sm font-semibold text-ink transition-colors hover:bg-surface-muted"
+        >
+          {t("Story outline")}
+        </button>
+        <button
+          type="button"
           onClick={() => onOpenSection("entities")}
           className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line px-4 text-sm font-semibold text-ink transition-colors hover:bg-surface-muted"
         >

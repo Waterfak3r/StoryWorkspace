@@ -39,6 +39,9 @@ describe("i18n translations", () => {
     expect(zhTranslations["Story bible"]).toBe("故事圣经");
     expect(zhTranslations["Switch to English"]).toBe("切换到英文");
     expect(zhTranslations["Settings"]).toBe("设置");
+    expect(zhTranslations["Story outline"]).toBe("故事大纲");
+    expect(zhTranslations["Comics pages"]).toBe("漫画页");
+    expect(zhTranslations["Reference images"]).toBe("参考图");
     expect(zhTranslations["Save API settings"]).toBe("保存 API 设置");
   });
 });

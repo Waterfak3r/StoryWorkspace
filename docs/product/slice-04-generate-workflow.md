@@ -75,7 +75,7 @@ Context Resolver（纯快照，Slice 03）
 
 ## UI
 
-Workspace 分区启用 **Workflow**（可点）。列出每镜状态，重跑未锁定镜，展示连续性约束。Outputs 列出已选图片路径或缩略。Story bible / Outline / Adaptations 不得回到主 IA。
+Workspace 分区启用 **Workflow**（可点）。列出每镜状态，重跑未锁定镜，展示连续性约束。Outputs / Workflow 通过 `GET /api/studio/projects/:projectId/files/outputs/images/...` 显示已选静帧 PNG，不只显示相对路径。Story bible / Outline / Adaptations 不得回到主 IA。
 
 ## 测试
 

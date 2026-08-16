@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { StudioWorkflowNode } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
-import { getStudioWorkflow, rerunStudioWorkflowNode } from "./api";
+import { getStudioWorkflow, rerunStudioWorkflowNode, studioImageUrl } from "./api";
 
 export function WorkflowPanel({ projectId }: { projectId: string }) {
   const { t } = useI18n();
@@ -85,6 +85,13 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
                     </span>
                   </div>
                 </div>
+                {node.selectedImage ? (
+                  <img
+                    src={studioImageUrl(projectId, node.selectedImage)}
+                    alt={`${node.shotId} still`}
+                    className="mt-3 w-full rounded-lg border border-line bg-surface-muted object-contain"
+                  />
+                ) : null}
                 <div className="mt-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">{t("Continuity constraints")}</p>
                   <p className="mt-1 whitespace-pre-wrap text-sm text-ink-muted">

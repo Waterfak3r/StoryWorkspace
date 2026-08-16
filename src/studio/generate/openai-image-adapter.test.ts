@@ -120,6 +120,47 @@ describe("openaiCompatibleImageAdapter", () => {
     expect(readFileSync(absolute).equals(FAKE_PNG_BYTES)).toBe(true);
   });
 
+  it("POSTs /images/edits with the actual reference image bytes when refs exist", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://naapi.cc/v1/images/edits");
+      expect(init?.method).toBe("POST");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe(`Bearer ${TEST_IMAGE_KEY}`);
+      expect(headers.get("content-type") ?? "").not.toContain("application/json");
+      expect(init?.body).toBeInstanceOf(FormData);
+      const form = init?.body as FormData;
+      expect(form.get("prompt")).toBe("Keep Sue identical");
+      expect(form.get("model")).toBe("gpt-image-2");
+      const image = form.get("image");
+      expect(image).toBeInstanceOf(Blob);
+      const bytes = Buffer.from(await (image as Blob).arrayBuffer());
+      expect(bytes.equals(FAKE_PNG_BYTES)).toBe(true);
+      expect(bytes.toString("utf8")).not.toContain("assets/images/");
+      return new Response(
+        JSON.stringify({
+          data: [{ b64_json: FAKE_PNG_BYTES.toString("base64") }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const result = await openaiCompatibleImageAdapter({
+      ...adapterInput(),
+      prompt: "Keep Sue identical",
+      referenceImages: [
+        {
+          filename: "character-01-ref-01.png",
+          mime: "image/png",
+          bytes: FAKE_PNG_BYTES,
+        },
+      ],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.relativePath).toBe("outputs/images/scene-01/shot-01/run-01.png");
+  });
+
   it("maps HTTP 400 provider error.message and marks it non-retryable", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response(JSON.stringify({ error: { message: "balance low" } }), {

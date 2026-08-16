@@ -12,7 +12,9 @@ import {
   listStudioEntities,
   readConflictEntity,
   StudioRequestError,
+  studioImageUrl,
   updateStudioEntity,
+  uploadStudioEntityReference,
   type EntityDraft,
 } from "./api";
 import { ConflictBanner } from "./ConflictBanner";
@@ -486,6 +488,29 @@ function EntityEditor({
     }
   }
 
+  async function uploadReference(file: File) {
+    const current = entityRef.current;
+    if (!current) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const savedDraft = await persist();
+      if (!savedDraft && conflictRef.current) {
+        return;
+      }
+      const latest = entityRef.current ?? current;
+      const saved = await uploadStudioEntityReference(projectId, latest.id, file);
+      applyRecord(saved, entityRef, draftRef, committedRef, conflictRef, setEntity, setDraft, setCommitted, setConflict);
+      setSaveError("");
+      onSavedRef.current(saved);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : t("The request could not be completed."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function discard() {
     const current = entityRef.current;
     if (!current) {
@@ -576,6 +601,41 @@ function EntityEditor({
             rows={4}
             className={`${fieldClassName} resize-y py-3 leading-6`}
           />
+        </div>
+        <div className="space-y-2">
+          <p className="block text-sm font-semibold text-ink">{t("Reference images")}</p>
+          <p className="text-xs text-ink-muted">{t("These images are sent to the Image API so the same face, place, and props stay consistent.")}</p>
+          {entity.visual.references.length > 0 ? (
+            <ul className="flex flex-wrap gap-2">
+              {entity.visual.references.map((relativePath) => (
+                <li key={relativePath} className="overflow-hidden rounded-lg border border-line">
+                  <img
+                    src={studioImageUrl(projectId, relativePath)}
+                    alt={relativePath}
+                    className="h-24 w-24 object-cover"
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-ink-faint">{t("No reference images yet.")}</p>
+          )}
+          <label className="inline-flex min-h-11 cursor-pointer items-center rounded-lg border border-line bg-surface px-3 text-sm font-semibold text-ink">
+            {t("Add reference image")}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="sr-only"
+              disabled={busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) {
+                  void uploadReference(file);
+                }
+              }}
+            />
+          </label>
         </div>
         <div className="grid gap-5 sm:grid-cols-2">
           <div className="space-y-2">

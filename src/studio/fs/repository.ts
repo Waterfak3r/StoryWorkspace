@@ -19,6 +19,7 @@ import {
   projectRecordSchema,
   sceneRecordSchema,
   slugifyTitle,
+  DEFAULT_COMICS_STYLE_VISUAL,
   STUDIO_ENTITY_KINDS,
   STUDIO_SCHEMA_VERSION,
   styleRecordSchema,
@@ -474,6 +475,19 @@ export function readStyle(projectId: string): StudioStyle {
   return parseJsonRecord(file, styleRecordSchema);
 }
 
+export function updateStyle(projectId: string, visual: string): StudioStyle {
+  const ctx = requireProject(projectId);
+  const file = projectFile(ctx, "styles", "default.json");
+  const current = readStyle(projectId);
+  const next: StudioStyle = {
+    ...current,
+    visual: visual.trim(),
+    updatedAt: nowIso(current.updatedAt),
+  };
+  writeJsonFile(file, next);
+  return next;
+}
+
 export function updateEntity(projectId: string, entityId: string, input: UpdateEntityInput): StudioEntity {
   const ctx = requireEntity(projectId, entityId);
   const values = parseInput(updateEntityInputSchema, input);
@@ -726,7 +740,7 @@ function writeDefaultProjectTree(projectDir: string, project: StudioProject, now
   writeJsonFile(path.join(projectDir, "styles", "default.json"), {
     id: "default",
     label: "Default",
-    visual: "",
+    visual: DEFAULT_COMICS_STYLE_VISUAL,
     updatedAt: now,
   });
 }

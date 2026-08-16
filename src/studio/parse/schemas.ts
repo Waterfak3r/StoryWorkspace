@@ -14,6 +14,8 @@ export const proposedSceneSchema = z.strictObject({
   locationName: z.string().nullable(),
   propNames: z.array(z.string()),
   costumeNames: z.array(z.string()),
+  volumeName: z.string().default(""),
+  chapterName: z.string().default(""),
 });
 
 export const proposedEntitySchema = z.strictObject({

@@ -148,6 +148,21 @@ function normalizeScenes(items: unknown[]): unknown[] {
       costumeNames: asNameList(
         firstDefined(item.costumeNames, item.costume_names, item.costumes, item.outfits),
       ),
+      volumeName: firstNonEmptyString(
+        item.volumeName,
+        item.volume_name,
+        item.volume,
+        item.volumeTitle,
+        item.volume_title,
+      ),
+      chapterName: firstNonEmptyString(
+        item.chapterName,
+        item.chapter_name,
+        item.chapter,
+        item.chapterTitle,
+        item.chapter_title,
+        item.章,
+      ),
     };
   });
 }

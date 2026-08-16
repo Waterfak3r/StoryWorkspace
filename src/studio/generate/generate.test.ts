@@ -3,11 +3,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { GET as getStill } from "@/app/api/studio/projects/[projectId]/files/[...rel]/route";
 import { POST as postGenerate } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/shots/[shotId]/generate/route";
 import { GET as getWorkflow } from "@/app/api/studio/projects/[projectId]/workflow/route";
 import { directScene } from "../director";
 import { StudioConflictError } from "../errors";
-import { createProject, getWorkspaceRoot, readScene, updateScene } from "../fs";
+import { createEntity, createProject, getWorkspaceRoot, readScene, replaceSceneShots, updateScene } from "../fs";
+import type { ImageAdapterInput } from "./adapter";
+import { addEntityReferenceImage } from "./entity-references";
 import { fakeImageAdapter, FAKE_PNG_BYTES, generateShot, listWorkflowNodes, lockShot, rerunUnlockedShot } from "./index";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
@@ -94,7 +97,11 @@ describe("generate, lock, and workflow", () => {
 
     expect(result.shot.status).toBe("success");
     expect(result.shot.selected_image).toBeTruthy();
-    expect(result.shot.selected_image).toMatch(/^outputs\/images\/scene-01\/shot-01\/run-\d+\.png$/);
+    expect(result.shot.selected_image).toMatch(/^outputs\/comics\/pages\/page-01-01\/run-\d+\.png$/);
+    expect(result.compiled.prompt).toContain("ONE sequential comic PAGE as a single image");
+    const pageShots = readScene(fixture.projectId, "volume-01", "chapter-01", "scene-01").shots;
+    expect(pageShots[0]?.selected_image).toBe(result.shot.selected_image);
+    expect(pageShots[1]?.selected_image).toBe(result.shot.selected_image);
 
     const absolute = path.join(getWorkspaceRoot(), fixture.projectId, ...result.shot.selected_image!.split("/"));
     expect(existsSync(absolute)).toBe(true);
@@ -108,6 +115,61 @@ describe("generate, lock, and workflow", () => {
     expect(diskShot?.status).toBe("success");
     expect(diskShot?.selected_image).toBe(result.shot.selected_image);
     expect(result.node.statusLabel).toBe("成功");
+  });
+
+  it("passes on-disk entity reference bytes into the image adapter", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
+    addEntityReferenceImage(project.id, sue.id, FAKE_PNG_BYTES, "sue.png");
+    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      characters: [sue.id],
+      expectedUpdatedAt: scene.updatedAt,
+    });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      {
+        id: "shot-01",
+        scene_id: "scene-01",
+        purpose: "Establish",
+        action: "Sue waits at the desk.",
+        camera: "medium",
+        continuity_from: null,
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: "shot-02",
+        scene_id: "scene-01",
+        purpose: "Turn",
+        action: "Sue looks at the folder.",
+        camera: "close-up",
+        continuity_from: "shot-01",
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const seen: ImageAdapterInput[] = [];
+    const result = await generateShot(
+      project.id,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      async (input) => {
+        seen.push(input);
+        return fakeImageAdapter(input);
+      },
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.referenceImages?.length).toBe(1);
+    expect(seen[0]?.referenceImages?.[0]?.bytes.equals(FAKE_PNG_BYTES)).toBe(true);
+    expect(result.compiled.prompt).toContain("Attached image 1: character Sue");
+    expect(result.compiled.prompt).toContain("Match identity from the attached reference images");
   });
 
   it("includes a non-empty continuityConstraints string on regenerate payload, node, and snapshot", async () => {
@@ -236,6 +298,32 @@ describe("generate, lock, and workflow", () => {
     for (const node of workflowBody.data.nodes as Array<{ statusLabel: string }>) {
       expect(WORKFLOW_LABELS).toContain(node.statusLabel);
     }
+
+    const relativePath = generatedBody.data.shot.selected_image as string;
+    const still = await getStill(
+      new Request(`http://localhost/api/studio/projects/${fixture.projectId}/files/${relativePath}`),
+      {
+        params: Promise.resolve({
+          projectId: fixture.projectId,
+          rel: relativePath.split("/"),
+        }),
+      },
+    );
+    expect(still.status).toBe(200);
+    expect(still.headers.get("content-type")).toBe("image/png");
+    const stillBytes = Buffer.from(await still.arrayBuffer());
+    expect(stillBytes.subarray(0, 8)).toEqual(PNG_SIGNATURE);
+
+    const traversal = await getStill(
+      new Request(`http://localhost/api/studio/projects/${fixture.projectId}/files/../secret.png`),
+      {
+        params: Promise.resolve({
+          projectId: fixture.projectId,
+          rel: ["..", "secret.png"],
+        }),
+      },
+    );
+    expect(traversal.status).toBe(400);
   });
 });
 

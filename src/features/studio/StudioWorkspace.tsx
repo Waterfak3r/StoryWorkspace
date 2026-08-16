@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, GearSix, House, Images, Notebook, TreeStructure, UsersThree, WarningCircle } from "@phosphor-icons/react";
+import { ArrowLeft, GearSix, House, Images, ListNumbers, Notebook, TreeStructure, UsersThree, WarningCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { StudioProject } from "@/studio/domain";
 import { LanguageSwitcher } from "@/features/i18n/LanguageSwitcher";
@@ -10,6 +10,7 @@ import { useI18n } from "@/features/i18n/LocaleProvider";
 import { getStudioProject } from "./api";
 import { EntitiesPanel } from "./EntitiesPanel";
 import { OutputsPanel } from "./OutputsPanel";
+import { OutlinePanel } from "./OutlinePanel";
 import { OverviewPanel } from "./OverviewPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { StoryPanel } from "./StoryPanel";
@@ -18,11 +19,12 @@ import { readSectionFromLocation, studioSectionHref, type StudioSection } from "
 
 const sectionItems: Array<{
   id: StudioSection;
-  label: "Overview" | "Story" | "Entities" | "Workflow" | "Outputs" | "Settings";
+  label: "Overview" | "Story" | "Story outline" | "Entities" | "Workflow" | "Outputs" | "Settings";
   Icon: typeof House;
 }> = [
   { id: "overview", label: "Overview", Icon: House },
   { id: "story", label: "Story", Icon: Notebook },
+  { id: "outline", label: "Story outline", Icon: ListNumbers },
   { id: "entities", label: "Entities", Icon: UsersThree },
   { id: "workflow", label: "Workflow", Icon: TreeStructure },
   { id: "outputs", label: "Outputs", Icon: Images },
@@ -222,6 +224,11 @@ export function StudioWorkspace({
                 />
               </KeepAlivePanel>
             ) : null}
+            {!loadError && mountedSections.has("outline") ? (
+              <KeepAlivePanel active={section === "outline"}>
+                <OutlinePanel projectId={projectId} />
+              </KeepAlivePanel>
+            ) : null}
             {!loadError && mountedSections.has("entities") ? (
               <KeepAlivePanel active={section === "entities"}>
                 <EntitiesPanel projectId={projectId} flushRef={flushRef} active={section === "entities"} />
@@ -234,7 +241,7 @@ export function StudioWorkspace({
             ) : null}
             {!loadError && mountedSections.has("outputs") ? (
               <KeepAlivePanel active={section === "outputs"}>
-                <OutputsPanel projectId={projectId} />
+                <OutputsPanel projectId={projectId} active={section === "outputs"} />
               </KeepAlivePanel>
             ) : null}
             {!loadError && mountedSections.has("settings") ? (

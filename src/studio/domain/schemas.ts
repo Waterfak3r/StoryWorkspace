@@ -116,6 +116,75 @@ export const styleRecordSchema = z.strictObject({
   updatedAt: studioTimestampSchema,
 });
 
+export const DEFAULT_COMICS_STYLE_VISUAL =
+  "Sequential comic stills; consistent inked character designs reused across shots; muted watercolor palette; cinematic comic framing; no photorealism; no speech balloons or captions.";
+
+export const storyOutlineEntityRefSchema = z.strictObject({
+  id: studioIdSchema,
+  kind: entityKindSchema,
+  name: z.string(),
+});
+
+export const storyOutlineBeatSchema = z.strictObject({
+  id: studioIdSchema,
+  purpose: z.string(),
+  action: z.string(),
+  camera: z.string(),
+});
+
+export const storyOutlineSceneSchema = z.strictObject({
+  id: studioIdSchema,
+  title: z.string(),
+  intent: z.string(),
+  plot: z.string(),
+  environment: storyOutlineEntityRefSchema.nullable(),
+  entities: z.array(storyOutlineEntityRefSchema),
+  beats: z.array(storyOutlineBeatSchema),
+});
+
+export const storyOutlineChapterSchema = z.strictObject({
+  id: studioIdSchema,
+  title: z.string(),
+  scenes: z.array(storyOutlineSceneSchema),
+});
+
+export const storyOutlineVolumeSchema = z.strictObject({
+  id: studioIdSchema,
+  title: z.string(),
+  chapters: z.array(storyOutlineChapterSchema),
+});
+
+export const storyOutlineSchema = z.strictObject({
+  projectId: studioIdSchema,
+  title: z.string(),
+  volumes: z.array(storyOutlineVolumeSchema),
+});
+
+export const COMICS_PANELS_PER_PAGE = 4;
+
+export const comicsPanelSchema = z.strictObject({
+  pageIndex: z.number().int().min(0),
+  panelIndex: z.number().int().min(0).max(COMICS_PANELS_PER_PAGE - 1),
+  volumeId: studioIdSchema,
+  chapterId: studioIdSchema,
+  sceneId: studioIdSchema,
+  shotId: studioIdSchema,
+  stillPath: z.string().min(1),
+  caption: z.string(),
+});
+
+export const comicsPageSchema = z.strictObject({
+  index: z.number().int().min(0),
+  pageImage: z.string().min(1),
+  panels: z.array(comicsPanelSchema).min(1).max(COMICS_PANELS_PER_PAGE),
+});
+
+export const comicsBookSchema = z.strictObject({
+  projectId: studioIdSchema,
+  title: z.string(),
+  pages: z.array(comicsPageSchema),
+});
+
 export const storyTreeSceneSchema = z.strictObject({
   id: studioIdSchema,
   title: z.string(),
@@ -327,6 +396,15 @@ export type StudioScene = z.infer<typeof sceneRecordSchema>;
 export type StudioEntity = z.infer<typeof entityRecordSchema>;
 export type StudioEntityKind = z.infer<typeof entityKindSchema>;
 export type StudioStyle = z.infer<typeof styleRecordSchema>;
+export type StudioStoryOutline = z.infer<typeof storyOutlineSchema>;
+export type StudioStoryOutlineVolume = z.infer<typeof storyOutlineVolumeSchema>;
+export type StudioStoryOutlineChapter = z.infer<typeof storyOutlineChapterSchema>;
+export type StudioStoryOutlineScene = z.infer<typeof storyOutlineSceneSchema>;
+export type StudioStoryOutlineEntityRef = z.infer<typeof storyOutlineEntityRefSchema>;
+export type StudioStoryOutlineBeat = z.infer<typeof storyOutlineBeatSchema>;
+export type StudioComicsPanel = z.infer<typeof comicsPanelSchema>;
+export type StudioComicsPage = z.infer<typeof comicsPageSchema>;
+export type StudioComicsBook = z.infer<typeof comicsBookSchema>;
 export type StudioContextSnapshot = z.infer<typeof contextSnapshotSchema>;
 export type StudioWorkflowStatusLabel = z.infer<typeof workflowStatusLabelSchema>;
 export type StudioWorkflowNode = z.infer<typeof workflowNodeSchema>;

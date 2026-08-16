@@ -8,6 +8,7 @@ export {
   emptyProviderSettings,
   getProviderSettingsPath,
   isImageProviderConfigured,
+  isTextProviderConfigured,
   putImageProviderSchema,
   putProviderSettingsSchema,
   putTextProviderSchema,

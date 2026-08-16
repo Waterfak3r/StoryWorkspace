@@ -95,7 +95,7 @@ export function PasteParsePanel({
   }
 
   async function confirm(runId: string) {
-    if (busy || !targetVolumeId || !targetChapterId) {
+    if (busy) {
       return;
     }
     const ok = await onBeforeMutate();
@@ -161,14 +161,9 @@ export function PasteParsePanel({
         {t(busy === "parse" ? "Parsing…" : "Parse")}
       </button>
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
-      {targetVolumeTitle && targetChapterTitle ? (
-        <p className="text-xs text-ink-muted">
-          {t("New scenes will be added to {volume} / {chapter}.", {
-            volume: targetVolumeTitle,
-            chapter: targetChapterTitle,
-          })}
-        </p>
-      ) : null}
+      <p className="text-xs text-ink-muted">
+        {t("Confirm creates volumes and chapters from the story. The selected chapter is only used if the parse proposes a single chapter.")}
+      </p>
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">{t("Pending proposals")}</h3>
         {pending.length === 0 ? (
@@ -181,7 +176,9 @@ export function PasteParsePanel({
                 <p className="mt-2 text-xs font-semibold text-ink-muted">{t("Proposed scenes")}</p>
                 <ul className="mt-1 space-y-1 text-sm text-ink">
                   {run.proposedScenes.map((scene) => (
-                    <li key={scene.key} className="truncate">{scene.title}</li>
+                    <li key={scene.key} className="truncate">
+                      {[scene.volumeName, scene.chapterName, scene.title].filter((part) => part && part.trim()).join(" / ")}
+                    </li>
                   ))}
                 </ul>
                 <p className="mt-2 text-xs font-semibold text-ink-muted">{t("Proposed entities")}</p>
@@ -196,7 +193,7 @@ export function PasteParsePanel({
                   <button
                     type="button"
                     onClick={() => void confirm(run.id)}
-                    disabled={busy !== null || !targetChapterId}
+                    disabled={busy !== null}
                     className="inline-flex min-h-9 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:opacity-60"
                   >
                     {t("Confirm")}

@@ -6,6 +6,10 @@ import path from "node:path";
 import { GET as getWorkspace } from "@/app/api/studio/workspace/route";
 import { POST as postProject } from "@/app/api/studio/projects/route";
 import { GET as getProject } from "@/app/api/studio/projects/[projectId]/route";
+import { GET as getOutline } from "@/app/api/studio/projects/[projectId]/outline/route";
+import { GET as getComics } from "@/app/api/studio/projects/[projectId]/comics/route";
+import { POST as postEntityReference } from "@/app/api/studio/projects/[projectId]/entities/[entityId]/references/route";
+import { FAKE_PNG_BYTES } from "@/studio/generate/fake-image-adapter";
 import { GET as getTree } from "@/app/api/studio/projects/[projectId]/tree/route";
 import { POST as postVolume } from "@/app/api/studio/projects/[projectId]/volumes/route";
 import { DELETE as deleteVolume } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/route";
@@ -87,6 +91,117 @@ describe("studio HTTP routes", () => {
       title: "Untitled scene",
     });
     expect(treeBody.data.volumes[0]?.chapters[0]?.scenes[0]).not.toHaveProperty("script");
+
+    const outline = await getOutline(new Request("http://localhost/api/studio/projects/harbor-night/outline"), projectParams());
+    const outlineBody = await outline.json();
+    expect(outline.status).toBe(200);
+    expect(outlineBody.data.outline).toMatchObject({
+      projectId: "harbor-night",
+      title: "Harbor Night",
+    });
+    expect(outlineBody.data.outline.volumes[0]?.chapters[0]?.scenes[0]).toMatchObject({
+      id: "scene-01",
+      title: "Untitled scene",
+    });
+    expect(outlineBody.data.outline.volumes[0]?.chapters[0]?.scenes[0].plot).toBe("");
+
+    const emptyComics = await getComics(
+      new Request("http://localhost/api/studio/projects/harbor-night/comics"),
+      projectParams(),
+    );
+    const emptyComicsBody = await emptyComics.json();
+    expect(emptyComics.status).toBe(200);
+    expect(emptyComicsBody.data.book).toMatchObject({
+      projectId: "harbor-night",
+      title: "Harbor Night",
+      pages: [],
+    });
+
+    const scenePath = path.join(
+      getWorkspaceRoot(),
+      "harbor-night",
+      "content",
+      "volumes",
+      "volume-01",
+      "chapters",
+      "chapter-01",
+      "scenes",
+      "scene-01.json",
+    );
+    const sceneRecord = JSON.parse(readFileSync(scenePath, "utf8")) as {
+      shots: unknown[];
+      updatedAt: string;
+    };
+    sceneRecord.shots = [
+      {
+        id: "shot-01",
+        scene_id: "scene-01",
+        purpose: "Establish",
+        action: "Jill waits on the pier.",
+        camera: "wide",
+        continuity_from: null,
+        status: "success",
+        selected_image: "outputs/images/scene-01/shot-01/run-01.png",
+        updatedAt: sceneRecord.updatedAt,
+      },
+      {
+        id: "shot-02",
+        scene_id: "scene-01",
+        purpose: "Turn",
+        action: "A lantern swings.",
+        camera: "close-up",
+        continuity_from: "shot-01",
+        status: "success",
+        selected_image: "outputs/images/scene-01/shot-02/run-01.png",
+        updatedAt: sceneRecord.updatedAt,
+      },
+    ];
+    writeFileSync(scenePath, `${JSON.stringify(sceneRecord, null, 2)}\n`, "utf8");
+
+    const comics = await getComics(
+      new Request("http://localhost/api/studio/projects/harbor-night/comics"),
+      projectParams(),
+    );
+    const comicsBody = await comics.json();
+    expect(comics.status).toBe(200);
+    expect(comicsBody.data.book.pages).toHaveLength(1);
+    expect(comicsBody.data.book.pages[0]?.pageImage).toBe("outputs/images/scene-01/shot-01/run-01.png");
+    expect(comicsBody.data.book.pages[0]?.panels).toHaveLength(2);
+    expect(comicsBody.data.book.pages[0]?.panels.map((panel: { stillPath: string }) => panel.stillPath)).toEqual([
+      "outputs/images/scene-01/shot-01/run-01.png",
+      "outputs/images/scene-01/shot-02/run-01.png",
+    ]);
+    expect(comicsBody.data.book.pages[0]?.panels.map((panel: { caption: string }) => panel.caption)).toEqual([
+      "Jill waits on the pier.",
+      "A lantern swings.",
+    ]);
+  });
+
+  it("POSTs an entity reference image onto disk and lists it on the entity", async () => {
+    await postProject(jsonRequest("http://localhost/api/studio/projects", "POST", { title: "Harbor Night" }));
+    const created = await postEntity(
+      jsonRequest("http://localhost/api/studio/entities", "POST", { kind: "character", name: "Sue" }),
+      projectParams(),
+    );
+    const createdBody = await created.json();
+    const entityId = createdBody.data.entity.id as string;
+
+    const form = new FormData();
+    form.set("file", new File([FAKE_PNG_BYTES], "sue.png", { type: "image/png" }));
+    const uploaded = await postEntityReference(
+      new Request(`http://localhost/api/studio/projects/harbor-night/entities/${entityId}/references`, {
+        method: "POST",
+        body: form,
+      }),
+      { params: Promise.resolve({ projectId: "harbor-night", entityId }) },
+    );
+    const uploadedBody = await uploaded.json();
+    expect(uploaded.status).toBe(201);
+    expect(uploadedBody.data.relativePath).toBe(`assets/images/${entityId}/ref-01.png`);
+    expect(uploadedBody.data.entity.visual.references).toEqual([`assets/images/${entityId}/ref-01.png`]);
+    expect(
+      existsSync(path.join(getWorkspaceRoot(), "harbor-night", "assets", "images", entityId, "ref-01.png")),
+    ).toBe(true);
   });
 
   it("GET workspace lists the project without STORY_WORKSPACE_DB_PATH", async () => {

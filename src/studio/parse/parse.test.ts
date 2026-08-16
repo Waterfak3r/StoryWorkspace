@@ -271,7 +271,7 @@ describe("parse pasted text", () => {
     expect(run.proposedScenes[0]!.characterNames).toEqual(["Jill", "Tom"]);
   });
 
-  it("collapses thin multi-scene synopses into one scene with the full source", async () => {
+  it("redistributes the source across thin multi-scene synopses so scripts cover the original wording", async () => {
     const project = createProject({ title: "Harbor Night" });
     const sourceText = [
       "INT. HARBOR - NIGHT",
@@ -315,14 +315,22 @@ describe("parse pasted text", () => {
       }),
     );
 
-    expect(run.proposedScenes).toHaveLength(1);
-    expect(run.proposedScenes[0]!.script).toBe(sourceText);
-    expect(run.proposedScenes[0]!.key).toBe("scene-a");
-    expect(run.proposedScenes[0]!.title).toBe("Harbor watch");
-    expect(run.proposedScenes[0]!.characterNames).toEqual(["Jill", "Tom"]);
-    expect(run.proposedScenes[0]!.locationName).toBe("Harbor");
-    expect(run.proposedScenes[0]!.propNames).toEqual(["Lantern"]);
-    expect(run.proposedScenes[0]!.costumeNames).toEqual(["Watch coat"]);
+    expect(run.proposedScenes).toHaveLength(2);
+    expect(run.proposedScenes.map((scene) => scene.script).join("\n")).toBe(sourceText);
+    const jillScene = run.proposedScenes.find((scene) => /Any ships/i.test(scene.script));
+    const tomScene = run.proposedScenes.find((scene) => /Fog only/i.test(scene.script));
+    expect(jillScene).toBeDefined();
+    expect(tomScene).toBeDefined();
+    expect(jillScene!.characterNames).toEqual(expect.arrayContaining(["Jill"]));
+    expect(tomScene!.characterNames).toEqual(expect.arrayContaining(["Tom"]));
+    for (const scene of run.proposedScenes) {
+      if (/\bJill\b/.test(scene.script)) {
+        expect(scene.characterNames).toContain("Jill");
+      }
+      if (/\bTom\b/.test(scene.script)) {
+        expect(scene.characterNames).toContain("Tom");
+      }
+    }
     expect(run.proposedEntities).toEqual([
       { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
       { key: "ent-tom", kind: "character", name: "Tom", description: "A deckhand." },
@@ -453,6 +461,58 @@ describe("confirm parse target", () => {
     ))).toBe(false);
   });
 
+  it("creates chapters from proposed chapter names instead of dumping every scene into the selection", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const proposal: LlmParseProposal = {
+      proposedScenes: [
+        {
+          key: "scene-a",
+          title: "Harbor watch",
+          script: "Jill waits on the harbor.",
+          intent: "Open.",
+          characterNames: ["Jill"],
+          locationName: "Harbor",
+          propNames: [],
+          costumeNames: [],
+          volumeName: "Harbor Night",
+          chapterName: "Night watch",
+        },
+        {
+          key: "scene-b",
+          title: "Dawn signal",
+          script: "Jill sees a lantern.",
+          intent: "Close.",
+          characterNames: ["Jill"],
+          locationName: "Harbor",
+          propNames: [],
+          costumeNames: [],
+          volumeName: "Harbor Night",
+          chapterName: "Dawn",
+        },
+      ],
+      proposedEntities: [
+        { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
+        { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
+      ],
+    };
+
+    const run = await parsePastedText(project.id, "Jill waits on the harbor.\n\nJill sees a lantern.", fakeCompleteJson(proposal));
+    await confirmParseRun(project.id, run.id, { volumeId: "volume-01", chapterId: "chapter-01" });
+
+    const tree = readTree(project.id);
+    const volume = tree.volumes[0]!;
+    expect(volume.title).toBe("Harbor Night");
+    const chapterTitles = volume.chapters.map((chapter) => chapter.title);
+    expect(chapterTitles).toEqual(expect.arrayContaining(["Night watch", "Dawn"]));
+    expect(chapterTitles).not.toContain("Chapter 1");
+
+    const night = volume.chapters.find((chapter) => chapter.title === "Night watch");
+    const dawn = volume.chapters.find((chapter) => chapter.title === "Dawn");
+    expect(night?.scenes.map((item) => item.title)).toEqual(["Harbor watch"]);
+    expect(dawn?.scenes.map((item) => item.title)).toEqual(["Dawn signal"]);
+    expect(night?.scenes.some((item) => item.title === "Untitled scene")).toBe(false);
+  });
+
   it("rejects confirm when the target chapter does not exist", async () => {
     const project = createProject({ title: "Harbor Night" });
     createVolume(project.id, { id: "volume-02", title: "Volume 2" });
@@ -489,7 +549,7 @@ describe("workspace", () => {
   });
 });
 
-function harborProposal(): LlmParseProposal {
+function harborProposal() {
   return {
     proposedScenes: [
       {
@@ -512,7 +572,7 @@ function harborProposal(): LlmParseProposal {
   };
 }
 
-function fakeCompleteJson(proposal: LlmParseProposal): CompleteJson {
+function fakeCompleteJson(proposal: unknown): CompleteJson {
   return async () => proposal;
 }
 

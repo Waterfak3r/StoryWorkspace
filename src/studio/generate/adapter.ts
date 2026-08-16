@@ -8,11 +8,19 @@ export type ImageAdapterInput = {
   shotId: string;
   runId: string;
   prompt: string;
+  pageId?: string;
+  referenceImages?: readonly ImageReferenceInput[];
   provider: {
     model: string;
     size: string;
     quality: string;
   };
+};
+
+export type ImageReferenceInput = {
+  filename: string;
+  mime: string;
+  bytes: Buffer;
 };
 
 export type ImageAdapterResult = {

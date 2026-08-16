@@ -1,15 +1,21 @@
 import "server-only";
 
+import { DEFAULT_COMICS_STYLE_VISUAL } from "../domain";
 import {
   createChapter,
   createEntity,
   createScene,
   createVolume,
+  deleteScene,
   listEntities,
   readScene,
+  readStyle,
   readTree,
+  updateChapter,
   updateEntity,
   updateScene,
+  updateStyle,
+  updateVolume,
 } from "../fs";
 import { StudioConflictError, StudioNotFoundError } from "../errors";
 import type { StudioEntity, StudioParseProvenance, StudioScene } from "../domain";
@@ -42,7 +48,9 @@ export async function confirmParseRun(
     );
   }
 
-  const target = resolveConfirmTarget(projectId, values.volumeId, values.chapterId);
+  const fallback = resolveConfirmTarget(projectId, values.volumeId, values.chapterId);
+  const useProposedStructure = hasDistinctChapters(run.proposedScenes);
+  ensureComicsStyle(projectId);
 
   const confirmedAt = nowIso();
   const provenance: StudioParseProvenance = {
@@ -72,10 +80,15 @@ export async function confirmParseRun(
   const writtenScenes: StudioScene[] = [];
 
   for (const proposed of run.proposedScenes) {
+    const target = useProposedStructure
+      ? ensureVolumeAndChapter(projectId, proposed.volumeName, proposed.chapterName)
+      : fallback;
     writtenScenes.push(
       applyProposedScene(projectId, proposed, existingScenes, entitiesByName, overwriteCanon, provenance, target),
     );
   }
+
+  removeEmptyUntitledScenes(projectId);
 
   const confirmed: StudioParseRun = {
     ...run,
@@ -105,6 +118,9 @@ function applyProposedEntity(
     const created = createEntity(projectId, { kind: proposed.kind, name: proposed.name });
     const written = updateEntity(projectId, created.id, {
       description: proposed.description,
+      visual: proposed.description.trim()
+        ? { base: proposed.description.trim(), references: [] }
+        : created.visual,
       expectedUpdatedAt: created.updatedAt,
       provenance,
       canonFields: [...ENTITY_FIELDS],
@@ -286,6 +302,107 @@ function listLocatedScenes(projectId: string): LocatedScene[] {
     }
   }
   return scenes;
+}
+
+function hasDistinctChapters(scenes: ProposedScene[]): boolean {
+  const names = new Set(scenes.map((scene) => scene.chapterName.trim().toLowerCase()).filter(Boolean));
+  return names.size >= 2;
+}
+
+function ensureVolumeAndChapter(
+  projectId: string,
+  volumeName: string,
+  chapterName: string,
+): { volumeId: string; chapterId: string } {
+  const volumeTitle = volumeName.trim() || "Volume 1";
+  const chapterTitle = chapterName.trim() || "Chapter 1";
+  const volumeId = ensureVolumeByTitle(projectId, volumeTitle);
+  const chapterId = ensureChapterByTitle(projectId, volumeId, chapterTitle);
+  return { volumeId, chapterId };
+}
+
+function ensureVolumeByTitle(projectId: string, title: string): string {
+  const tree = readTree(projectId);
+  const matched = tree.volumes.find((volume) => namesEqual(volume.title, title));
+  if (matched) {
+    return matched.id;
+  }
+
+  const only = tree.volumes.length === 1 ? tree.volumes[0] : undefined;
+  if (only && isGenericVolumeTitle(only.title)) {
+    const latest = readTree(projectId).volumes.find((volume) => volume.id === only.id);
+    if (latest && !namesEqual(latest.title, title)) {
+      updateVolume(projectId, latest.id, { title, expectedUpdatedAt: latest.updatedAt });
+    }
+    return only.id;
+  }
+
+  return createVolume(projectId, { title }).id;
+}
+
+function ensureChapterByTitle(projectId: string, volumeId: string, title: string): string {
+  const tree = readTree(projectId);
+  const volume = tree.volumes.find((item) => item.id === volumeId);
+  const matched = volume?.chapters.find((chapter) => namesEqual(chapter.title, title));
+  if (matched) {
+    return matched.id;
+  }
+
+  const only = volume?.chapters.length === 1 ? volume.chapters[0] : undefined;
+  if (only && isGenericChapterTitle(only.title) && chapterLooksEmpty(projectId, volumeId, only.id, only.scenes)) {
+    updateChapter(projectId, volumeId, only.id, { title, expectedUpdatedAt: only.updatedAt });
+    return only.id;
+  }
+
+  return createChapter(projectId, volumeId, { title }).id;
+}
+
+function isGenericVolumeTitle(title: string): boolean {
+  return /^volume\s*\d*$/i.test(title.trim()) || namesEqual(title, "Untitled volume");
+}
+
+function isGenericChapterTitle(title: string): boolean {
+  return /^chapter\s*\d*$/i.test(title.trim()) || namesEqual(title, "Untitled chapter");
+}
+
+function chapterLooksEmpty(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  scenes: Array<{ id: string }>,
+): boolean {
+  if (scenes.length === 0) {
+    return true;
+  }
+  return scenes.every((item) => {
+    const scene = readScene(projectId, volumeId, chapterId, item.id);
+    return namesEqual(scene.title, "Untitled scene") && scene.script.trim().length === 0 && scene.shots.length === 0;
+  });
+}
+
+function removeEmptyUntitledScenes(projectId: string): void {
+  const tree = readTree(projectId);
+  for (const volume of tree.volumes) {
+    for (const chapter of volume.chapters) {
+      if (chapter.scenes.length < 2) {
+        continue;
+      }
+      for (const item of chapter.scenes) {
+        const scene = readScene(projectId, volume.id, chapter.id, item.id);
+        if (namesEqual(scene.title, "Untitled scene") && scene.script.trim().length === 0 && scene.shots.length === 0) {
+          deleteScene(projectId, volume.id, chapter.id, scene.id);
+        }
+      }
+    }
+  }
+}
+
+function ensureComicsStyle(projectId: string): void {
+  const style = readStyle(projectId);
+  if (style.visual.trim().length > 0) {
+    return;
+  }
+  updateStyle(projectId, DEFAULT_COMICS_STYLE_VISUAL);
 }
 
 function ensureDefaultChapter(projectId: string): { volumeId: string; chapterId: string } {

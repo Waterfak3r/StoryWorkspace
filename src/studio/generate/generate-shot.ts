@@ -1,5 +1,6 @@
 import "server-only";
 
+import { comicsPageGroup, comicsPageId } from "../comics/page-group";
 import { resolveContext } from "../context";
 import type {
   StudioContextSnapshot,
@@ -15,7 +16,8 @@ import { assertStudioId } from "../fs/paths";
 import { isImageProviderConfigured } from "../settings";
 import type { ImageAdapter } from "./adapter";
 import { withImageAdapterRetry } from "./adapter";
-import { buildContinuityConstraints, compileImagePrompt, type CompiledImageRequest } from "./compile-prompt";
+import { buildContinuityConstraints, compileComicsPagePrompt, entitiesForShot, type CompiledImageRequest } from "./compile-prompt";
+import { identityReferencePromptLines, loadEntityReferenceImages } from "./entity-references";
 import { fakeImageAdapter } from "./fake-image-adapter";
 import { openaiCompatibleImageAdapter } from "./openai-image-adapter";
 import {
@@ -65,12 +67,30 @@ export async function generateShot(
     throw new StudioConflictError("This shot is locked and cannot be regenerated.");
   }
 
-  const snapshot = resolveContext({ projectId, volumeId, chapterId, sceneId, shotId });
+  const shotIndex = scene.shots.findIndex((shot) => shot.id === current.id);
+  const pageShots = comicsPageGroup(scene.shots, shotIndex);
+  if (pageShots.some((shot) => shot.status === "locked")) {
+    throw new StudioConflictError("This comics page has a locked shot and cannot be regenerated.");
+  }
+
+  const snapshots = pageShots.map((shot) =>
+    resolveContext({ projectId, volumeId, chapterId, sceneId, shotId: shot.id }),
+  );
+  const snapshot = snapshots.find((item) => item.shot.id === current.id) ?? snapshots[0]!;
   const continuityConstraints = buildContinuityConstraints(snapshot);
-  const compiled = compileImagePrompt(snapshot, mode === "regenerate" ? continuityConstraints : "");
+  const referenceImages = loadEntityReferenceImages(
+    projectId,
+    uniqueEntities(snapshots.flatMap((item) => entitiesForShot(item))),
+  );
+  const compiled = compileComicsPagePrompt(
+    snapshots,
+    mode === "regenerate" ? continuityConstraints : "",
+    identityReferencePromptLines(referenceImages),
+  );
   const storedConstraints = mode === "regenerate" ? continuityConstraints : "";
   const runId = allocateRunId(projectId);
   const previousNode = tryReadWorkflowNode(projectId, current.id);
+  const pageId = comicsPageId(sceneId, shotIndex);
 
   let relativePath = "";
   try {
@@ -79,7 +99,9 @@ export async function generateShot(
       sceneId,
       shotId: current.id,
       runId,
+      pageId,
       prompt: compiled.prompt,
+      referenceImages,
       provider: compiled.provider,
     });
     relativePath = output.relativePath.trim();
@@ -116,10 +138,25 @@ export async function generateShot(
     throw toGenerationError(error);
   }
 
-  const shot = persistShot(projectId, volumeId, chapterId, sceneId, current.id, {
-    status: "success",
-    selected_image: relativePath,
-  });
+  let shot = current;
+  for (const member of pageShots) {
+    const next = persistShot(projectId, volumeId, chapterId, sceneId, member.id, {
+      status: "success",
+      selected_image: relativePath,
+    });
+    writeWorkflowNode(
+      projectId,
+      nodeFromShot({
+        sceneId,
+        shot: next,
+        continuityConstraints: member.id === current.id ? storedConstraints : tryReadWorkflowNode(projectId, member.id)?.continuityConstraints ?? "",
+        previous: tryReadWorkflowNode(projectId, member.id),
+      }),
+    );
+    if (member.id === current.id) {
+      shot = next;
+    }
+  }
   const node = writeWorkflowNode(
     projectId,
     nodeFromShot({
@@ -300,6 +337,19 @@ function findShotLocation(projectId: string, shotId: string): ShotLocation {
     throw new StudioNotFoundError("Shot not found.");
   }
   return match;
+}
+
+function uniqueEntities<T extends { id: string }>(entities: readonly T[]): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const entity of entities) {
+    if (seen.has(entity.id)) {
+      continue;
+    }
+    seen.add(entity.id);
+    unique.push(entity);
+  }
+  return unique;
 }
 
 function requireShot(shots: readonly StudioShot[], shotId: string): StudioShot {

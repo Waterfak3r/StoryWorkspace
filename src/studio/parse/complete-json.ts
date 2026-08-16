@@ -8,7 +8,8 @@ import type { CompleteJson } from "./schemas";
 
 const MAX_PROVIDER_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 300_000;
-const SYSTEM_PROMPT = `Split the story into scenes and list entities. Return JSON only. Do not include secrets or API keys.
+const SYSTEM_PROMPT = `Split the story into volumes, chapters, and scenes, then list entities. Return JSON only. Do not include secrets or API keys.
+You must divide the whole story yourself: every scene needs volumeName and chapterName. Start a new chapter when the plot, place, or time shifts. Do not put the entire story in one chapter if it has more than two beats.
 Each scene script must copy the original wording for that scene, including ALL dialogue and action lines.
 Do not summarize, paraphrase, or omit spoken lines. Keep the source language.
 title and intent may be short; script may not.
@@ -18,7 +19,7 @@ Do not fold clothing only into a character description or outfit text.`;
 const CHAT_JSON_CONTRACT = `Return JSON only with exactly these top-level keys: proposedScenes, proposedEntities.
 No extra keys.
 
-Scene fields: key, title, script, intent, characterNames, locationName, propNames, costumeNames
+Scene fields: key, title, script, intent, characterNames, locationName, propNames, costumeNames, volumeName, chapterName
 Entity fields: key, kind, name, description
 
 Rules:
@@ -28,6 +29,7 @@ Rules:
 - Do not fold clothing only into a character description or outfit text
 - locationName is a string or null
 - characterNames, propNames, and costumeNames are arrays of strings
+- volumeName and chapterName are required strings; group related scenes in the same chapter
 - Each scene script must copy the original wording for that scene, including ALL dialogue and action lines
 - Do not summarize, paraphrase, or omit spoken lines
 - Keep the source language
@@ -36,7 +38,7 @@ Rules:
 - Return JSON only
 
 Example:
-{"proposedScenes":[{"key":"scene-a","title":"Harbor watch","script":"Jill: \\"Any ships?\\"\\nJill: \\"None yet.\\"","intent":"Night.","characterNames":["Jill"],"locationName":"Harbor","propNames":["Lantern"],"costumeNames":["Watch coat"]}],"proposedEntities":[{"key":"ent-jill","kind":"character","name":"Jill","description":"Lookout"},{"key":"ent-lantern","kind":"prop","name":"Lantern","description":"Oil lamp"},{"key":"ent-coat","kind":"costume","name":"Watch coat","description":"Heavy navy coat"}]}`;
+{"proposedScenes":[{"key":"scene-a","title":"Harbor watch","script":"Jill: \\"Any ships?\\"\\nJill: \\"None yet.\\"","intent":"Night.","characterNames":["Jill"],"locationName":"Harbor","propNames":["Lantern"],"costumeNames":["Watch coat"],"volumeName":"Volume 1","chapterName":"Harbor night"}],"proposedEntities":[{"key":"ent-jill","kind":"character","name":"Jill","description":"Lookout"},{"key":"ent-lantern","kind":"prop","name":"Lantern","description":"Oil lamp"},{"key":"ent-coat","kind":"costume","name":"Watch coat","description":"Heavy navy coat"}]}`;
 
 const CHAT_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CHAT_JSON_CONTRACT}`;
 
@@ -359,21 +361,27 @@ async function postJson(
   return { status: response.status, payload };
 }
 
-function responsesBody(model: string, prompt: string, schema: z.ZodType) {
+function responsesBody(
+  model: string,
+  prompt: string,
+  schema: z.ZodType,
+  systemPrompt: string,
+  schemaName: string,
+) {
   return {
     model,
     store: false,
     input: [
       {
         role: "system",
-        content: [{ type: "input_text", text: SYSTEM_PROMPT }],
+        content: [{ type: "input_text", text: systemPrompt }],
       },
       { role: "user", content: [{ type: "input_text", text: prompt }] },
     ],
     text: {
       format: {
         type: "json_schema",
-        name: "studio_parse_proposal",
+        name: schemaName,
         strict: true,
         schema: z.toJSONSchema(schema),
       },
@@ -382,13 +390,14 @@ function responsesBody(model: string, prompt: string, schema: z.ZodType) {
   };
 }
 
-function chatBody(model: string, prompt: string, includeStructuredHints: boolean) {
+function chatBody(model: string, prompt: string, includeStructuredHints: boolean, systemPrompt: string) {
+  const chatSystem = systemPrompt === SYSTEM_PROMPT ? CHAT_SYSTEM_PROMPT : `${systemPrompt}\n\nReturn JSON only.`;
   return {
     model,
     temperature: 0,
     max_tokens: 32_768,
     messages: [
-      { role: "system", content: CHAT_SYSTEM_PROMPT },
+      { role: "system", content: chatSystem },
       { role: "user", content: prompt },
     ],
     ...(includeStructuredHints
@@ -407,13 +416,14 @@ async function requestChat(
   model: string,
   prompt: string,
   signal: AbortSignal,
+  systemPrompt: string,
 ): Promise<unknown> {
   try {
     const { payload } = await postJson(
       fetchImpl,
       endpoint(baseUrl, "chat/completions"),
       apiKey,
-      chatBody(model, prompt, true),
+      chatBody(model, prompt, true, systemPrompt),
       signal,
     );
     return decodeChatJson(payload);
@@ -423,7 +433,7 @@ async function requestChat(
         fetchImpl,
         endpoint(baseUrl, "chat/completions"),
         apiKey,
-        chatBody(model, prompt, false),
+        chatBody(model, prompt, false, systemPrompt),
         signal,
       );
       return decodeChatJson(payload);
@@ -432,11 +442,17 @@ async function requestChat(
   }
 }
 
+export type CompleteJsonOptions = {
+  systemPrompt?: string;
+  schemaName?: string;
+};
+
 export async function completeJsonWithFetch(
   schema: z.ZodType,
   prompt: string,
   fetchImpl: CompleteJsonFetch,
   timeoutMs = REQUEST_TIMEOUT_MS,
+  options: CompleteJsonOptions = {},
 ): Promise<unknown> {
   const { baseUrl, apiKey, model, protocol } = resolveTextProvider();
   if (!apiKey || !model) {
@@ -451,8 +467,11 @@ export async function completeJsonWithFetch(
   }, timeoutMs);
 
   try {
+    const systemPrompt = options.systemPrompt ?? SYSTEM_PROMPT;
+    const schemaName = options.schemaName ?? "studio_parse_proposal";
+
     if (prefersChatCompletions(baseUrl, protocol)) {
-      return await requestChat(fetchImpl, baseUrl, apiKey, model, prompt, controller.signal);
+      return await requestChat(fetchImpl, baseUrl, apiKey, model, prompt, controller.signal, systemPrompt);
     }
 
     try {
@@ -460,7 +479,7 @@ export async function completeJsonWithFetch(
         fetchImpl,
         endpoint(baseUrl, "responses"),
         apiKey,
-        responsesBody(model, prompt, schema),
+        responsesBody(model, prompt, schema, systemPrompt, schemaName),
         controller.signal,
       );
       return decodeResponsesJson(payload);
@@ -470,7 +489,7 @@ export async function completeJsonWithFetch(
         && error instanceof StudioAiError
         && (error.status === 404 || error.status === 405)
       ) {
-        return await requestChat(fetchImpl, baseUrl, apiKey, model, prompt, controller.signal);
+        return await requestChat(fetchImpl, baseUrl, apiKey, model, prompt, controller.signal, systemPrompt);
       }
       throw error;
     }

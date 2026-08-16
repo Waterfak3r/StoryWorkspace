@@ -5,6 +5,7 @@ import { StudioAiError, StudioValidationError } from "../errors";
 import { listEntities, readProject } from "../fs";
 import { normalizeLlmParseProposal } from "./normalize-proposal";
 import { preserveProposalScripts } from "./preserve-scripts";
+import { ensureStoryStructure } from "./story-structure";
 import { allocateParseRunId, nowIso, writeParseRun } from "./runs";
 import {
   llmParseProposalSchema,
@@ -13,7 +14,7 @@ import {
 } from "./schemas";
 
 const EXTRACT_INSTRUCTIONS =
-  "Extract proposed scenes and entities from this story text. Copy each scene's original wording into script, including all dialogue; do not write a synopsis.";
+  "Extract proposed scenes and reusable entities from this complete story. Split the whole story into volumes, chapters, and scenes yourself — do not leave chapter division to the user. Give every scene a volumeName and a chapterName; group related beats in the same chapter and start a new chapter when the plot, place, or time shifts. Copy each scene's original wording into script, including all dialogue; do not write a synopsis. Locations are kind location (environment). Clothing is kind costume. Put appearance and setting look in entity descriptions so later shots can reuse them.";
 
 export async function parsePastedText(
   projectId: string,
@@ -57,14 +58,18 @@ export async function parsePastedText(
   }
 
   const preserved = preserveProposalScripts(sourceText, parsed.data);
+  const structured = {
+    proposedEntities: preserved.proposedEntities,
+    proposedScenes: ensureStoryStructure(preserved.proposedScenes),
+  };
 
   const now = nowIso();
   const run: StudioParseRun = {
     id: allocateParseRunId(projectId),
     status: "pending",
     sourceText,
-    proposedScenes: preserved.proposedScenes,
-    proposedEntities: preserved.proposedEntities,
+    proposedScenes: structured.proposedScenes,
+    proposedEntities: structured.proposedEntities,
     createdAt: now,
     updatedAt: now,
   };

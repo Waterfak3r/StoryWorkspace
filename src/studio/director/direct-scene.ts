@@ -16,16 +16,55 @@ export type DirectorShotDraft = {
 
 export type SceneDirector = (scene: StudioScene) => readonly DirectorShotDraft[];
 
+export const ARTISTIC_CAMERAS = [
+  "wide establishing shot, slow push-in",
+  "medium two-shot, slight low angle",
+  "close-up, hold on the face",
+  "over-the-shoulder, shallow depth of field",
+  "high angle, observational hold",
+  "insert close-up, tight on the object",
+  "dutch angle, tension hold",
+] as const;
+
+const CAMERA_LANGUAGE =
+  /\b(wide|medium|close|close-up|closeup|angle|push|hold|insert|over-the-shoulder|ots|dutch|high|low|tracking|pan|tilt|crane)\b/i;
+
+export function hasCameraLanguage(camera: string): boolean {
+  return CAMERA_LANGUAGE.test(camera);
+}
+
+export function ensureArtisticCameras(drafts: readonly DirectorShotDraft[]): DirectorShotDraft[] {
+  const cameras = drafts.map((draft) => draft.camera.trim().toLowerCase());
+  const allSame = cameras.length > 0 && cameras.every((camera) => camera === cameras[0]);
+
+  return drafts.map((draft, index) => {
+    const camera = draft.camera.trim();
+    if (camera && hasCameraLanguage(camera) && !allSame) {
+      return { ...draft, camera };
+    }
+    const artistic = ARTISTIC_CAMERAS[index % ARTISTIC_CAMERAS.length]!;
+    return {
+      ...draft,
+      camera: camera && hasCameraLanguage(camera) ? `${camera}; ${artistic}` : artistic,
+    };
+  });
+}
+
 export function defaultDirector(scene: StudioScene): DirectorShotDraft[] {
   const parts = splitSceneScript(scene.script);
   return parts.map((action, index, all) => {
     const first = index === 0;
     const last = index === all.length - 1;
+    const preview = action.replace(/\s+/g, " ").slice(0, 56);
     return {
       id: numberedShotId(index + 1),
-      purpose: first ? "Establish the scene" : last ? "Close the scene" : "Continue the scene",
+      purpose: first
+        ? `Establish ${scene.title || "the scene"}`
+        : last
+          ? `Close ${scene.title || "the scene"}`
+          : `Advance the plot: ${preview}`,
       action,
-      camera: first ? "wide, slow push-in" : last ? "medium, hold" : "medium",
+      camera: ARTISTIC_CAMERAS[index % ARTISTIC_CAMERAS.length]!,
       continuity_from: first ? null : numberedShotId(index),
     };
   });
@@ -43,7 +82,39 @@ export function directScene(
     return scene;
   }
 
-  const drafts = director(scene);
+  return persistDirectorDrafts(projectId, volumeId, chapterId, sceneId, scene, director(scene));
+}
+
+export async function directSceneAsync(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  director?: SceneDirector,
+): Promise<StudioScene> {
+  const scene = readScene(projectId, volumeId, chapterId, sceneId);
+  if (scene.shots.length > 0) {
+    return scene;
+  }
+
+  if (director) {
+    return persistDirectorDrafts(projectId, volumeId, chapterId, sceneId, scene, director(scene));
+  }
+
+  const { llmDirector } = await import("./llm-director");
+  const drafts = await llmDirector(scene);
+  return persistDirectorDrafts(projectId, volumeId, chapterId, sceneId, scene, drafts);
+}
+
+function persistDirectorDrafts(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  scene: StudioScene,
+  rawDrafts: readonly DirectorShotDraft[],
+): StudioScene {
+  const drafts = ensureArtisticCameras(rawDrafts);
   if (!Array.isArray(drafts) || drafts.length < 2) {
     throw new StudioValidationError("Director must produce at least two shots.");
   }

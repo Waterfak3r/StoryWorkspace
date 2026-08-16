@@ -1,4 +1,4 @@
-export const STUDIO_SECTIONS = ["overview", "story", "entities", "workflow", "outputs", "settings"] as const;
+export const STUDIO_SECTIONS = ["overview", "story", "outline", "entities", "workflow", "outputs", "settings"] as const;
 
 export type StudioSection = (typeof STUDIO_SECTIONS)[number];
 

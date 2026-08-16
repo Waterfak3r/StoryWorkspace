@@ -129,6 +129,27 @@ async function bytesFromGenerationPayload(payload: unknown): Promise<Buffer> {
   throw invalidResponse();
 }
 
+function buildEditsForm(input: {
+  model: string;
+  prompt: string;
+  size: string;
+  quality: string;
+  references: readonly { filename: string; mime: string; bytes: Buffer }[];
+}): FormData {
+  const form = new FormData();
+  form.set("model", input.model);
+  form.set("prompt", input.prompt);
+  form.set("size", input.size);
+  form.set("quality", input.quality);
+  form.set("n", "1");
+  for (const reference of input.references) {
+    const copy = new Uint8Array(reference.bytes.byteLength);
+    copy.set(reference.bytes);
+    form.append("image", new Blob([copy], { type: reference.mime }), reference.filename);
+  }
+  return form;
+}
+
 async function errorFromHttpResponse(response: Response): Promise<StudioAiError> {
   let providerMessage: string | undefined;
   try {
@@ -151,22 +172,38 @@ export async function openaiCompatibleImageAdapter(input: ImageAdapterInput): Pr
   const model = input.provider.model.trim() || image.model;
   const size = input.provider.size.trim() || image.size;
   const quality = input.provider.quality.trim() || image.quality;
-  const response = await fetchWithTimeout(`${image.baseUrl.replace(/\/+$/, "")}/images/generations`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${image.apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      prompt: input.prompt,
-      size,
-      quality,
-      n: 1,
-      response_format: "b64_json",
-      moderation: "low",
-    }),
-  });
+  const references = input.referenceImages ?? [];
+  const response =
+    references.length > 0
+      ? await fetchWithTimeout(`${image.baseUrl.replace(/\/+$/, "")}/images/edits`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${image.apiKey}`,
+          },
+          body: buildEditsForm({
+            model,
+            prompt: input.prompt,
+            size,
+            quality,
+            references,
+          }),
+        })
+      : await fetchWithTimeout(`${image.baseUrl.replace(/\/+$/, "")}/images/generations`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${image.apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            prompt: input.prompt,
+            size,
+            quality,
+            n: 1,
+            response_format: "b64_json",
+            moderation: "low",
+          }),
+        });
 
   if (!response.ok) {
     throw await errorFromHttpResponse(response);

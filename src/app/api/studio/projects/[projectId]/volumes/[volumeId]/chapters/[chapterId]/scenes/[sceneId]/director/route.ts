@@ -1,10 +1,11 @@
 import { z } from "zod";
 
-import { directScene } from "@/studio/director";
+import { directSceneAsync } from "@/studio/director";
 import { parseStudioBody, runStudioRoute, studioDataResponse } from "@/studio/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const directSceneBodySchema = z.strictObject({});
 
@@ -21,7 +22,7 @@ export async function POST(request: Request, context: SceneDirectorRouteContext)
   return runStudioRoute(async () => {
     const { projectId, volumeId, chapterId, sceneId } = await context.params;
     await parseStudioBody(request, directSceneBodySchema);
-    const scene = directScene(projectId, volumeId, chapterId, sceneId);
+    const scene = await directSceneAsync(projectId, volumeId, chapterId, sceneId);
     return studioDataResponse({ scene });
   });
 }
