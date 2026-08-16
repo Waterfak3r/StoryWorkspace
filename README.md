@@ -1,6 +1,10 @@
 # Story Workspace
 
-Story Workspace is a long-form narrative workspace for creating and adapting stories across prose and screenplay formats. It keeps the premise, story bible, outline, chapters, reviewable AI drafts, adaptations, and deterministic Markdown export in one quiet local workspace.
+> **This branch (`refactor/visual-workflow-mvp`) rebuilds the product** as a local-first story → image workflow. Product scope: [docs/product/mvp.md](docs/product/mvp.md). Next implementation session: [docs/product/slice-01-json-workspace.md](docs/product/slice-01-json-workspace.md). Decision: [docs/decisions/014-visual-workflow-rebuild.md](docs/decisions/014-visual-workflow-rebuild.md). The sections below still describe the last `main` baseline until that code is replaced.
+
+Story Workspace on `main` is a long-form narrative workspace for creating and adapting stories across prose and screenplay formats. It keeps the premise, story bible, outline, chapters, reviewable AI drafts, adaptations, and deterministic Markdown export in one quiet local workspace.
+
+See the bilingual node-graph walkthrough in [使用说明 / User Guide](docs/user-guide.md).
 
 ## MVP capabilities
 
@@ -13,6 +17,7 @@ Story Workspace is a long-form narrative workspace for creating and adapting sto
 - Edit screenplay adaptations with the same autosave and conflict safeguards.
 - Preview and download a stable Markdown export containing project, bible, outline, chapter, and adaptation sections.
 - Use the workspace on desktop and mobile layouts with keyboard focus handling and reduced motion support.
+- Switch the interface between English and Simplified Chinese; the browser remembers the choice without translating user-authored story content.
 
 ## Requirements
 
@@ -37,15 +42,16 @@ From the repository root, run the foreground helper:
 .\start-local.ps1
 ```
 
-It checks Node.js 24.x, npm, and port availability; creates the database parent directory; and installs dependencies when `node_modules` is missing (`npm ci` when `package-lock.json` exists, otherwise `npm install`). Relative `-DatabasePath` values resolve from the repository root. Press `Ctrl+C` to stop the server.
+It checks Node.js 24.x, npm, and port availability; creates the JSON workspace root; and installs dependencies when `node_modules` is missing (`npm ci` when `package-lock.json` exists, otherwise `npm install`). Relative `-WorkspaceRoot` and `-DatabasePath` values resolve from the repository root. Press `Ctrl+C` to stop the server.
 
 ```powershell
-.\start-local.ps1 -Port 43140 -DatabasePath 'D:\story workspace\story.db'
+.\start-local.ps1 -WorkspaceRoot '.data\projects'
+.\start-local.ps1 -Port 43140 -WorkspaceRoot 'D:\story workspace\projects'
 .\start-local.ps1 -Production -Port 3000
 .\start-local.ps1 -SkipInstall  # fail if node_modules is missing
 ```
 
-Use `-Production` to build and then run `npm start`; development mode is the default. `-Port` selects the local port, `-DatabasePath` selects the SQLite file, and `-SkipInstall` disables automatic dependency installation. The helper sets `STORY_WORKSPACE_DB_PATH` only for this server run and does not read or print secrets.
+Use `-Production` to build and then run `npm start`; development mode is the default. `-Port` selects the local port, `-WorkspaceRoot` selects the JSON project folder, and `-SkipInstall` disables automatic dependency installation. `-DatabasePath` is leftover SQLite wiring and is not required to start. The helper sets `STORY_WORKSPACE_ROOT` only for this server run and does not read or print secrets.
 
 ## Production run
 
@@ -62,7 +68,8 @@ Copy `.env.example` to `.env.local` for local configuration. Empty AI values int
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `STORY_WORKSPACE_DB_PATH` | `.data/story-workspace.db` | SQLite file path. Relative paths resolve from the application working directory. Parent folders are created automatically. |
+| `STORY_WORKSPACE_ROOT` | `.data/projects` | JSON workspace root (project truth). Relative paths resolve from the application working directory. `start-local.ps1 -WorkspaceRoot` sets this for one server run. |
+| `STORY_WORKSPACE_DB_PATH` | `.data/story-workspace.db` | Leftover SQLite file path. Not required to list or create studio projects. |
 | `AI_BASE_URL` | `https://api.openai.com/v1` | Private server-side base URL for an OpenAI Responses-compatible provider. The app posts to `/responses`. |
 | `AI_API_KEY` | empty | Provider credential. Keep it server-side and out of source control. |
 | `AI_MODEL` | empty | Provider model identifier. AI requests are rejected as not configured until both this and `AI_API_KEY` are set. |

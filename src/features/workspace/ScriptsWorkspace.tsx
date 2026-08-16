@@ -9,6 +9,7 @@ import type { SceneEntityLink } from "@/domain/scene-link";
 import type { Storyboard } from "@/domain/storyboard";
 import type { CompileShotResult } from "@/domain/generation-compiler";
 import type { FakeGenerationBehavior, GenerationRecord } from "@/domain/generation";
+import { useI18n } from "@/features/i18n/LocaleProvider";
 import { predicateSchemaRegistry } from "@/domain/story-bible";
 import type { CreateEntityInput, Entity, EntityState, EvidenceSource, Fact, FactScope, FactValueType } from "@/domain/story-bible";
 import {
@@ -236,22 +237,31 @@ function activeScenes(scenes: readonly EditableScene[]) {
   return scenes.filter((scene) => scene.status === "active");
 }
 
-function sceneLabel(scene: Pick<EditableScene, "title" | "narrativeRank">) {
-  return scene.title.trim() || `Scene ${scene.narrativeRank + 1}`;
+type Translate = ReturnType<typeof useI18n>["t"];
+
+function sceneLabel(scene: Pick<EditableScene, "title" | "narrativeRank">, t?: Translate) {
+  return scene.title.trim() || (t ? t("Scene {number}", { number: scene.narrativeRank + 1 }) : `Scene ${scene.narrativeRank + 1}`);
 }
 
 function humanError(error: unknown, fallback: string) {
   return error instanceof WorkspaceApiError ? error.message : fallback;
 }
 
-function statusLabel(status: AnalysisRunStatus | null, loading: boolean) {
-  if (loading && !status) return "Loading analysis";
-  if (status === "queued") return "Queued";
-  if (status === "running") return "Running";
-  if (status === "succeeded") return "Succeeded";
-  if (status === "failed") return "Failed";
-  if (status === "stale") return "Stale";
-  return "Not analyzed";
+function statusLabel(status: AnalysisRunStatus | null, loading: boolean, t?: Translate) {
+  const label = loading && !status
+    ? "Loading analysis"
+    : status === "queued"
+      ? "Queued"
+      : status === "running"
+        ? "Running"
+        : status === "succeeded"
+          ? "Succeeded"
+          : status === "failed"
+            ? "Failed"
+            : status === "stale"
+              ? "Stale"
+              : "Not analyzed";
+  return t ? t(label) : label;
 }
 
 function statusTone(status: AnalysisRunStatus | null) {
@@ -367,6 +377,7 @@ function clearStoryboardBusyState(
 }
 
 export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCreateDocument, onDirtyChange }: ScriptsWorkspaceProps) {
+  const { t, formatNumber } = useI18n();
   const [freshDocument, setFreshDocument] = React.useState<ScriptDocument | null>(document);
   const [revision, setRevision] = React.useState<DocumentRevision | null>(null);
   const [scenes, setScenes] = React.useState<EditableScene[]>([]);
@@ -1236,7 +1247,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
     const sceneRevision = revision.sceneRevisions.find((scene) => scene.id === selectedRevisionId);
     if (!sceneRevision) return;
     setAnalysisState(selection, { loading: true, status: "queued", action: "running", error: null });
-    setStatusMessage(`Analysis queued for ${sceneLabel(selectedScene)}.`);
+      setStatusMessage(t("Analysis queued for {scene}.", { scene: sceneLabel(selectedScene, t) }));
     try {
       const queued = await enqueueAnalysis(projectId, {
         documentId: freshDocument.id,
@@ -1254,7 +1265,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
       setAnalysisState(selection, { status: executed.status, run: executed, loading: true, action: "reviewing-links" });
       await loadReview(selection, "reviewing-links");
       if (isCurrentAnalysisResponse(analysisSelectionRef.current, selection)) {
-        setStatusMessage(`Analysis ${statusLabel(executed.status, false).toLocaleLowerCase()} for ${sceneLabel(selectedScene)}.`);
+        setStatusMessage(t("Analysis {status} for {scene}.", { status: statusLabel(executed.status, false, t).toLocaleLowerCase(), scene: sceneLabel(selectedScene, t) }));
       }
     } catch (error) {
       if (!isCurrentAnalysisResponse(analysisSelectionRef.current, selection)) return;
@@ -1272,7 +1283,7 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
       }));
       setStatusMessage("Analysis failed; the script remains saved.");
     }
-  }, [freshDocument, loadReview, projectId, revision, selectedAnalysis?.action, selectedRevisionId, selectedScene, setAnalysisState]);
+  }, [freshDocument, loadReview, projectId, revision, selectedAnalysis?.action, selectedRevisionId, selectedScene, setAnalysisState, t]);
 
   const buildContext = React.useCallback(async () => {
     const selection = selectedContextSelection;
@@ -1735,43 +1746,43 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
 
   return (
     <section aria-labelledby="scripts-heading" className="min-w-0">
-      <div aria-live="polite" className="mb-5 min-h-6 text-sm text-ink-muted">{statusMessage}</div>
+      <div aria-live="polite" className="mb-5 min-h-6 text-sm text-ink-muted">{t(statusMessage)}</div>
       <header className="border-b border-line pb-6">
-        <p className="text-sm text-ink-faint">Scripts</p>
+        <p className="text-sm text-ink-faint">{t("Scripts")}</p>
         <h2 id="scripts-heading" className="mt-3 break-words text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{freshDocument?.title || document.title}</h2>
-        <p className="mt-3 max-w-[64ch] text-sm leading-6 text-ink-muted">Edit stable scenes, save immutable revisions, then review entity links for one scene at a time.</p>
+        <p className="mt-3 max-w-[64ch] text-sm leading-6 text-ink-muted">{t("Edit stable scenes, save immutable revisions, then review entity links for one scene at a time.")}</p>
       </header>
 
-      {documentError ? <p role="alert" className="mt-5 border-l-2 border-danger pl-3 text-sm leading-6 text-danger">{documentError}</p> : null}
-      {revisionError ? <p role="alert" className="mt-5 border-l-2 border-danger pl-3 text-sm leading-6 text-danger">{revisionError}</p> : null}
+      {documentError ? <p role="alert" className="mt-5 border-l-2 border-danger pl-3 text-sm leading-6 text-danger">{t(documentError)}</p> : null}
+      {revisionError ? <p role="alert" className="mt-5 border-l-2 border-danger pl-3 text-sm leading-6 text-danger">{t(revisionError)}</p> : null}
 
       {documentLoading ? (
-        <p className="mt-8 text-sm text-ink-muted">Loading the current immutable revision…</p>
+        <p className="mt-8 text-sm text-ink-muted">{t("Loading the current immutable revision…")}</p>
       ) : (
         <div className="mt-8 grid min-w-0 grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold text-ink">Scenes</h3>
-                <p className="mt-1 text-sm text-ink-faint">{activeSceneList.length} active {activeSceneList.length === 1 ? "scene" : "scenes"}{revision ? ` · revision ${revision.revisionNumber}` : " · unsaved document"}</p>
+                <h3 className="text-base font-semibold text-ink">{t("Scenes")}</h3>
+                <p className="mt-1 text-sm text-ink-faint">{t(activeSceneList.length === 1 ? "{count} active scene" : "{count} active scenes", { count: formatNumber(activeSceneList.length) })}{revision ? t(", revision {number}", { number: revision.revisionNumber }) : t(", unsaved document")}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={addScene} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent"><Plus size={17} aria-hidden="true" /> Add scene</button>
-                <button type="button" onClick={() => void saveRevision()} disabled={!revisionDirty || revisionSaving} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50">{revisionSaving ? "Saving revision" : "Save revision"}</button>
+                <button type="button" onClick={addScene} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent"><Plus size={17} aria-hidden="true" /> {t("Add scene")}</button>
+                <button type="button" onClick={() => void saveRevision()} disabled={!revisionDirty || revisionSaving} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50">{t(revisionSaving ? "Saving revision" : "Save revision")}</button>
               </div>
             </div>
 
             {activeSceneList.length > 0 ? (
-              <ol aria-label="Script scenes" className="mt-5 space-y-2">
+              <ol aria-label={t("Script scenes")} className="mt-5 space-y-2">
                 {activeSceneList.map((scene, index) => {
                   const selected = scene.id === selectedSceneId;
                   return (
                     <li key={scene.id} className={`min-w-0 rounded-lg border ${selected ? "border-accent bg-surface-raised shadow-sm" : "border-line bg-surface"}`}>
                       <div className="flex min-w-0 items-center gap-2 px-3 py-2">
-                        <button type="button" onClick={() => selectScene(scene.id)} aria-pressed={selected} className={`min-h-11 min-w-0 flex-1 break-words text-left text-sm ${selected ? "font-semibold text-ink" : "text-ink-muted hover:text-ink"}`}><span className="mr-2 font-mono text-xs text-ink-faint">{String(index + 1).padStart(2, "0")}</span>{sceneLabel(scene)}</button>
-                        <button type="button" onClick={() => moveScene(scene.id, -1)} disabled={index === 0} aria-label={`Move ${sceneLabel(scene)} up`} className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-ink-faint hover:bg-surface-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"><ArrowUp size={16} aria-hidden="true" /></button>
-                        <button type="button" onClick={() => moveScene(scene.id, 1)} disabled={index === activeSceneList.length - 1} aria-label={`Move ${sceneLabel(scene)} down`} className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-ink-faint hover:bg-surface-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"><ArrowDown size={16} aria-hidden="true" /></button>
-                        <button type="button" onClick={() => removeScene(scene.id)} aria-label={`Remove ${sceneLabel(scene)}`} className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-ink-faint hover:bg-danger/10 hover:text-danger"><Trash size={16} aria-hidden="true" /></button>
+                        <button type="button" onClick={() => selectScene(scene.id)} aria-pressed={selected} className={`min-h-11 min-w-0 flex-1 break-words text-left text-sm ${selected ? "font-semibold text-ink" : "text-ink-muted hover:text-ink"}`}><span className="mr-2 font-mono text-xs text-ink-faint">{String(index + 1).padStart(2, "0")}</span>{sceneLabel(scene, t)}</button>
+                        <button type="button" onClick={() => moveScene(scene.id, -1)} disabled={index === 0} aria-label={t("Move {scene} up", { scene: sceneLabel(scene, t) })} className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-ink-faint hover:bg-surface-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"><ArrowUp size={16} aria-hidden="true" /></button>
+                        <button type="button" onClick={() => moveScene(scene.id, 1)} disabled={index === activeSceneList.length - 1} aria-label={t("Move {scene} down", { scene: sceneLabel(scene, t) })} className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-ink-faint hover:bg-surface-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"><ArrowDown size={16} aria-hidden="true" /></button>
+                        <button type="button" onClick={() => removeScene(scene.id)} aria-label={t("Remove {scene}", { scene: sceneLabel(scene, t) })} className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-ink-faint hover:bg-danger/10 hover:text-danger"><Trash size={16} aria-hidden="true" /></button>
                       </div>
                     </li>
                   );
@@ -1779,8 +1790,8 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
               </ol>
             ) : (
               <div className="mt-5 border-l-2 border-line pl-4">
-                <p className="text-sm font-semibold text-ink">No active scenes yet.</p>
-                <p className="mt-2 text-sm leading-6 text-ink-muted">Add a scene to start a revision. Saving creates the immutable document revision used by analysis.</p>
+                <p className="text-sm font-semibold text-ink">{t("No active scenes yet.")}</p>
+                <p className="mt-2 text-sm leading-6 text-ink-muted">{t("Add a scene to start a revision. Saving creates the immutable document revision used by analysis.")}</p>
               </div>
             )}
 
@@ -1788,44 +1799,44 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
               <div className="mt-8 min-w-0 rounded-lg border border-line bg-surface p-4 sm:p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Scene editor</p>
-                    <h3 className="mt-2 break-words text-lg font-semibold text-ink">{sceneLabel(selectedScene)}</h3>
+                    <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">{t("Scene editor")}</p>
+                    <h3 className="mt-2 break-words text-lg font-semibold text-ink">{sceneLabel(selectedScene, t)}</h3>
                   </div>
                   <span className="break-all font-mono text-[11px] text-ink-faint">{selectedScene.id}</span>
                 </div>
-                <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="scene-title">Title</label>
+                <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="scene-title">{t("Title")}</label>
                 <input id="scene-title" value={selectedScene.title} onChange={(event) => updateScene(selectedScene.id, { title: event.target.value })} className="mt-2 min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink" maxLength={300} />
                 <div className="mt-5 min-w-0 rounded-lg border border-line bg-surface-raised p-3">
                   <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <label className="block text-sm font-semibold text-ink" htmlFor="scene-continuity-group">Continuity group</label>
-                      <p className="mt-1 text-xs leading-5 text-ink-faint">State carries only within this lane. Flashbacks and dreams stay isolated.</p>
+                      <label className="block text-sm font-semibold text-ink" htmlFor="scene-continuity-group">{t("Continuity group")}</label>
+                      <p className="mt-1 text-xs leading-5 text-ink-faint">{t("State carries only within this lane. Flashbacks and dreams stay isolated.")}</p>
                     </div>
-                    <button type="button" onClick={() => setGroupFormOpen((open) => !open)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-md border border-line px-2 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent"><Plus size={14} aria-hidden="true" /> {groupFormOpen ? "Close" : "New group"}</button>
+                    <button type="button" onClick={() => setGroupFormOpen((open) => !open)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-md border border-line px-2 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent"><Plus size={14} aria-hidden="true" /> {t(groupFormOpen ? "Close" : "New group")}</button>
                   </div>
-                  <select id="scene-continuity-group" aria-label="Continuity group" value={selectedScene.continuityGroupId} onChange={(event) => updateScene(selectedScene.id, { continuityGroupId: event.target.value })} disabled={continuityGroupsLoading || continuityGroups.length === 0} className="mt-3 min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface px-3 text-sm text-ink">
-                    {continuityGroups.length === 0 ? <option value="">{continuityGroupsLoading ? "Loading groups…" : "No groups available"}</option> : continuityGroups.map((group) => <option key={group.id} value={group.id}>{group.name}{group.isDefault ? " · main" : ` · ${group.kind}`}</option>)}
+                  <select id="scene-continuity-group" aria-label={t("Continuity group")} value={selectedScene.continuityGroupId} onChange={(event) => updateScene(selectedScene.id, { continuityGroupId: event.target.value })} disabled={continuityGroupsLoading || continuityGroups.length === 0} className="mt-3 min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface px-3 text-sm text-ink">
+                    {continuityGroups.length === 0 ? <option value="">{t(continuityGroupsLoading ? "Loading groups…" : "No groups available")}</option> : continuityGroups.map((group) => <option key={group.id} value={group.id}>{group.name}{group.isDefault ? `, ${t("main")}` : `, ${t(group.kind)}`}</option>)}
                   </select>
-                  {continuityGroupsError ? <p role="alert" className="mt-2 break-words text-xs leading-5 text-danger">{continuityGroupsError}</p> : null}
+                  {continuityGroupsError ? <p role="alert" className="mt-2 break-words text-xs leading-5 text-danger">{t(continuityGroupsError)}</p> : null}
                   {groupFormOpen ? (
                     <form onSubmit={(event) => void createProjectContinuityGroup(event)} className="mt-3 min-w-0 border-t border-line pt-3">
-                      <label className="block text-xs font-semibold text-ink" htmlFor="continuity-group-kind">Group type</label>
+                      <label className="block text-xs font-semibold text-ink" htmlFor="continuity-group-kind">{t("Group type")}</label>
                       <select id="continuity-group-kind" value={groupKind} onChange={(event) => setGroupKind(event.target.value as ContinuityGroupKind)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
-                        <option value="main" disabled>Main (the default group already exists)</option>
-                        <option value="flashback">Flashback</option>
-                        <option value="dream">Dream</option>
-                        <option value="parallel">Parallel</option>
-                        <option value="custom">Custom</option>
+                        <option value="main" disabled>{t("Main (the default group already exists)")}</option>
+                        <option value="flashback">{t("Flashback")}</option>
+                        <option value="dream">{t("Dream")}</option>
+                        <option value="parallel">{t("Parallel")}</option>
+                        <option value="custom">{t("Custom")}</option>
                       </select>
-                      <label className="mt-3 block text-xs font-semibold text-ink" htmlFor="continuity-group-name">Group name</label>
-                      <input id="continuity-group-name" value={groupName} onChange={(event) => setGroupName(event.target.value)} required maxLength={200} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink" placeholder="e.g. Main timeline" />
-                      <button type="submit" disabled={groupSaving || !groupName.trim()} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent disabled:cursor-not-allowed disabled:opacity-50">{groupSaving ? "Creating group" : "Create and use group"}</button>
+                      <label className="mt-3 block text-xs font-semibold text-ink" htmlFor="continuity-group-name">{t("Group name")}</label>
+                      <input id="continuity-group-name" value={groupName} onChange={(event) => setGroupName(event.target.value)} required maxLength={200} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink" placeholder={t("e.g. Main timeline")} />
+                      <button type="submit" disabled={groupSaving || !groupName.trim()} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent disabled:cursor-not-allowed disabled:opacity-50">{t(groupSaving ? "Creating group" : "Create and use group")}</button>
                     </form>
                   ) : null}
                 </div>
-                <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="scene-content">Content</label>
+                <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="scene-content">{t("Content")}</label>
                 <textarea id="scene-content" value={selectedScene.content} onChange={(event) => updateScene(selectedScene.id, { content: event.target.value })} className="mt-2 min-h-56 w-full min-w-0 resize-y rounded-lg border border-line bg-surface-raised px-3 py-3 text-sm leading-6 text-ink" maxLength={200000} />
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-ink-faint"><span>{revisionDirty ? "Unsaved changes" : "Saved"}</span><span>{selectedScene.content.length.toLocaleString()} characters</span></div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-ink-faint"><span>{t(revisionDirty ? "Unsaved changes" : "Saved")}</span><span>{t("{count} characters", { count: formatNumber(selectedScene.content.length) })}</span></div>
               </div>
             ) : null}
           </div>
@@ -1833,17 +1844,17 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
           <aside className="min-w-0 xl:border-l xl:border-line xl:pl-7" aria-labelledby="scene-analysis-heading">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <h3 id="scene-analysis-heading" className="break-words text-base font-semibold text-ink">Entity review</h3>
-                <p className="mt-1 text-sm leading-6 text-ink-muted">Analysis is separate from saving and navigation.</p>
+                <h3 id="scene-analysis-heading" className="break-words text-base font-semibold text-ink">{t("Entity review")}</h3>
+                <p className="mt-1 text-sm leading-6 text-ink-muted">{t("Analysis is separate from saving and navigation.")}</p>
               </div>
-              <button type="button" onClick={() => void runAnalysis()} disabled={!selectedScene || !selectedRevisionId || revisionDirty || selectedAnalysis?.action === "running" || selectedAnalysis?.loading === true} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"><Play size={16} aria-hidden="true" />{selectedAnalysis?.status === "failed" || selectedAnalysis?.status === "stale" ? "Retry analysis" : "Analyze scene"}</button>
+              <button type="button" onClick={() => void runAnalysis()} disabled={!selectedScene || !selectedRevisionId || revisionDirty || selectedAnalysis?.action === "running" || selectedAnalysis?.loading === true} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"><Play size={16} aria-hidden="true" />{t(selectedAnalysis?.status === "failed" || selectedAnalysis?.status === "stale" ? "Retry analysis" : "Analyze scene")}</button>
             </div>
-            {revisionDirty ? <p className="mt-3 text-xs leading-5 text-ink-faint">Save this revision before starting analysis.</p> : null}
+            {revisionDirty ? <p className="mt-3 text-xs leading-5 text-ink-faint">{t("Save this revision before starting analysis.")}</p> : null}
             {selectedScene && selectedRevisionId ? (
               <div className="mt-5 min-w-0" aria-busy={selectedAnalysis?.loading || undefined}>
-                <p className={`text-sm font-semibold ${statusTone(selectedAnalysis?.status ?? null)}`}>Status: {statusLabel(selectedAnalysis?.status ?? null, selectedAnalysis?.loading ?? false)}</p>
-                {selectedAnalysis?.error ? <p role="alert" className="mt-3 border-l-2 border-danger pl-3 text-sm leading-6 text-danger">{selectedAnalysis.error}</p> : null}
-                {selectedAnalysis?.loading && selectedAnalysis.action ? <p className="mt-3 text-xs text-ink-faint">{selectedAnalysis.action === "running" ? "The worker is processing this revision." : "Refreshing evidence and candidate links."}</p> : null}
+                <p className={`text-sm font-semibold ${statusTone(selectedAnalysis?.status ?? null)}`}>{t("Status: {status}", { status: statusLabel(selectedAnalysis?.status ?? null, selectedAnalysis?.loading ?? false, t) })}</p>
+                {selectedAnalysis?.error ? <p role="alert" className="mt-3 border-l-2 border-danger pl-3 text-sm leading-6 text-danger">{t(selectedAnalysis.error)}</p> : null}
+                {selectedAnalysis?.loading && selectedAnalysis.action ? <p className="mt-3 text-xs text-ink-faint">{t(selectedAnalysis.action === "running" ? "The worker is processing this revision." : "Refreshing evidence and candidate links.")}</p> : null}
                 <EntityReviewList review={selectedAnalysis?.review ?? null} entities={entities} entityLoading={entityLoading} sceneContent={selectedScene.content} onReviewLink={(link, decision) => void reviewLink(link, decision)} disabled={selectedAnalysis?.loading ?? false} />
                 <CanonPatchReviewPanel
                   projectId={projectId}
@@ -1887,29 +1898,29 @@ export function ScriptsWorkspace({ projectId, document, onDocumentChanged, onCre
                 />
               </div>
             ) : (
-              <p className="mt-5 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">Save at least one scene to review its entity mentions.</p>
+              <p className="mt-5 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">{t("Save at least one scene to review its entity mentions.")}</p>
             )}
 
             <div className="mt-8 border-t border-line pt-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-base font-semibold text-ink">Entity cards</h3>
-                  <p className="mt-1 text-sm text-ink-muted">Project-scoped Character, Location, and Prop records.</p>
+                  <h3 className="text-base font-semibold text-ink">{t("Entity cards")}</h3>
+                  <p className="mt-1 text-sm text-ink-muted">{t("Project-scoped Character, Location, and Prop records.")}</p>
                 </div>
-                <button type="button" onClick={() => { setEntityFormOpen((open) => !open); setEntityError(null); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-sm font-semibold text-ink-muted hover:border-accent hover:text-accent"><Plus size={16} aria-hidden="true" /> {entityFormOpen ? "Close" : "New entity"}</button>
+                <button type="button" onClick={() => { setEntityFormOpen((open) => !open); setEntityError(null); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-sm font-semibold text-ink-muted hover:border-accent hover:text-accent"><Plus size={16} aria-hidden="true" /> {t(entityFormOpen ? "Close" : "New entity")}</button>
               </div>
               {entityFormOpen ? (
                 <form onSubmit={(event) => void createProjectEntity(event)} className="mt-4 rounded-lg border border-line bg-surface p-4">
-                  <label className="block text-sm font-semibold text-ink" htmlFor="entity-type">Type</label>
+                  <label className="block text-sm font-semibold text-ink" htmlFor="entity-type">{t("Type")}</label>
                   <select id="entity-type" value={entityType} onChange={(event) => setEntityType(event.target.value as EntityType)} className="mt-2 min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink">
-                    {(Object.keys(entityTypeLabels) as EntityType[]).map((type) => <option key={type} value={type}>{entityTypeLabels[type]}</option>)}
+                    {(Object.keys(entityTypeLabels) as EntityType[]).map((type) => <option key={type} value={type}>{t(entityTypeLabels[type])}</option>)}
                   </select>
-                  <label className="mt-4 block text-sm font-semibold text-ink" htmlFor="entity-name">Canonical name</label>
+                  <label className="mt-4 block text-sm font-semibold text-ink" htmlFor="entity-name">{t("Canonical name")}</label>
                   <input id="entity-name" value={canonicalName} onChange={(event) => setCanonicalName(event.target.value)} required maxLength={200} className="mt-2 min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink" />
-                  <label className="mt-4 block text-sm font-semibold text-ink" htmlFor="entity-alias">Alias <span className="font-normal text-ink-faint">(optional)</span></label>
+                  <label className="mt-4 block text-sm font-semibold text-ink" htmlFor="entity-alias">{t("Alias")} <span className="font-normal text-ink-faint">({t("optional")})</span></label>
                   <input id="entity-alias" value={alias} onChange={(event) => setAlias(event.target.value)} maxLength={200} className="mt-2 min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink" />
-                  {entityError ? <p role="alert" className="mt-3 text-sm leading-6 text-danger">{entityError}</p> : null}
-                  <button type="submit" disabled={entitySaving || !canonicalName.trim()} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50">{entitySaving ? "Creating entity" : "Create entity"}</button>
+                  {entityError ? <p role="alert" className="mt-3 text-sm leading-6 text-danger">{t(entityError)}</p> : null}
+                  <button type="submit" disabled={entitySaving || !canonicalName.trim()} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50">{t(entitySaving ? "Creating entity" : "Create entity")}</button>
                 </form>
               ) : null}
               <EntityCards entities={entities} />
@@ -1936,11 +1947,12 @@ function EntityReviewList({
   onReviewLink: (link: SceneEntityLink, decision: "confirmed" | "rejected") => void;
   disabled: boolean;
 }) {
-  if (entityLoading && !review) return <p className="mt-5 text-sm text-ink-faint">Loading entity cards…</p>;
-  if (!review) return <p className="mt-5 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">No analysis has been run for this Scene revision.</p>;
-  if (review.links.length === 0) return <p className="mt-5 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">No entity mentions found in this revision.</p>;
+  const { t } = useI18n();
+  if (entityLoading && !review) return <p className="mt-5 text-sm text-ink-faint">{t("Loading entity cards…")}</p>;
+  if (!review) return <p className="mt-5 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">{t("No analysis has been run for this Scene revision.")}</p>;
+  if (review.links.length === 0) return <p className="mt-5 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">{t("No entity mentions found in this revision.")}</p>;
   return (
-    <ul aria-label="Entity candidate links" className="mt-5 space-y-4">
+    <ul aria-label={t("Entity candidate links")} className="mt-5 space-y-4">
       {review.links.map((link) => {
         const entity = entityForLink(link, [...review.entities, ...entities]);
         const mention = mentionForLink(link, review.mentions);
@@ -1951,20 +1963,20 @@ function EntityReviewList({
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="break-words text-sm font-semibold text-ink">{mention} <span className="font-normal text-ink-faint">→</span> {entity?.canonicalName ?? link.entityId}</p>
-                <p className={`mt-1 text-xs font-semibold uppercase tracking-[0.08em] ${link.status === "confirmed" ? "text-success" : link.status === "rejected" ? "text-ink-faint" : link.status === "stale" ? "text-danger" : "text-accent"}`}>{link.status}</p>
+                <p className={`mt-1 text-xs font-semibold uppercase tracking-[0.08em] ${link.status === "confirmed" ? "text-success" : link.status === "rejected" ? "text-ink-faint" : link.status === "stale" ? "text-danger" : "text-accent"}`}>{t(link.status)}</p>
               </div>
               {candidate ? (
                 <div className="flex shrink-0 flex-wrap gap-2">
-                  <button type="button" onClick={() => onReviewLink(link, "confirmed")} disabled={disabled} aria-label={`Confirm mention ${mention} as ${entity?.canonicalName ?? link.entityId}`} className="inline-flex min-h-10 items-center gap-1 rounded-md border border-success px-2 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-50"><Check size={15} aria-hidden="true" /> Confirm</button>
-                  <button type="button" onClick={() => onReviewLink(link, "rejected")} disabled={disabled} aria-label={`Reject mention ${mention} as ${entity?.canonicalName ?? link.entityId}`} className="inline-flex min-h-10 items-center gap-1 rounded-md border border-line px-2 text-xs font-semibold text-ink-muted hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"><X size={15} aria-hidden="true" /> Reject</button>
+                  <button type="button" onClick={() => onReviewLink(link, "confirmed")} disabled={disabled} aria-label={t("Confirm mention {mention} as {entity}", { mention, entity: entity?.canonicalName ?? link.entityId })} className="inline-flex min-h-10 items-center gap-1 rounded-md border border-success px-2 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-50"><Check size={15} aria-hidden="true" /> {t("Confirm")}</button>
+                  <button type="button" onClick={() => onReviewLink(link, "rejected")} disabled={disabled} aria-label={t("Reject mention {mention} as {entity}", { mention, entity: entity?.canonicalName ?? link.entityId })} className="inline-flex min-h-10 items-center gap-1 rounded-md border border-line px-2 text-xs font-semibold text-ink-muted hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"><X size={15} aria-hidden="true" /> {t("Reject")}</button>
                 </div>
               ) : null}
             </div>
             {evidence.length > 0 ? (
-              <ul aria-label={`Evidence for ${mention}`} className="mt-3 space-y-2">
+              <ul aria-label={t("Evidence for {mention}", { mention })} className="mt-3 space-y-2">
                 {evidence.map((source) => <li key={source.id} className="break-words whitespace-pre-wrap border-l-2 border-line pl-3 text-xs leading-5 text-ink-muted">{source.quotedText || mention}</li>)}
               </ul>
-              ) : <p className="mt-3 break-words whitespace-pre-wrap text-xs leading-5 text-ink-faint">Evidence: {mentionSnippet(mention, link, review.mentions, sceneContent)}</p>}
+              ) : <p className="mt-3 break-words whitespace-pre-wrap text-xs leading-5 text-ink-faint">{t("Evidence: {evidence}", { evidence: mentionSnippet(mention, link, review.mentions, sceneContent) })}</p>}
           </li>
         );
       })}
@@ -2050,27 +2062,28 @@ function CanonPatchReviewPanel({
   onCompileResult: (selection: CompilationSelection, result: CompileShotResult | null) => void;
   renderGenerationPanel: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <section className="mt-8 min-w-0 border-t border-line pt-6" aria-labelledby="canon-patch-review-heading" data-testid="canon-patch-review">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 2–3</p>
-          <h3 id="canon-patch-review-heading" className="mt-2 break-words text-base font-semibold text-ink">Canon review</h3>
-          <p className="mt-1 max-w-[48ch] text-sm leading-6 text-ink-muted">Inference evidence and a Pending Canon Patch stay separate from active Canon until review.</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">{t("Phase 2-3")}</p>
+          <h3 id="canon-patch-review-heading" className="mt-2 break-words text-base font-semibold text-ink">{t("Canon review")}</h3>
+          <p className="mt-1 max-w-[48ch] text-sm leading-6 text-ink-muted">{t("Inference evidence and a Pending Canon Patch stay separate from active Canon until review.")}</p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.08em]" aria-label="Canon review legend">
-          <span className="rounded-md border border-line px-2 py-1 text-ink-faint">Canon</span>
-          <span className="rounded-md border border-accent/40 px-2 py-1 text-accent">Inference</span>
-          <span className="rounded-md border border-line px-2 py-1 text-ink-muted">Pending</span>
+        <div className="flex shrink-0 flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.08em]" aria-label={t("Canon review legend")}>
+          <span className="rounded-md border border-line px-2 py-1 text-ink-faint">{t("Canon")}</span>
+          <span className="rounded-md border border-accent/40 px-2 py-1 text-accent">{t("Inference")}</span>
+          <span className="rounded-md border border-line px-2 py-1 text-ink-muted">{t("Pending")}</span>
         </div>
       </div>
 
-      {loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">Refreshing Patch review…</p> : null}
-      {error ? <p role="alert" className="mt-4 border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{error}</p> : null}
+      {loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">{t("Refreshing Patch review…")}</p> : null}
+      {error ? <p role="alert" className="mt-4 border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t(error)}</p> : null}
       {latestConflict ? <PatchConflictPreview patch={latestConflict} /> : null}
 
       {review && review.patches.length > 0 ? (
-        <ul aria-label="Pending Canon patches" className="mt-5 space-y-4">
+        <ul aria-label={t("Pending Canon patches")} className="mt-5 space-y-4">
           {review.patches.map((patch) => <CanonPatchCard
             key={patch.id}
             patch={patch}
@@ -2091,8 +2104,8 @@ function CanonPatchReviewPanel({
         </ul>
       ) : (
         <div className="mt-5 border-l-2 border-line pl-3" data-testid="canon-patch-empty">
-          <p className="text-sm font-semibold text-ink">No Patch proposals for this Scene revision.</p>
-          <p className="mt-2 text-xs leading-5 text-ink-faint">A fact candidate saves an Inference beside a Pending Canon Patch. It cannot silently activate Canon.</p>
+          <p className="text-sm font-semibold text-ink">{t("No Patch proposals for this Scene revision.")}</p>
+          <p className="mt-2 text-xs leading-5 text-ink-faint">{t("A fact candidate saves an Inference beside a Pending Canon Patch. It cannot silently activate Canon.")}</p>
         </div>
       )}
 
@@ -2125,16 +2138,18 @@ function CanonPatchReviewPanel({
 }
 
 function PatchConflictPreview({ patch }: { patch: WorkspacePatch }) {
+  const { t } = useI18n();
   return (
     <div className="mt-4 rounded-md border border-danger/40 bg-danger/5 p-3" data-testid={`patch-conflict-${patch.id}`}>
-      <p className="text-xs font-semibold text-danger">Latest server Patch · version {patch.version}</p>
-      <p className="mt-1 text-xs leading-5 text-danger">{patchConflictLabel(patch.conflictKind)}: {patch.conflictMessage || "The Patch changed while it was being reviewed."}</p>
+      <p className="text-xs font-semibold text-danger">{t("Latest server Patch, version {version}", { version: patch.version })}</p>
+      <p className="mt-1 text-xs leading-5 text-danger">{t(patchConflictLabel(patch.conflictKind))}: {t(patch.conflictMessage || "The Patch changed while it was being reviewed.")}</p>
       <p className="mt-2 break-words font-mono text-[11px] text-ink-muted">{patch.id}</p>
     </div>
   );
 }
 
 function FactCandidateComposer({ entities, sceneContent, onPropose }: { entities: readonly Entity[]; sceneContent: string; onPropose?: (draft: FactCandidateDraft) => void }) {
+  const { t } = useI18n();
   const [entityId, setEntityId] = React.useState(entities[0]?.id ?? "");
   const [predicate, setPredicate] = React.useState(Object.keys(predicateSchemaRegistry)[0] ?? "");
   const [scope, setScope] = React.useState<string>(predicateSchemaRegistry[predicate]?.scopes[0] ?? "base");
@@ -2157,35 +2172,35 @@ function FactCandidateComposer({ entities, sceneContent, onPropose }: { entities
     }} data-testid="fact-candidate-composer">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h4 className="break-words text-sm font-semibold text-ink">Propose a Canon Patch</h4>
-          <p className="mt-1 text-xs leading-5 text-ink-muted">Save an Inference and Pending Canon Patch for review; this form never activates Canon directly.</p>
+          <h4 className="break-words text-sm font-semibold text-ink">{t("Propose a Canon Patch")}</h4>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">{t("Save an Inference and Pending Canon Patch for review; this form never activates Canon directly.")}</p>
         </div>
-        <span className="rounded-md border border-accent/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">Inference + Pending Canon</span>
+        <span className="rounded-md border border-accent/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">{t("Inference + Pending Canon")}</span>
       </div>
-      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="candidate-entity">Entity</label>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="candidate-entity">{t("Entity")}</label>
       <select id="candidate-entity" value={selectedEntityId} onChange={(event) => setEntityId(event.target.value)} disabled={entities.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink">
-        {entities.length === 0 ? <option value="">Run analysis or create an entity first</option> : entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.canonicalName} · {entity.type}</option>)}
+        {entities.length === 0 ? <option value="">{t("Run analysis or create an entity first")}</option> : entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.canonicalName}, {t(entity.type)}</option>)}
       </select>
-      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="candidate-predicate">Schema predicate</label>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="candidate-predicate">{t("Schema predicate")}</label>
       <select id="candidate-predicate" value={predicate} onChange={(event) => setPredicate(event.target.value)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink">
         {compatiblePredicates.map(([key]) => <option key={key} value={key}>{key}</option>)}
       </select>
       <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="min-w-0">
-          <label className="block text-xs font-semibold text-ink" htmlFor="candidate-scope">Scope</label>
+          <label className="block text-xs font-semibold text-ink" htmlFor="candidate-scope">{t("Scope")}</label>
           <select id="candidate-scope" value={effectiveScope} onChange={(event) => setScope(event.target.value)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink">
             {(definition?.scopes ?? []).map((candidateScope) => <option key={candidateScope} value={candidateScope}>{candidateScope}</option>)}
           </select>
         </div>
         <div className="min-w-0">
-          <label className="block text-xs font-semibold text-ink" htmlFor="candidate-value">Value <span className="font-normal text-ink-faint">({definition?.valueType ?? "text"})</span></label>
-          <input id="candidate-value" value={value} onChange={(event) => setValue(event.target.value)} maxLength={2000} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink" placeholder="e.g. silver earring" />
+          <label className="block text-xs font-semibold text-ink" htmlFor="candidate-value">{t("Value")} <span className="font-normal text-ink-faint">({t(definition?.valueType ?? "text")})</span></label>
+          <input id="candidate-value" value={value} onChange={(event) => setValue(event.target.value)} maxLength={2000} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-3 text-sm text-ink" placeholder={t("e.g. silver earring")} />
         </div>
       </div>
-      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="candidate-evidence">Evidence quote</label>
-      <textarea id="candidate-evidence" value={evidenceQuote} onChange={(event) => setEvidenceQuote(event.target.value)} maxLength={20000} className="mt-2 min-h-16 w-full min-w-0 resize-y rounded-md border border-line bg-surface-raised px-3 py-2 text-xs leading-5 text-ink" placeholder={sceneContent ? "Paste the exact phrase from this Scene revision" : "No Scene text available"} />
-      <button type="submit" disabled={!onPropose || !selectedEntityId || !predicate || !value.trim() || !evidenceQuote.trim()} className="mt-4 inline-flex min-h-10 items-center rounded-md border border-accent px-3 text-xs font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45">Propose Canon Patch</button>
-      <p className="mt-2 text-[11px] leading-5 text-ink-faint">Evidence must be an exact span from the current SceneRevision; the server will validate it before creating an Inference and Pending Patch.</p>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="candidate-evidence">{t("Evidence quote")}</label>
+      <textarea id="candidate-evidence" value={evidenceQuote} onChange={(event) => setEvidenceQuote(event.target.value)} maxLength={20000} className="mt-2 min-h-16 w-full min-w-0 resize-y rounded-md border border-line bg-surface-raised px-3 py-2 text-xs leading-5 text-ink" placeholder={t(sceneContent ? "Paste the exact phrase from this Scene revision" : "No Scene text available")} />
+      <button type="submit" disabled={!onPropose || !selectedEntityId || !predicate || !value.trim() || !evidenceQuote.trim()} className="mt-4 inline-flex min-h-10 items-center rounded-md border border-accent px-3 text-xs font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45">{t("Propose Canon Patch")}</button>
+      <p className="mt-2 text-[11px] leading-5 text-ink-faint">{t("Evidence must be an exact span from the current SceneRevision; the server will validate it before creating an Inference and Pending Patch.")}</p>
     </form>
   );
 }
@@ -2203,6 +2218,7 @@ function StatePatchComposer({
   onPropose?: (draft: StateCandidateDraft) => void;
   blockedByUnsavedRevision: boolean;
 }) {
+  const { t } = useI18n();
   const [characterId, setCharacterId] = React.useState(characters[0]?.id ?? "");
   const [predicate, setPredicate] = React.useState<StateCandidateDraft["predicate"]>("wardrobe.current");
   const [value, setValue] = React.useState("");
@@ -2220,108 +2236,109 @@ function StatePatchComposer({
     }} data-testid="state-patch-composer">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h4 className="break-words text-sm font-semibold text-ink">Propose Scene State</h4>
-          <p className="mt-1 text-xs leading-5 text-ink-muted">State is temporary, revision-bound, and separate from Character Base, Inference, and Canon Fact.</p>
+          <h4 className="break-words text-sm font-semibold text-ink">{t("Propose Scene State")}</h4>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">{t("State is temporary, revision-bound, and separate from Character Base, Inference, and Canon Fact.")}</p>
         </div>
-        <span className="rounded-md border border-accent/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">State · pending review</span>
+        <span className="rounded-md border border-accent/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">{t("State, pending review")}</span>
       </div>
-      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-entity">Confirmed character</label>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-entity">{t("Confirmed character")}</label>
       <select id="state-entity" value={selectedCharacterId} onChange={(event) => setCharacterId(event.target.value)} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
-        {characters.length === 0 ? <option value="">Confirm a character link in this Scene first</option> : characters.map((entity) => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}
+        {characters.length === 0 ? <option value="">{t("Confirm a character link in this Scene first")}</option> : characters.map((entity) => <option key={entity.id} value={entity.id}>{entity.canonicalName}</option>)}
       </select>
-      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-predicate">State predicate</label>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-predicate">{t("State predicate")}</label>
       <select id="state-predicate" value={predicate} onChange={(event) => { const next = event.target.value as StateCandidateDraft["predicate"]; setPredicate(next); if (next === "state.held_prop") setValue(""); }} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
-        <option value="wardrobe.current">wardrobe.current · Current wardrobe</option>
-        <option value="state.injury">state.injury · Injury</option>
-        <option value="state.held_prop">state.held_prop · Held prop</option>
+        <option value="wardrobe.current">wardrobe.current, {t("Current wardrobe")}</option>
+        <option value="state.injury">state.injury, {t("Injury")}</option>
+        <option value="state.held_prop">state.held_prop, {t("Held prop")}</option>
       </select>
       {predicate === "state.held_prop" ? (
         <>
-          <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-prop">Active or draft Prop</label>
+          <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-prop">{t("Active or draft Prop")}</label>
           <select id="state-prop" value={selectedPropId} onChange={(event) => setValue(event.target.value)} disabled={props.length === 0 || characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink">
-            {props.length === 0 ? <option value="">Create an active or draft Prop first</option> : props.map((prop) => <option key={prop.id} value={prop.id}>{prop.canonicalName} · {prop.status}</option>)}
+            {props.length === 0 ? <option value="">{t("Create an active or draft Prop first")}</option> : props.map((prop) => <option key={prop.id} value={prop.id}>{prop.canonicalName}, {t(prop.status)}</option>)}
           </select>
         </>
       ) : (
         <>
-          <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-value">State value</label>
-          <input id="state-value" value={value} onChange={(event) => setValue(event.target.value)} maxLength={2000} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink" placeholder={predicate === "wardrobe.current" ? "e.g. faded black coat" : "e.g. left shoulder is bandaged"} />
+          <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-value">{t("State value")}</label>
+          <input id="state-value" value={value} onChange={(event) => setValue(event.target.value)} maxLength={2000} disabled={characters.length === 0} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink" placeholder={t(predicate === "wardrobe.current" ? "e.g. faded black coat" : "e.g. left shoulder is bandaged")} />
         </>
       )}
-      <label className="mt-4 flex min-w-0 items-start gap-2 text-xs text-ink" htmlFor="state-carry-forward"><input id="state-carry-forward" type="checkbox" checked={carryForward} onChange={(event) => setCarryForward(event.target.checked)} className="mt-0.5 size-4 shrink-0 accent-accent" /> <span><span className="font-semibold">Carry forward within this group</span><span className="mt-1 block text-ink-faint">Never crosses into another continuity group.</span></span></label>
-      <p className="mt-3 text-[11px] text-ink-faint">Priority: 100 (explicit author state default)</p>
-      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-evidence">Exact evidence quote</label>
-      <textarea id="state-evidence" value={evidenceQuote} onChange={(event) => setEvidenceQuote(event.target.value)} maxLength={20000} disabled={characters.length === 0} className="mt-2 min-h-16 w-full min-w-0 resize-y rounded-md border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink" placeholder={sceneContent ? "Paste the exact phrase from this Scene revision" : "No Scene text available"} />
-      <button type="submit" disabled={!onPropose || blockedByUnsavedRevision || characters.length === 0 || !selectedCharacterId || !effectiveValue || !evidenceQuote.trim() || (predicate === "state.held_prop" && props.length === 0)} className="mt-4 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45">Propose State Patch</button>
-      <p className={`mt-2 text-[11px] leading-5 ${blockedByUnsavedRevision ? "font-semibold text-danger" : "text-ink-faint"}`}>{blockedByUnsavedRevision ? "Save this revision first so the selected continuity group is frozen before State review." : "The current Scene revision and confirmed character version are sent with this reviewable State Patch."}</p>
+      <label className="mt-4 flex min-w-0 items-start gap-2 text-xs text-ink" htmlFor="state-carry-forward"><input id="state-carry-forward" type="checkbox" checked={carryForward} onChange={(event) => setCarryForward(event.target.checked)} className="mt-0.5 size-4 shrink-0 accent-accent" /> <span><span className="font-semibold">{t("Carry forward within this group")}</span><span className="mt-1 block text-ink-faint">{t("Never crosses into another continuity group.")}</span></span></label>
+      <p className="mt-3 text-[11px] text-ink-faint">{t("Priority: 100 (explicit author state default)")}</p>
+      <label className="mt-4 block text-xs font-semibold text-ink" htmlFor="state-evidence">{t("Exact evidence quote")}</label>
+      <textarea id="state-evidence" value={evidenceQuote} onChange={(event) => setEvidenceQuote(event.target.value)} maxLength={20000} disabled={characters.length === 0} className="mt-2 min-h-16 w-full min-w-0 resize-y rounded-md border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink" placeholder={t(sceneContent ? "Paste the exact phrase from this Scene revision" : "No Scene text available")} />
+      <button type="submit" disabled={!onPropose || blockedByUnsavedRevision || characters.length === 0 || !selectedCharacterId || !effectiveValue || !evidenceQuote.trim() || (predicate === "state.held_prop" && props.length === 0)} className="mt-4 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45">{t("Propose State Patch")}</button>
+      <p className={`mt-2 text-[11px] leading-5 ${blockedByUnsavedRevision ? "font-semibold text-danger" : "text-ink-faint"}`}>{t(blockedByUnsavedRevision ? "Save this revision first so the selected continuity group is frozen before State review." : "The current Scene revision and confirmed character version are sent with this reviewable State Patch.")}</p>
     </form>
   );
 }
 
 function ResolvedStateInspector({ entities, state, loading, error }: { entities: readonly Entity[]; state: ResolvedState | null; loading: boolean; error: string | null }) {
+  const { t } = useI18n();
   const entityName = (entityId: string) => entities.find((entity) => entity.id === entityId)?.canonicalName ?? entityId;
   return (
     <section className="mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-4" aria-labelledby="resolved-state-heading" data-testid="resolved-state-inspector">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 3</p>
-          <h4 id="resolved-state-heading" className="mt-2 break-words text-sm font-semibold text-ink">Resolved Scene State</h4>
-          <p className="mt-1 text-xs leading-5 text-ink-muted">Explicit → carried → Base fallback → missing. Conflicts remain blocking and are never auto-selected.</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">{t("Phase 3")}</p>
+          <h4 id="resolved-state-heading" className="mt-2 break-words text-sm font-semibold text-ink">{t("Resolved Scene State")}</h4>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">{t("Explicit to carried to Base fallback to missing. Conflicts remain blocking and are never auto-selected.")}</p>
         </div>
-        {state?.continuityGroupId ? <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">group {state.continuityGroupId}</span> : null}
+        {state?.continuityGroupId ? <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">{t("group")} {state.continuityGroupId}</span> : null}
       </div>
-      {loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">Resolving current Scene State…</p> : null}
-      {error ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{error}</p> : null}
-      {state?.hasBlockingConflicts ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">Blocking continuity conflict: review the conflicting state sources before downstream generation.</p> : null}
+      {loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">{t("Resolving current Scene State…")}</p> : null}
+      {error ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t(error)}</p> : null}
+      {state?.hasBlockingConflicts ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t("Blocking continuity conflict: review the conflicting state sources before downstream generation.")}</p> : null}
       {state && state.entities.length > 0 ? (
-        <div aria-label="Resolved state entities" className="mt-4 space-y-4">
+        <div aria-label={t("Resolved state entities")} className="mt-4 space-y-4">
           {state.entities.map((entity) => (
             <section key={entity.entityId} className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby={`resolved-state-entity-${entity.entityId}`}>
               <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                 <h5 id={`resolved-state-entity-${entity.entityId}`} className="break-words text-xs font-semibold text-ink">{entityName(entity.entityId)}</h5>
                 <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">{entity.entityId}</span>
               </div>
-              {entity.hasBlockingConflicts ? <p role="alert" className="mt-2 break-words text-[11px] leading-5 text-danger">This entity has a blocking state conflict; no value was auto-selected.</p> : null}
+              {entity.hasBlockingConflicts ? <p role="alert" className="mt-2 break-words text-[11px] leading-5 text-danger">{t("This entity has a blocking state conflict; no value was auto-selected.")}</p> : null}
               {entity.fields.length > 0 ? (
-                <ul aria-label={`Resolved state fields for ${entityName(entity.entityId)}`} className="mt-3 space-y-3">
+                <ul aria-label={t("Resolved state fields for {entity}", { entity: entityName(entity.entityId) })} className="mt-3 space-y-3">
                   {entity.fields.map((field) => {
                     const conflict = field.tier === "conflict" || field.blockingConflict;
                     const displayedValue = field.tier === "missing"
-                      ? "No explicit, carried, or mapped Base value."
+                      ? t("No explicit, carried, or mapped Base value.")
                       : field.tier === "conflict"
-                        ? `Conflicting values: ${stringifyPatchValue(field.conflictValues)}`
+                        ? t("Conflicting values: {values}", { values: stringifyPatchValue(field.conflictValues) })
                         : stringifyPatchValue(field.value);
                     return (
                       <li key={field.predicate} className={`min-w-0 rounded-md border p-3 ${conflict ? "border-danger/50 bg-danger/5" : "border-line bg-surface-raised"}`}>
                         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-                          <p className="break-words text-xs font-semibold text-ink">{statePredicateLabel(field.predicate)}</p>
-                          <span className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${conflict ? "border-danger/40 text-danger" : field.tier === "missing" ? "border-line text-ink-faint" : field.tier === "base" ? "border-line text-ink-muted" : "border-accent/40 text-accent"}`}>{stateTierLabel(field.tier)}</span>
+                          <p className="break-words text-xs font-semibold text-ink">{t(statePredicateLabel(field.predicate))}</p>
+                          <span className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${conflict ? "border-danger/40 text-danger" : field.tier === "missing" ? "border-line text-ink-faint" : field.tier === "base" ? "border-line text-ink-muted" : "border-accent/40 text-accent"}`}>{t(stateTierLabel(field.tier))}</span>
                         </div>
                         <p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink">{displayedValue}</p>
-                        <p className="mt-1 break-words text-[11px] leading-5 text-ink-faint">{field.valueType} · {field.cardinality} · priority {field.priority ?? "—"}</p>
+                        <p className="mt-1 break-words text-[11px] leading-5 text-ink-faint">{t(field.valueType)}, {t(field.cardinality)}, {t("priority")} {field.priority ?? "-"}</p>
                         {field.sources.length > 0 ? (
-                          <ul aria-label={`Sources for ${field.predicate}`} className="mt-3 space-y-2">
+                          <ul aria-label={t("Sources for {predicate}", { predicate: field.predicate })} className="mt-3 space-y-2">
                             {field.sources.map((source, index) => (
                               <li key={`${source.kind}-${source.recordId}-${index}`} className="min-w-0 break-words border-l-2 border-line pl-2 text-[11px] leading-5 text-ink-muted">
-                                <p className="font-semibold text-ink-muted">{source.kind} record <span className="break-all font-mono">{source.recordId}</span></p>
-                                <p className="mt-1 break-words">Tier {stateTierLabel(source.tier)} · priority {source.priority} · applies at <span className="break-all font-mono">{source.appliesAtSceneId ?? "—"}</span> · revision <span className="break-all font-mono">{source.sourceRevisionId ?? "—"}</span></p>
-                                <p className="mt-1 break-words">Evidence source: <span className="break-all font-mono">{source.evidenceSourceId}</span></p>
-                                <p className="mt-1 break-words">Value: {stringifyPatchValue(source.value)}</p>
-                                {source.quotedText ? <p className="mt-1 break-words whitespace-pre-wrap">Quote: “{source.quotedText}”</p> : <p className="mt-1 text-ink-faint">No quoted evidence attached.</p>}
+                                <p className="font-semibold text-ink-muted">{t("{kind} record", { kind: t(source.kind) })} <span className="break-all font-mono">{source.recordId}</span></p>
+                                <p className="mt-1 break-words">{t("Tier {tier}, priority {priority}, applies at", { tier: t(stateTierLabel(source.tier)), priority: source.priority })} <span className="break-all font-mono">{source.appliesAtSceneId ?? "-"}</span>, {t("revision")} <span className="break-all font-mono">{source.sourceRevisionId ?? "-"}</span></p>
+                                <p className="mt-1 break-words">{t("Evidence source:")} <span className="break-all font-mono">{source.evidenceSourceId}</span></p>
+                                <p className="mt-1 break-words">{t("Value: {value}", { value: stringifyPatchValue(source.value) })}</p>
+                                {source.quotedText ? <p className="mt-1 break-words whitespace-pre-wrap">{t("Quote: “{quote}”", { quote: source.quotedText })}</p> : <p className="mt-1 text-ink-faint">{t("No quoted evidence attached.")}</p>}
                               </li>
                             ))}
                           </ul>
                         ) : null}
-                        {conflict ? <p role="alert" className="mt-2 break-words text-[11px] leading-5 text-danger">All same-tier values are shown; choose explicitly before using this state.</p> : null}
+                        {conflict ? <p role="alert" className="mt-2 break-words text-[11px] leading-5 text-danger">{t("All same-tier values are shown; choose explicitly before using this state.")}</p> : null}
                       </li>
                     );
                   })}
                 </ul>
-              ) : <p className="mt-3 border-l-2 border-line pl-2 text-[11px] leading-5 text-ink-faint">No resolved fields returned for this entity.</p>}
+              ) : <p className="mt-3 border-l-2 border-line pl-2 text-[11px] leading-5 text-ink-faint">{t("No resolved fields returned for this entity.")}</p>}
             </section>
           ))}
         </div>
-      ) : !loading && !error ? <p className="mt-4 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No confirmed linked entities or resolved fields returned.</p> : null}
+      ) : !loading && !error ? <p className="mt-4 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">{t("No confirmed linked entities or resolved fields returned.")}</p> : null}
     </section>
   );
 }
@@ -2339,29 +2356,31 @@ function contextIssueSummary(item: ContextIssueItem) {
   if ("message" in item) {
     return `${item.code}: ${item.message}`;
   }
-  return `${item.kind} ${item.recordId ?? "—"}: ${item.reason}`;
+  return `${item.kind} ${item.recordId ?? "-"}: ${item.reason}`;
 }
 
 function ContextIssueSection({ title, items, tone, testId }: { title: string; items: readonly ContextIssueItem[]; tone: "danger" | "accent" | "muted"; testId: string }) {
+  const { t } = useI18n();
   const toneClass = tone === "danger" ? "border-danger/40 bg-danger/5 text-danger" : tone === "accent" ? "border-accent/40 bg-accent/5 text-accent" : "border-line bg-surface-muted text-ink-muted";
   return (
     <section className={`min-w-0 rounded-md border p-3 ${toneClass}`} aria-labelledby={`${testId}-heading`} data-testid={testId}>
-      <h5 id={`${testId}-heading`} className="text-xs font-semibold uppercase tracking-[0.08em]">{title}</h5>
-      {items.length > 0 ? <ul className="mt-2 min-w-0 space-y-2">{items.map((item, index) => <li key={`${testId}-${index}`} className="min-w-0 break-words whitespace-pre-wrap text-xs leading-5">{contextIssueSummary(item)}</li>)}</ul> : <p className="mt-2 text-xs leading-5 opacity-75">None recorded.</p>}
+      <h5 id={`${testId}-heading`} className="text-xs font-semibold uppercase tracking-[0.08em]">{t(title)}</h5>
+      {items.length > 0 ? <ul className="mt-2 min-w-0 space-y-2">{items.map((item, index) => <li key={`${testId}-${index}`} className="min-w-0 break-words whitespace-pre-wrap text-xs leading-5">{contextIssueSummary(item)}</li>)}</ul> : <p className="mt-2 text-xs leading-5 opacity-75">{t("None recorded.")}</p>}
     </section>
   );
 }
 
 function ContextEntityCard({ item, index }: { item: ContextEntity; index: number }) {
+  const { t } = useI18n();
   return (
     <li className="min-w-0 rounded-md border border-line bg-surface p-3" data-testid={`context-entity-${index}`}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0"><p className="break-words text-sm font-semibold text-ink">{item.canonicalName}</p><p className="mt-1 break-words text-xs text-ink-muted">{item.type} · Roles: {item.roles.join(", ") || "None"}</p></div>
+        <div className="min-w-0"><p className="break-words text-sm font-semibold text-ink">{item.canonicalName}</p><p className="mt-1 break-words text-xs text-ink-muted">{t(item.type)}, {t("Roles: {roles}", { roles: item.roles.join(", ") || t("None") })}</p></div>
         <span className="max-w-full break-all font-mono text-[10px] text-ink-faint">{item.entityId}</span>
       </div>
       <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="min-w-0 rounded bg-surface-muted p-2"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Base facts</p>{item.baseFacts.length > 0 ? <ul className="mt-2 space-y-2">{item.baseFacts.map((fact) => <li key={fact.factId} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{fact.predicate}</span>: {contextValue(fact.value)}<br /><span className="break-all font-mono text-[10px] text-ink-faint">fact {fact.factId} · v{fact.version} · source {fact.sourceId}</span></li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">None included.</p>}</div>
-        <div className="min-w-0 rounded bg-surface-muted p-2"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Resolved State</p>{item.resolvedState ? item.resolvedState.fields.length > 0 ? <ul className="mt-2 space-y-2">{item.resolvedState.fields.map((field) => <li key={field.predicate} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{statePredicateLabel(field.predicate)}</span> · {stateTierLabel(field.tier)}: {contextValue(field.value)}{field.sources.length > 0 ? <ul className="mt-1 space-y-1 border-l-2 border-line pl-2">{field.sources.map((source) => <li key={`${source.kind}-${source.recordId}`} className="break-all font-mono text-[10px] text-ink-faint">{source.kind} {source.recordId} · evidence {source.evidenceSourceId} · source revision {source.sourceRevisionId ?? "—"}</li>)}</ul> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No resolved fields.</p> : <p className="mt-2 text-xs text-ink-faint">None included.</p>}</div>
+        <div className="min-w-0 rounded bg-surface-muted p-2"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Base facts")}</p>{item.baseFacts.length > 0 ? <ul className="mt-2 space-y-2">{item.baseFacts.map((fact) => <li key={fact.factId} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{fact.predicate}</span>: {contextValue(fact.value)}<br /><span className="break-all font-mono text-[10px] text-ink-faint">{t("fact")} {fact.factId}, v{fact.version}, {t("source")} {fact.sourceId}</span></li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">{t("None included.")}</p>}</div>
+        <div className="min-w-0 rounded bg-surface-muted p-2"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Resolved State")}</p>{item.resolvedState ? item.resolvedState.fields.length > 0 ? <ul className="mt-2 space-y-2">{item.resolvedState.fields.map((field) => <li key={field.predicate} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{t(statePredicateLabel(field.predicate))}</span>, {t(stateTierLabel(field.tier))}: {contextValue(field.value)}{field.sources.length > 0 ? <ul className="mt-1 space-y-1 border-l-2 border-line pl-2">{field.sources.map((source) => <li key={`${source.kind}-${source.recordId}`} className="break-all font-mono text-[10px] text-ink-faint">{t(source.kind)} {source.recordId}, {t("evidence")} {source.evidenceSourceId}, {t("source revision")} {source.sourceRevisionId ?? "-"}</li>)}</ul> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">{t("No resolved fields.")}</p> : <p className="mt-2 text-xs text-ink-faint">{t("None included.")}</p>}</div>
       </div>
     </li>
   );
@@ -2382,6 +2401,7 @@ function GenerationLifecyclePanel({
   onRetry: (selection: GenerationSelection) => void;
   onRefresh: (selection: GenerationSelection) => void;
 }) {
+  const { t } = useI18n();
   const [behavior, setBehavior] = React.useState<FakeGenerationBehavior>("success");
   const record = state?.record ?? null;
   const job = record?.job ?? null;
@@ -2394,39 +2414,39 @@ function GenerationLifecyclePanel({
   return (
     <section className="mt-5 min-w-0 rounded-md border border-success/30 bg-success/5 p-3" data-testid="generation-lifecycle" aria-labelledby="generation-lifecycle-heading">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-success">Phase 5C</p><h6 id="generation-lifecycle-heading" className="mt-1 break-words text-xs font-semibold text-ink">Fake generation lifecycle</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">Submission consumes this immutable compiled request. It is a local Fake-only simulation; no real provider, upload, or secret is used.</p></div>
-        <span className="max-w-full break-all rounded border border-line px-2 py-1 font-mono text-[10px] text-ink-faint">compiledRequest {selection.compiledRequestId}</span>
+        <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-success">{t("Phase 5C")}</p><h6 id="generation-lifecycle-heading" className="mt-1 break-words text-xs font-semibold text-ink">{t("Fake generation lifecycle")}</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">{t("Submission consumes this immutable compiled request. It is a local Fake-only simulation; no real provider, upload, or secret is used.")}</p></div>
+        <span className="max-w-full break-all rounded border border-line px-2 py-1 font-mono text-[10px] text-ink-faint">{t("compiledRequest")} {selection.compiledRequestId}</span>
       </div>
-      <p className="mt-3 break-all font-mono text-[10px] text-ink-faint">Compiled hash {compiledResult.compiledRequest.compiledHash} · prepared request {compiledResult.preview.requestHash}</p>
+      <p className="mt-3 break-all font-mono text-[10px] text-ink-faint">{t("Compiled hash")} {compiledResult.compiledRequest.compiledHash}, {t("prepared request")} {compiledResult.preview.requestHash}</p>
 
       {canStartNewGeneration ? (
         <div className="mt-4 min-w-0 rounded-md border border-line bg-surface p-3">
-          {record ? <p className="mb-3 break-words text-[10px] leading-4 text-ink-muted">The previous non-retryable Manifest remains immutable. Start a new generation after changing the Fake behavior.</p> : null}
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint" htmlFor={`generation-fake-behavior-${selection.shotSpecId}`}>Fake-only test behavior</label>
+          {record ? <p className="mb-3 break-words text-[10px] leading-4 text-ink-muted">{t("The previous non-retryable Manifest remains immutable. Start a new generation after changing the Fake behavior.")}</p> : null}
+          <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint" htmlFor={`generation-fake-behavior-${selection.shotSpecId}`}>{t("Fake-only test behavior")}</label>
           <select id={`generation-fake-behavior-${selection.shotSpecId}`} data-testid="generation-fake-behavior" value={behavior} onChange={(event) => setBehavior(event.target.value as FakeGenerationBehavior)} disabled={!canSubmit} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink">
-            <option value="success">success · deterministic local completion</option>
-            <option value="timeout_after_accept_once">timeout_after_accept_once · accepted once, retry observes result</option>
-            <option value="invalid_input">invalid_input · non-retryable validation failure</option>
+            <option value="success">success, {t("deterministic local completion")}</option>
+            <option value="timeout_after_accept_once">timeout_after_accept_once, {t("accepted once, retry observes result")}</option>
+            <option value="invalid_input">invalid_input, {t("non-retryable validation failure")}</option>
           </select>
-          <p className="mt-2 break-words text-[10px] leading-4 text-ink-faint">Local simulation only. The timeout path preserves provider submission identity and does not submit twice.</p>
-          <button type="button" data-testid="generation-submit" onClick={() => onSubmit(selection, behavior)} disabled={!canSubmit} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-success px-3 text-xs font-semibold text-on-accent hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-45">{state?.submitting ? "Submitting Fake generation…" : record ? "Start new Fake generation" : "Submit Fake generation"}</button>
+          <p className="mt-2 break-words text-[10px] leading-4 text-ink-faint">{t("Local simulation only. The timeout path preserves provider submission identity and does not submit twice.")}</p>
+          <button type="button" data-testid="generation-submit" onClick={() => onSubmit(selection, behavior)} disabled={!canSubmit} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-success px-3 text-xs font-semibold text-on-accent hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-45">{t(state?.submitting ? "Submitting Fake generation…" : record ? "Start new Fake generation" : "Submit Fake generation")}</button>
         </div>
       ) : null}
 
-      {state?.error ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger" data-testid="generation-error">{state.error}</p> : null}
+      {state?.error ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger" data-testid="generation-error">{t(state.error)}</p> : null}
 
       {manifest ? (
         <section className="mt-4 min-w-0 space-y-3" data-testid="generation-manifest">
-          <div className="min-w-0 rounded-md border border-line bg-surface p-3"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Immutable Manifest identity / chain</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div className="min-w-0"><dt className="text-ink-faint">Manifest ID</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.id}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Manifest hash</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.manifestHash}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Context Snapshot</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.contextSnapshotId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Storyboard</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.storyboardId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Shot</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.shotSpecId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Compiled Request</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.compiledRequestId}</dd></div></dl></div>
-          <div className="min-w-0 rounded-md border border-line bg-surface p-3"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Provider / compiler binding</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="min-w-0"><dt className="text-ink-faint">Provider</dt><dd className="mt-1 break-words text-ink">{manifest.provider}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Model</dt><dd className="mt-1 break-words text-ink">{manifest.model}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Profile</dt><dd className="mt-1 break-words text-ink">{manifest.capabilityProfileId} v{manifest.capabilityProfileVersion}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Compiler</dt><dd className="mt-1 break-words text-ink">{manifest.compilerVersion}</dd></div></dl><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Parameters</p><pre className="mt-2 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink">{JSON.stringify(manifest.parameters, null, 2)}</pre><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Prepared request</p><pre className="mt-2 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink" data-testid="generation-prepared-request">{JSON.stringify(manifest.preparedRequest, null, 2)}</pre></div>
+          <div className="min-w-0 rounded-md border border-line bg-surface p-3"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Immutable Manifest identity / chain")}</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div className="min-w-0"><dt className="text-ink-faint">{t("Manifest ID")}</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.id}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Manifest hash")}</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.manifestHash}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Context Snapshot")}</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.contextSnapshotId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Storyboard")}</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.storyboardId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Shot")}</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.shotSpecId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Compiled Request")}</dt><dd className="mt-1 break-all font-mono text-ink">{manifest.compiledRequestId}</dd></div></dl></div>
+          <div className="min-w-0 rounded-md border border-line bg-surface p-3"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Provider / compiler binding")}</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="min-w-0"><dt className="text-ink-faint">{t("Provider")}</dt><dd className="mt-1 break-words text-ink">{manifest.provider}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Model")}</dt><dd className="mt-1 break-words text-ink">{manifest.model}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Profile")}</dt><dd className="mt-1 break-words text-ink">{manifest.capabilityProfileId} v{manifest.capabilityProfileVersion}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Compiler")}</dt><dd className="mt-1 break-words text-ink">{manifest.compilerVersion}</dd></div></dl><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Parameters")}</p><pre className="mt-2 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink">{JSON.stringify(manifest.parameters, null, 2)}</pre><p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Prepared request")}</p><pre className="mt-2 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink" data-testid="generation-prepared-request">{JSON.stringify(manifest.preparedRequest, null, 2)}</pre></div>
         </section>
       ) : null}
 
-      {job ? <section className="mt-3 min-w-0 rounded-md border border-line bg-surface p-3" data-testid="generation-job"><div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Job</h6><div className="flex flex-wrap gap-2"><button type="button" onClick={() => onRefresh(selection)} disabled={!canRefresh} className="min-h-8 rounded border border-line px-2 text-[10px] font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45" data-testid="generation-refresh">Refresh status</button>{canRetry ? <button type="button" onClick={() => onRetry(selection)} disabled={state?.retrying} className="min-h-8 rounded border border-accent px-2 text-[10px] font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="generation-retry">{state?.retrying ? "Retrying…" : "Retry Fake generation"}</button> : null}</div></div><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5"><div className="min-w-0"><dt className="text-ink-faint">Status</dt><dd className="mt-1 break-words font-semibold text-ink">{job.status}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Version</dt><dd className="mt-1 text-ink">{job.version}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Attempts</dt><dd className="mt-1 text-ink">{job.attemptCount}</dd></div><div className="min-w-0 lg:col-span-2"><dt className="text-ink-faint">Provider job ID</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="generation-provider-job-id">{job.providerJobId ?? "—"}</dd></div></dl>{job.error ? <div className="mt-3 rounded border border-danger/40 bg-danger/5 p-2" data-testid="generation-normalized-error"><p className="text-xs font-semibold text-danger">Normalized provider error · {job.error.code}</p><p className="mt-1 break-words text-xs leading-5 text-danger">{job.error.message}</p><p className="mt-1 text-[10px] text-danger">Retryable: {job.error.retryable ? "yes" : "no"}</p></div> : null}</section> : null}
+      {job ? <section className="mt-3 min-w-0 rounded-md border border-line bg-surface p-3" data-testid="generation-job"><div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Job")}</h6><div className="flex flex-wrap gap-2"><button type="button" onClick={() => onRefresh(selection)} disabled={!canRefresh} className="min-h-8 rounded border border-line px-2 text-[10px] font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45" data-testid="generation-refresh">{t("Refresh status")}</button>{canRetry ? <button type="button" onClick={() => onRetry(selection)} disabled={state?.retrying} className="min-h-8 rounded border border-accent px-2 text-[10px] font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid="generation-retry">{t(state?.retrying ? "Retrying…" : "Retry Fake generation")}</button> : null}</div></div><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5"><div className="min-w-0"><dt className="text-ink-faint">{t("Status")}</dt><dd className="mt-1 break-words font-semibold text-ink">{t(job.status)}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Version")}</dt><dd className="mt-1 text-ink">{job.version}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Attempts")}</dt><dd className="mt-1 text-ink">{job.attemptCount}</dd></div><div className="min-w-0 lg:col-span-2"><dt className="text-ink-faint">{t("Provider job ID")}</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="generation-provider-job-id">{job.providerJobId ?? "-"}</dd></div></dl>{job.error ? <div className="mt-3 rounded border border-danger/40 bg-danger/5 p-2" data-testid="generation-normalized-error"><p className="text-xs font-semibold text-danger">{t("Normalized provider error")}, {job.error.code}</p><p className="mt-1 break-words text-xs leading-5 text-danger">{job.error.message}</p><p className="mt-1 text-[10px] text-danger">{t("Retryable: {value}", { value: t(job.error.retryable ? "yes" : "no") })}</p></div> : null}</section> : null}
 
-      {result ? <section className="mt-3 min-w-0 rounded-md border border-success/40 bg-surface p-3" data-testid="generation-result"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-success">Fake result</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div className="min-w-0 sm:col-span-2"><dt className="text-ink-faint">URI</dt><dd className="mt-1 break-all font-mono text-ink">{result.uri}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Provider job ID</dt><dd className="mt-1 break-all font-mono text-ink">{result.providerJobId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Result hash</dt><dd className="mt-1 break-all font-mono text-ink">{result.resultHash}</dd></div></dl><pre className="mt-3 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink">{JSON.stringify(result.metadata, null, 2)}</pre></section> : null}
+      {result ? <section className="mt-3 min-w-0 rounded-md border border-success/40 bg-surface p-3" data-testid="generation-result"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-success">{t("Fake result")}</h6><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div className="min-w-0 sm:col-span-2"><dt className="text-ink-faint">URI</dt><dd className="mt-1 break-all font-mono text-ink">{result.uri}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Provider job ID")}</dt><dd className="mt-1 break-all font-mono text-ink">{result.providerJobId}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Result hash")}</dt><dd className="mt-1 break-all font-mono text-ink">{result.resultHash}</dd></div></dl><pre className="mt-3 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface-raised p-2 text-[10px] leading-4 text-ink">{JSON.stringify(result.metadata, null, 2)}</pre></section> : null}
 
-      {!record ? <p className="mt-3 text-[10px] text-ink-faint">Manifest, Job, and Result details appear after the local submission is accepted.</p> : null}
+      {!record ? <p className="mt-3 text-[10px] text-ink-faint">{t("Manifest, Job, and Result details appear after the local submission is accepted.")}</p> : null}
     </section>
   );
 }
@@ -2472,6 +2492,7 @@ function ContextInspector({
   onCompileResult: (selection: CompilationSelection, result: CompileShotResult | null) => void;
   renderGenerationPanel: (selection: CompilationSelection, result: CompileShotResult) => React.ReactNode;
 }) {
+  const { t, formatDate, formatNumber } = useI18n();
   const content = state?.snapshot?.content;
   const scene = content?.scene;
   const entities = content?.entities ?? [];
@@ -2479,31 +2500,31 @@ function ContextInspector({
   return (
     <section className="mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-4" aria-labelledby="context-inspector-heading" data-testid="context-inspector">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">Phase 4</p><h4 id="context-inspector-heading" className="mt-2 break-words text-sm font-semibold text-ink">Context Inspector</h4><p className="mt-1 max-w-[58ch] text-xs leading-5 text-ink-muted">Inspect the immutable, provider-neutral input assembled from this saved Scene revision. Building here never submits to a Provider.</p></div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2"><span className="rounded border border-line px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">allowInferred=false</span><span className="rounded border border-line px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">No Provider submission</span></div>
+        <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-[0.1em] text-ink-faint">{t("Phase 4")}</p><h4 id="context-inspector-heading" className="mt-2 break-words text-sm font-semibold text-ink">{t("Context Inspector")}</h4><p className="mt-1 max-w-[58ch] text-xs leading-5 text-ink-muted">{t("Inspect the immutable, provider-neutral input assembled from this saved Scene revision. Building here never submits to a Provider.")}</p></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2"><span className="rounded border border-line px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">allowInferred=false</span><span className="rounded border border-line px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("No Provider submission")}</span></div>
       </div>
       <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor="context-purpose">Purpose</label><select id="context-purpose" aria-label="Context purpose" value={purpose} onChange={(event) => onPurposeChange(event.target.value as ContextPurpose)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink"><option value="storyboard">Storyboard</option><option value="video">Video</option></select></div>
-        <div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor="context-policy">Policy</label><select id="context-policy" aria-label="Context policy" value={policyId} disabled className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-muted px-3 text-sm text-ink"><option value={policyId}>{policyId}</option></select></div>
+        <div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor="context-purpose">{t("Purpose")}</label><select id="context-purpose" aria-label={t("Context purpose")} value={purpose} onChange={(event) => onPurposeChange(event.target.value as ContextPurpose)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-sm text-ink"><option value="storyboard">{t("Storyboard")}</option><option value="video">{t("Video")}</option></select></div>
+        <div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor="context-policy">{t("Policy")}</label><select id="context-policy" aria-label={t("Context policy")} value={policyId} disabled className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-muted px-3 text-sm text-ink"><option value={policyId}>{policyId}</option></select></div>
       </div>
-      <div className="mt-4 flex min-w-0 flex-wrap items-center gap-3"><button type="button" onClick={onBuild} disabled={disabled || !hasSavedRevision || !hasScene} className="inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="context-build">{state?.building ? "Building Snapshot…" : "Build Context Snapshot"}</button>{!hasSavedRevision ? <p className="break-words text-xs font-semibold text-danger">Save this revision first before building a Context Snapshot.</p> : !hasScene ? <p className="break-words text-xs text-ink-faint">Save a revision with a Scene before building context.</p> : null}</div>
-      {state?.loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">Loading the latest Context Snapshot…</p> : null}
-      {state?.error ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">Context error: {state.error}</p> : null}
+      <div className="mt-4 flex min-w-0 flex-wrap items-center gap-3"><button type="button" onClick={onBuild} disabled={disabled || !hasSavedRevision || !hasScene} className="inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="context-build">{t(state?.building ? "Building Snapshot…" : "Build Context Snapshot")}</button>{!hasSavedRevision ? <p className="break-words text-xs font-semibold text-danger">{t("Save this revision first before building a Context Snapshot.")}</p> : !hasScene ? <p className="break-words text-xs text-ink-faint">{t("Save a revision with a Scene before building context.")}</p> : null}</div>
+      {state?.loading ? <p className="mt-4 text-xs text-accent" aria-live="polite">{t("Loading the latest Context Snapshot…")}</p> : null}
+      {state?.error ? <p role="alert" className="mt-4 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t("Context error: {error}", { error: t(state.error) })}</p> : null}
       {state?.snapshot ? (
         <div className="mt-5 min-w-0 space-y-4">
           <dl className="grid min-w-0 grid-cols-1 gap-3 text-xs sm:grid-cols-2">
-            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Snapshot ID</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-snapshot-id">{state.snapshot.id}</dd></div>
-            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Content hash</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-content-hash">{state.snapshot.contentHash}</dd></div>
-            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Input hash</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-input-hash">{state.snapshot.inputHash}</dd></div>
-            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">Policy / latest</dt><dd className="mt-1 break-words text-ink">{state.snapshot.policyId} · v{state.snapshot.policyVersion} · {state.snapshot.isLatest ? "Latest" : "Historical"}</dd></div>
-            <div className="min-w-0 rounded bg-surface p-3 sm:col-span-2"><dt className="text-ink-faint">Created</dt><dd className="mt-1 break-words text-ink">{state.snapshot.createdAt}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">{t("Snapshot ID")}</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-snapshot-id">{state.snapshot.id}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">{t("Content hash")}</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-content-hash">{state.snapshot.contentHash}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">{t("Input hash")}</dt><dd className="mt-1 break-all font-mono text-ink" data-testid="context-input-hash">{state.snapshot.inputHash}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3"><dt className="text-ink-faint">{t("Policy / latest")}</dt><dd className="mt-1 break-words text-ink">{state.snapshot.policyId}, v{state.snapshot.policyVersion}, {t(state.snapshot.isLatest ? "Latest" : "Historical")}</dd></div>
+            <div className="min-w-0 rounded bg-surface p-3 sm:col-span-2"><dt className="text-ink-faint">{t("Created")}</dt><dd className="mt-1 break-words text-ink">{formatDate(state.snapshot.createdAt, { dateStyle: "medium", timeStyle: "short" })}</dd></div>
           </dl>
-          <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-scene-heading"><h5 id="context-scene-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Scene</h5><p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink">{scene?.text ?? "No Scene text included."}</p><p className="mt-2 break-all font-mono text-[10px] text-ink-faint">{scene?.id ?? state.snapshot.sceneId} · revision {scene?.revisionId ?? state.snapshot.sceneRevisionId}</p></section>
-          <section className="min-w-0" aria-labelledby="context-entities-heading"><h5 id="context-entities-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Included Entities ({entities.length})</h5>{entities.length > 0 ? <ul className="mt-3 min-w-0 space-y-3">{entities.map((item, index) => <ContextEntityCard key={`context-entity-${index}`} item={item} index={index} />)}</ul> : <p className="mt-3 border-l-2 border-line pl-3 text-xs text-ink-faint">No confirmed entities were included.</p>}</section>
+          <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-scene-heading"><h5 id="context-scene-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Scene")}</h5><p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink">{scene?.text ?? t("No Scene text included.")}</p><p className="mt-2 break-all font-mono text-[10px] text-ink-faint">{scene?.id ?? state.snapshot.sceneId}, {t("revision")} {scene?.revisionId ?? state.snapshot.sceneRevisionId}</p></section>
+          <section className="min-w-0" aria-labelledby="context-entities-heading"><h5 id="context-entities-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Included Entities ({count})", { count: formatNumber(entities.length) })}</h5>{entities.length > 0 ? <ul className="mt-3 min-w-0 space-y-3">{entities.map((item, index) => <ContextEntityCard key={`context-entity-${index}`} item={item} index={index} />)}</ul> : <p className="mt-3 border-l-2 border-line pl-3 text-xs text-ink-faint">{t("No confirmed entities were included.")}</p>}</section>
           <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"><ContextIssueSection title="Blocking conflicts" items={content?.conflicts ?? []} tone="danger" testId="context-conflicts" /><ContextIssueSection title="Missing" items={content?.missing ?? []} tone="danger" testId="context-missing" /><ContextIssueSection title="Warnings" items={content?.warnings ?? []} tone="accent" testId="context-warnings" /><ContextIssueSection title="Omitted" items={content?.omitted ?? []} tone="muted" testId="context-omitted" /></div>
-          <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-provenance-heading" data-testid="context-provenance"><h5 id="context-provenance-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">Provenance</h5>{provenance.length > 0 ? <ul className="mt-3 min-w-0 space-y-2">{provenance.map((item) => <li key={`${item.kind}-${item.recordId}`} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{item.kind}</span> · <span className="break-all font-mono">{item.recordId}</span> · version {item.version ?? "—"}{item.sourceId ? <> · source <span className="break-all font-mono">{item.sourceId}</span></> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">No provenance records included.</p>}</section>
+          <section className="min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby="context-provenance-heading" data-testid="context-provenance"><h5 id="context-provenance-heading" className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Provenance")}</h5>{provenance.length > 0 ? <ul className="mt-3 min-w-0 space-y-2">{provenance.map((item) => <li key={`${item.kind}-${item.recordId}`} className="min-w-0 break-words text-xs leading-5 text-ink-muted"><span className="font-semibold text-ink">{t(item.kind)}</span>, <span className="break-all font-mono">{item.recordId}</span>, {t("version")} {item.version ?? "-"}{item.sourceId ? <>, {t("source")} <span className="break-all font-mono">{item.sourceId}</span></> : null}</li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">{t("No provenance records included.")}</p>}</section>
         </div>
-      ) : !state?.loading && !state?.error ? <p className="mt-5 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">No Context Snapshot loaded for this purpose and saved revision. Build one to inspect its frozen input.</p> : null}
+      ) : !state?.loading && !state?.error ? <p className="mt-5 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">{t("No Context Snapshot loaded for this purpose and saved revision. Build one to inspect its frozen input.")}</p> : null}
       <StoryboardEditor projectId={projectId} snapshot={state?.snapshot?.purpose === "storyboard" ? state.snapshot : null} state={storyboardState} selectionValid={storyboardSelectionValid} onNew={onNew} onDraftChange={onDraftChange} onLoad={onLoad} onSave={onSave} onApprove={onApprove} onReload={onReload} onCompileResult={onCompileResult} renderGenerationPanel={renderGenerationPanel} />
     </section>
   );
@@ -2528,11 +2549,12 @@ function CanonPatchCard({
   sceneContent: string;
   actions?: PatchReviewActionHandlers;
 }) {
+  const { t, formatNumber } = useI18n();
   const [editing, setEditing] = React.useState(false);
   const [editedValue, setEditedValue] = React.useState(stringifyPatchValue(patchPayloadValue(patch)));
   const [rejectReason, setRejectReason] = React.useState("");
   const payload = patch.payload;
-  const predicate = typeof payload.predicate === "string" ? payload.predicate : "Unspecified predicate";
+  const predicate = typeof payload.predicate === "string" ? payload.predicate : t("Unspecified predicate");
   const scope = typeof (payload as Record<string, unknown>).scope === "string" ? (payload as Record<string, unknown>).scope as string : null;
   const isStatePatch = patch.operation === "add_state";
   const displayValues = isStatePatch && resultingState
@@ -2552,56 +2574,56 @@ function CanonPatchCard({
             <p className="break-words text-sm font-semibold text-ink">{predicate}</p>
             {scope ? <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-ink-faint">{scope}</span> : null}
           </div>
-          <p className="mt-1 text-xs text-ink-faint">{isStatePatch ? "Scene State" : patch.operation.replaceAll("_", " ")} · {patchStatusLabel(patch.status)}</p>
+          <p className="mt-1 text-xs text-ink-faint">{t(isStatePatch ? "Scene State" : patch.operation.replaceAll("_", " "))}, {t(patchStatusLabel(patch.status))}</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.08em]">
-          <span className={isStatePatch ? "rounded-md border border-accent/40 px-2 py-1 text-accent" : "rounded-md border border-success/40 px-2 py-1 text-success"}>{isStatePatch ? "Scene State" : "Canon"}</span>
-          <span className={hardConflict ? "rounded-md border border-danger/40 px-2 py-1 text-danger" : patch.conflictKind === "possible" ? "rounded-md border border-accent/40 px-2 py-1 text-accent" : "rounded-md border border-line px-2 py-1 text-ink-faint"}>{patchConflictLabel(patch.conflictKind)}</span>
+          <span className={isStatePatch ? "rounded-md border border-accent/40 px-2 py-1 text-accent" : "rounded-md border border-success/40 px-2 py-1 text-success"}>{t(isStatePatch ? "Scene State" : "Canon")}</span>
+          <span className={hardConflict ? "rounded-md border border-danger/40 px-2 py-1 text-danger" : patch.conflictKind === "possible" ? "rounded-md border border-accent/40 px-2 py-1 text-accent" : "rounded-md border border-line px-2 py-1 text-ink-faint"}>{t(patchConflictLabel(patch.conflictKind))}</span>
         </div>
       </div>
 
       <dl className="mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="min-w-0 rounded-md bg-surface-muted p-3">
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Before</dt>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Before")}</dt>
           <dd className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-ink-muted">{before}</dd>
         </div>
         <div className="min-w-0 rounded-md bg-surface-muted p-3">
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">After</dt>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("After")}</dt>
           <dd className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-ink">{after}</dd>
         </div>
       </dl>
 
       <dl className="mt-4 grid min-w-0 grid-cols-1 gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
-        <div className="min-w-0"><dt className="inline text-ink-faint">Confidence: </dt><dd className="inline text-ink-muted">{patch.confidence === null ? "—" : `${Math.round(patch.confidence * 100)}%`}</dd></div>
-        <div className="min-w-0"><dt className="inline text-ink-faint">Proposed by: </dt><dd className="inline break-words text-ink-muted">{patch.proposedBy}{patch.modelRunId ? ` · model ${patch.modelRunId}` : ""}</dd></div>
-        <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">Evidence: </dt><dd className="inline text-ink-muted">{evidence.length > 0 ? `${evidence.length} source${evidence.length === 1 ? "" : "s"}` : "source unavailable"} · Scene revision {patch.sourceRevisionId}</dd></div>
-        {isStatePatch ? <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">Boundary: </dt><dd className="inline text-ink-muted">Temporary Scene State only; Character Base and Inference remain unchanged until review.</dd></div> : null}
-        {isStatePatch && resultingState ? <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">Applied EntityState: </dt><dd className="inline break-words text-ink-muted">{resultingState.id} · {resultingState.continuityGroupId} · source revision {resultingState.sourceRevisionId}</dd></div> : null}
+        <div className="min-w-0"><dt className="inline text-ink-faint">{t("Confidence:")} </dt><dd className="inline text-ink-muted">{patch.confidence === null ? "-" : `${formatNumber(Math.round(patch.confidence * 100))}%`}</dd></div>
+        <div className="min-w-0"><dt className="inline text-ink-faint">{t("Proposed by:")} </dt><dd className="inline break-words text-ink-muted">{patch.proposedBy}{patch.modelRunId ? `, ${t("model")} ${patch.modelRunId}` : ""}</dd></div>
+        <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">{t("Evidence:")} </dt><dd className="inline text-ink-muted">{evidence.length > 0 ? t(evidence.length === 1 ? "{count} source" : "{count} sources", { count: formatNumber(evidence.length) }) : t("source unavailable")}, {t("Scene revision")} {patch.sourceRevisionId}</dd></div>
+        {isStatePatch ? <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">{t("Boundary:")} </dt><dd className="inline text-ink-muted">{t("Temporary Scene State only; Character Base and Inference remain unchanged until review.")}</dd></div> : null}
+        {isStatePatch && resultingState ? <div className="min-w-0 sm:col-span-2"><dt className="inline text-ink-faint">{t("Applied EntityState:")} </dt><dd className="inline break-words text-ink-muted">{resultingState.id}, {resultingState.continuityGroupId}, {t("source revision")} {resultingState.sourceRevisionId}</dd></div> : null}
       </dl>
 
       {evidence.length > 0 ? (
-        <ul aria-label={`Evidence for ${predicate}`} className="mt-4 space-y-2">
+        <ul aria-label={t("Evidence for {predicate}", { predicate })} className="mt-4 space-y-2">
           {evidence.map((source) => <li key={source.id} className="break-words whitespace-pre-wrap border-l-2 border-line pl-3 text-xs leading-5 text-ink-muted">{source.quotedText || evidenceSnippet(source, sceneContent)}</li>)}
         </ul>
       ) : null}
 
       {hardConflict ? (
-        <p role="alert" className="mt-4 border-l-2 border-danger pl-3 text-xs leading-5 text-danger">普通接受已阻止：{patch.conflictMessage || "此 Patch 与现有 Canon 冲突，需要先解决冲突。"}</p>
+        <p role="alert" className="mt-4 border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t("Normal acceptance is blocked: {message}", { message: patch.conflictMessage || t("This Patch conflicts with existing Canon. Resolve the conflict first.") })}</p>
       ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <button type="button" disabled={!canAcceptPatch(patch) || !actions?.onAccept} aria-disabled={!canAcceptPatch(patch) || !actions?.onAccept} title={hardConflict ? "Resolve the hard conflict before accepting" : undefined} onClick={() => actions?.onAccept?.(patch, { expectedVersion: patch.version, requestId: requestId("patch-accept") })} className="inline-flex min-h-10 items-center rounded-md border border-success px-3 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid={`accept-patch-${patch.id}`}>Accept</button>
-        <button type="button" disabled={!canAcceptPatch(patch) || !actions?.onAcceptEdited} aria-disabled={!canAcceptPatch(patch) || !actions?.onAcceptEdited} onClick={() => setEditing((current) => !current)} className="inline-flex min-h-10 items-center rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45" data-testid={`edit-patch-${patch.id}`}>{editing ? "Close edit" : "Edit then accept"}</button>
-        <button type="button" disabled={patch.status !== "pending" || !actions?.onReject} aria-disabled={patch.status !== "pending" || !actions?.onReject} onClick={() => actions?.onReject?.(patch, rejectReason.trim() || null, { expectedVersion: patch.version, requestId: requestId("patch-reject") })} className="inline-flex min-h-10 items-center rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:opacity-45" data-testid={`reject-patch-${patch.id}`}>Reject</button>
-        {!accepted ? <span className="text-[11px] text-ink-faint">Review actions require the patch API.</span> : <span className="text-[11px] font-semibold text-success">{isStatePatch ? "Scene State is visible after acceptance." : "Canon is visible after acceptance."}</span>}
+        <button type="button" disabled={!canAcceptPatch(patch) || !actions?.onAccept} aria-disabled={!canAcceptPatch(patch) || !actions?.onAccept} title={hardConflict ? t("Resolve the hard conflict before accepting") : undefined} onClick={() => actions?.onAccept?.(patch, { expectedVersion: patch.version, requestId: requestId("patch-accept") })} className="inline-flex min-h-10 items-center rounded-md border border-success px-3 text-xs font-semibold text-success hover:bg-success/10 disabled:cursor-not-allowed disabled:opacity-45" data-testid={`accept-patch-${patch.id}`}>{t("Accept")}</button>
+        <button type="button" disabled={!canAcceptPatch(patch) || !actions?.onAcceptEdited} aria-disabled={!canAcceptPatch(patch) || !actions?.onAcceptEdited} onClick={() => setEditing((current) => !current)} className="inline-flex min-h-10 items-center rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45" data-testid={`edit-patch-${patch.id}`}>{t(editing ? "Close edit" : "Edit then accept")}</button>
+        <button type="button" disabled={patch.status !== "pending" || !actions?.onReject} aria-disabled={patch.status !== "pending" || !actions?.onReject} onClick={() => actions?.onReject?.(patch, rejectReason.trim() || null, { expectedVersion: patch.version, requestId: requestId("patch-reject") })} className="inline-flex min-h-10 items-center rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:opacity-45" data-testid={`reject-patch-${patch.id}`}>{t("Reject")}</button>
+        {!accepted ? <span className="text-[11px] text-ink-faint">{t("Review actions require the patch API.")}</span> : <span className="text-[11px] font-semibold text-success">{t(isStatePatch ? "Scene State is visible after acceptance." : "Canon is visible after acceptance.")}</span>}
       </div>
       {editing ? (
         <div className="mt-4 rounded-md border border-accent/30 bg-surface-raised p-3">
-          <label className="block text-xs font-semibold text-ink" htmlFor={`edit-patch-value-${patch.id}`}>Edited after value</label>
+          <label className="block text-xs font-semibold text-ink" htmlFor={`edit-patch-value-${patch.id}`}>{t("Edited after value")}</label>
           <textarea id={`edit-patch-value-${patch.id}`} value={editedValue} onChange={(event) => setEditedValue(event.target.value)} className="mt-2 min-h-20 w-full min-w-0 resize-y rounded-md border border-line bg-surface px-3 py-2 font-mono text-xs leading-5 text-ink" />
-          <label className="mt-3 block text-xs font-semibold text-ink" htmlFor={`reject-patch-reason-${patch.id}`}>Reject reason <span className="font-normal text-ink-faint">(optional)</span></label>
+          <label className="mt-3 block text-xs font-semibold text-ink" htmlFor={`reject-patch-reason-${patch.id}`}>{t("Reject reason")} <span className="font-normal text-ink-faint">({t("optional")})</span></label>
           <input id={`reject-patch-reason-${patch.id}`} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface px-3 text-xs text-ink" />
-          <button type="button" disabled={!actions?.onAcceptEdited || !canAcceptPatch(patch)} onClick={() => actions?.onAcceptEdited?.(patch, { ...patch.payload, value: parseEditedValue(editedValue, patchPayloadValue(patch)) }, { expectedVersion: patch.version, requestId: requestId("patch-accept-edit") })} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45">Accept edited value</button>
+          <button type="button" disabled={!actions?.onAcceptEdited || !canAcceptPatch(patch)} onClick={() => actions?.onAcceptEdited?.(patch, { ...patch.payload, value: parseEditedValue(editedValue, patchPayloadValue(patch)) }, { expectedVersion: patch.version, requestId: requestId("patch-accept-edit") })} className="mt-3 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45">{t("Accept edited value")}</button>
         </div>
       ) : null}
     </li>
@@ -2629,27 +2651,29 @@ function evidenceSnippet(source: EvidenceSource, content: string) {
 }
 
 function EntityCards({ entities }: { entities: Entity[] }) {
-  if (entities.length === 0) return <p className="mt-4 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">No entities yet. Create a card or run analysis to discover one.</p>;
+  const { t } = useI18n();
+  if (entities.length === 0) return <p className="mt-4 border-l-2 border-line pl-3 text-sm leading-6 text-ink-faint">{t("No entities yet. Create a card or run analysis to discover one.")}</p>;
   return (
-    <ul aria-label="Project entities" className="mt-4 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
-      {entities.map((entity) => <li key={entity.id} className="min-w-0 rounded-lg border border-line bg-surface p-3"><p className="break-words text-sm font-semibold text-ink">{entity.canonicalName}</p><p className="mt-1 text-xs uppercase tracking-[0.08em] text-ink-faint">{entity.type} · {entity.status}</p></li>)}
+    <ul aria-label={t("Project entities")} className="mt-4 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
+      {entities.map((entity) => <li key={entity.id} className="min-w-0 rounded-lg border border-line bg-surface p-3"><p className="break-words text-sm font-semibold text-ink">{entity.canonicalName}</p><p className="mt-1 text-xs uppercase tracking-[0.08em] text-ink-faint">{t(entity.type)}, {t(entity.status)}</p></li>)}
     </ul>
   );
 }
 
 function ScriptsEmptySection({ onCreate }: { onCreate: () => void }) {
+  const { t } = useI18n();
   return (
     <section aria-labelledby="scripts-empty-heading" className="max-w-[780px]">
-      <div aria-live="polite" className="mb-5 min-h-6 text-sm text-ink-muted">Scripts are ready.</div>
+      <div aria-live="polite" className="mb-5 min-h-6 text-sm text-ink-muted">{t("Scripts are ready.")}</div>
       <header className="border-b border-line pb-6">
-        <p className="text-sm text-ink-faint">Scripts</p>
-        <h2 id="scripts-empty-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">Start a script document.</h2>
-        <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">Create a document with stable scenes, then save revisions before asking the entity resolver to inspect them.</p>
+        <p className="text-sm text-ink-faint">{t("Scripts")}</p>
+        <h2 id="scripts-empty-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Start a script document.")}</h2>
+        <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">{t("Create a document with stable scenes, then save revisions before asking the entity resolver to inspect them.")}</p>
       </header>
       <div className="mt-8 border-l-2 border-line pl-4">
-        <p className="text-sm font-semibold text-ink">No script documents yet</p>
-        <p className="mt-2 max-w-[54ch] text-sm leading-6 text-ink-muted">A saved revision keeps Scene IDs stable while the text changes.</p>
-        <button type="button" onClick={onCreate} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-strong"><Plus size={17} aria-hidden="true" /> New script</button>
+        <p className="text-sm font-semibold text-ink">{t("No script documents yet")}</p>
+        <p className="mt-2 max-w-[54ch] text-sm leading-6 text-ink-muted">{t("A saved revision keeps Scene IDs stable while the text changes.")}</p>
+        <button type="button" onClick={onCreate} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-strong"><Plus size={17} aria-hidden="true" /> {t("New script")}</button>
       </div>
     </section>
   );

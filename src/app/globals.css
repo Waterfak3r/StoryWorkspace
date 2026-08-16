@@ -53,7 +53,7 @@
   --color-on-accent: var(--on-accent);
   --color-success: var(--success);
   --color-danger: var(--danger);
-  --font-sans: var(--font-geist-sans), "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-sans: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: var(--font-geist-mono), "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 

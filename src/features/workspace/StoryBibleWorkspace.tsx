@@ -5,6 +5,7 @@ import { BookOpenText, Check, FloppyDisk, Plus, Trash } from "@phosphor-icons/re
 import type { BibleCategory, BibleEntry } from "@/domain/narrative";
 import { WorkspaceApiError, createBibleEntry, deleteBibleEntry, updateBibleEntry } from "./workspace-api";
 import { initializeSelectionDraft } from "./workspace-selection";
+import { useI18n } from "@/features/i18n/LocaleProvider";
 
 type BibleDraft = {
   title: string;
@@ -53,6 +54,7 @@ export function StoryBibleWorkspace({
   onDirtyChange,
   onConfirmDiscard,
 }: StoryBibleWorkspaceProps) {
+  const { t } = useI18n();
   const selectedEntry = entries.find((entry) => entry.id === selectedId);
   const [draft, setDraft] = React.useState<BibleDraft>(() => initializeSelectionDraft(selectedId, entries, (entry) => entry.id, draftFor).draft);
   const [dirty, setDirty] = React.useState(false);
@@ -74,7 +76,7 @@ export function StoryBibleWorkspace({
     if (typeof window === "undefined") {
       return true;
     }
-    return window.confirm("Discard unsaved changes to this entry?");
+    return window.confirm(t("Discard unsaved changes to this entry?"));
   }
 
   function selectEntry(id: string | null) {
@@ -112,9 +114,9 @@ export function StoryBibleWorkspace({
       setDraft(draftFor(entry));
       setDirty(false);
       onDirtyChange?.(false);
-      setNotice("Entry saved.");
+      setNotice(t("Entry saved."));
     } catch (caught) {
-      setError(caught instanceof WorkspaceApiError ? caught : new WorkspaceApiError(0, { code: "INTERNAL_ERROR", message: "The entry could not be saved. Try again.", retryable: true }));
+      setError(caught instanceof WorkspaceApiError ? caught : new WorkspaceApiError(0, { code: "INTERNAL_ERROR", message: t("The entry could not be saved. Try again."), retryable: true }));
     } finally {
       setPending(false);
     }
@@ -124,7 +126,7 @@ export function StoryBibleWorkspace({
     if (!selectedEntry || pending) {
       return;
     }
-    if (typeof window !== "undefined" && !window.confirm(`Delete ${selectedEntry.title}?`)) {
+    if (typeof window !== "undefined" && !window.confirm(t("Delete {title}?", { title: selectedEntry.title }))) {
       return;
     }
     setPending(true);
@@ -135,9 +137,9 @@ export function StoryBibleWorkspace({
       onEntryDeleted(selectedEntry.id);
       setDirty(false);
       onDirtyChange?.(false);
-      setNotice("Entry deleted.");
+      setNotice(t("Entry deleted."));
     } catch (caught) {
-      setError(caught instanceof WorkspaceApiError ? caught : new WorkspaceApiError(0, { code: "INTERNAL_ERROR", message: "The entry could not be deleted. Try again.", retryable: true }));
+      setError(caught instanceof WorkspaceApiError ? caught : new WorkspaceApiError(0, { code: "INTERNAL_ERROR", message: t("The entry could not be deleted. Try again."), retryable: true }));
     } finally {
       setPending(false);
     }
@@ -151,42 +153,42 @@ export function StoryBibleWorkspace({
     <section aria-labelledby="story-bible-heading" className="min-w-0">
       <header className="flex flex-wrap items-start justify-between gap-5 border-b border-line pb-6">
         <div>
-          <div className="flex items-center gap-2 text-sm text-ink-faint"><BookOpenText size={18} weight="regular" aria-hidden="true" /> Story bible</div>
-          <h2 id="story-bible-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">Keep the story consistent.</h2>
-          <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">Collect the details you want close while the manuscript changes.</p>
+          <div className="flex items-center gap-2 text-sm text-ink-faint"><BookOpenText size={18} weight="regular" aria-hidden="true" /> {t("Story bible")}</div>
+          <h2 id="story-bible-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Keep the story consistent.")}</h2>
+          <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">{t("Collect the details you want close while the manuscript changes.")}</p>
         </div>
         <button type="button" onClick={() => selectEntry(null)} disabled={pending} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-raised px-4 text-sm font-semibold text-ink transition-colors hover:border-accent hover:text-accent disabled:opacity-50">
-          <Plus size={17} weight="regular" aria-hidden="true" /> New entry
+          <Plus size={17} weight="regular" aria-hidden="true" /> {t("New entry")}
         </button>
       </header>
 
       {entries.length === 0 ? (
-        <div className="mt-7 border-l-2 border-accent pl-4" aria-label="Story bible empty state">
-          <p className="text-sm font-semibold text-ink">Start with one useful truth.</p>
-          <p className="mt-2 max-w-[58ch] text-sm leading-6 text-ink-muted">Try a person who wants something, a place with a cost, or a rule the story cannot ignore. Nothing is added until you save it.</p>
+        <div className="mt-7 border-l-2 border-accent pl-4" aria-label={t("Story bible empty state")}>
+          <p className="text-sm font-semibold text-ink">{t("Start with one useful truth.")}</p>
+          <p className="mt-2 max-w-[58ch] text-sm leading-6 text-ink-muted">{t("Try a person who wants something, a place with a cost, or a rule the story cannot ignore. Nothing is added until you save it.")}</p>
         </div>
       ) : null}
 
       <form onSubmit={handleSave} className="mt-8 max-w-[780px] space-y-6">
         <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_220px]">
           <div className="space-y-2">
-            <label htmlFor="bible-title" className="block text-sm font-semibold text-ink">Title</label>
-            <input id="bible-title" name="title" value={draft.title} onChange={(event) => updateDraft("title", event.target.value)} disabled={pending} aria-invalid={Boolean(titleError)} aria-describedby={titleError ? "bible-title-error" : undefined} className="min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink shadow-sm outline-none transition-colors placeholder:text-ink-faint focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" placeholder="A clear name" />
+            <label htmlFor="bible-title" className="block text-sm font-semibold text-ink">{t("Title")}</label>
+            <input id="bible-title" name="title" value={draft.title} onChange={(event) => updateDraft("title", event.target.value)} disabled={pending} aria-invalid={Boolean(titleError)} aria-describedby={titleError ? "bible-title-error" : undefined} className="min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink shadow-sm outline-none transition-colors placeholder:text-ink-faint focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" placeholder={t("A clear name")} />
             {titleError ? <p id="bible-title-error" className="text-xs text-danger">{titleError}</p> : null}
           </div>
           <div className="space-y-2">
-            <label htmlFor="bible-category" className="block text-sm font-semibold text-ink">Category</label>
+            <label htmlFor="bible-category" className="block text-sm font-semibold text-ink">{t("Category")}</label>
             <select id="bible-category" name="category" value={draft.category} onChange={(event) => updateDraft("category", event.target.value as BibleCategory)} disabled={pending} aria-invalid={Boolean(categoryError)} aria-describedby={categoryError ? "bible-category-error" : undefined} className="min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink shadow-sm outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60">
-              {categories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}
+              {categories.map((category) => <option key={category.value} value={category.value}>{t(category.label)}</option>)}
             </select>
             {categoryError ? <p id="bible-category-error" className="text-xs text-danger">{categoryError}</p> : null}
           </div>
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="bible-body" className="block text-sm font-semibold text-ink">Markdown body</label>
-          <p id="bible-body-help" className="text-xs leading-5 text-ink-faint">Use short notes, lists, or links to keep this entry easy to scan.</p>
-          <textarea id="bible-body" name="body" value={draft.body} onChange={(event) => updateDraft("body", event.target.value)} disabled={pending} aria-invalid={Boolean(bodyError)} aria-describedby={`bible-body-help${bodyError ? " bible-body-error" : ""}`} rows={12} className="min-h-52 w-full resize-y rounded-lg border border-line bg-surface-raised px-3 py-3 font-mono text-sm leading-6 text-ink shadow-sm outline-none transition-colors placeholder:text-ink-faint focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" placeholder="Write the detail as Markdown" />
+          <label htmlFor="bible-body" className="block text-sm font-semibold text-ink">{t("Markdown body")}</label>
+          <p id="bible-body-help" className="text-xs leading-5 text-ink-faint">{t("Use short notes, lists, or links to keep this entry easy to scan.")}</p>
+          <textarea id="bible-body" name="body" value={draft.body} onChange={(event) => updateDraft("body", event.target.value)} disabled={pending} aria-invalid={Boolean(bodyError)} aria-describedby={`bible-body-help${bodyError ? " bible-body-error" : ""}`} rows={12} className="min-h-52 w-full resize-y rounded-lg border border-line bg-surface-raised px-3 py-3 font-mono text-sm leading-6 text-ink shadow-sm outline-none transition-colors placeholder:text-ink-faint focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" placeholder={t("Write the detail as Markdown")} />
           {bodyError ? <p id="bible-body-error" className="text-xs text-danger">{bodyError}</p> : null}
         </div>
 
@@ -199,10 +201,10 @@ export function StoryBibleWorkspace({
 
         <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
           <button type="submit" disabled={pending} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong active:translate-y-px disabled:opacity-60">
-            <FloppyDisk size={17} weight="regular" aria-hidden="true" /> {pending ? "Saving" : "Save entry"}
+            <FloppyDisk size={17} weight="regular" aria-hidden="true" /> {pending ? t("Saving") : t("Save entry")}
           </button>
-          {selectedEntry ? <button type="button" onClick={handleDelete} disabled={pending} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/40 px-4 text-sm font-semibold text-danger transition-colors hover:bg-accent-soft active:translate-y-px disabled:opacity-60"><Trash size={17} weight="regular" aria-hidden="true" /> Delete entry</button> : null}
-          {dirty ? <span className="text-xs text-ink-faint">Unsaved changes</span> : null}
+          {selectedEntry ? <button type="button" onClick={handleDelete} disabled={pending} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/40 px-4 text-sm font-semibold text-danger transition-colors hover:bg-accent-soft active:translate-y-px disabled:opacity-60"><Trash size={17} weight="regular" aria-hidden="true" /> {t("Delete entry")}</button> : null}
+          {dirty ? <span className="text-xs text-ink-faint">{t("Unsaved changes")}</span> : null}
         </div>
       </form>
     </section>

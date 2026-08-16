@@ -1,0 +1,320 @@
+import "server-only";
+
+import { resolveContext } from "../context";
+import type {
+  StudioContextSnapshot,
+  StudioGenerateMode,
+  StudioShot,
+  StudioShotStatus,
+  StudioWorkflowNode,
+  StudioWorkflowRun,
+} from "../domain";
+import { StudioAiError, StudioConflictError, StudioNotFoundError } from "../errors";
+import { readScene, readTree, replaceSceneShots } from "../fs";
+import { assertStudioId } from "../fs/paths";
+import { isImageProviderConfigured } from "../settings";
+import type { ImageAdapter } from "./adapter";
+import { withImageAdapterRetry } from "./adapter";
+import { buildContinuityConstraints, compileImagePrompt, type CompiledImageRequest } from "./compile-prompt";
+import { fakeImageAdapter } from "./fake-image-adapter";
+import { openaiCompatibleImageAdapter } from "./openai-image-adapter";
+import {
+  allocateRunId,
+  compareIds,
+  nodeFromShot,
+  nodeSortKey,
+  nowIso,
+  projectFileExists,
+  resolveProjectRelativeFile,
+  tryReadWorkflowNode,
+  writeWorkflowNode,
+  writeWorkflowRun,
+} from "./workflow-store";
+
+export type GenerateShotOptions = {
+  mode?: StudioGenerateMode;
+};
+
+export type GenerateShotResult = {
+  shot: StudioShot;
+  node: StudioWorkflowNode;
+  run: StudioWorkflowRun;
+  snapshot: StudioContextSnapshot & { continuityConstraints: string };
+  compiled: CompiledImageRequest;
+  continuityConstraints: string;
+};
+
+const defaultImageAdapter: ImageAdapter = withImageAdapterRetry(async (input) => {
+  const adapter = isImageProviderConfigured() ? openaiCompatibleImageAdapter : fakeImageAdapter;
+  return adapter(input);
+});
+
+export async function generateShot(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  shotId: string,
+  options: GenerateShotOptions = {},
+  adapter: ImageAdapter = defaultImageAdapter,
+): Promise<GenerateShotResult> {
+  const mode = options.mode ?? "generate";
+  const scene = readScene(projectId, volumeId, chapterId, sceneId);
+  const current = requireShot(scene.shots, shotId);
+  if (current.status === "locked") {
+    throw new StudioConflictError("This shot is locked and cannot be regenerated.");
+  }
+
+  const snapshot = resolveContext({ projectId, volumeId, chapterId, sceneId, shotId });
+  const continuityConstraints = buildContinuityConstraints(snapshot);
+  const compiled = compileImagePrompt(snapshot, mode === "regenerate" ? continuityConstraints : "");
+  const storedConstraints = mode === "regenerate" ? continuityConstraints : "";
+  const runId = allocateRunId(projectId);
+  const previousNode = tryReadWorkflowNode(projectId, current.id);
+
+  let relativePath = "";
+  try {
+    const output = await adapter({
+      projectId,
+      sceneId,
+      shotId: current.id,
+      runId,
+      prompt: compiled.prompt,
+      provider: compiled.provider,
+    });
+    relativePath = output.relativePath.trim();
+    if (!relativePath) {
+      throw new Error("Image adapter returned an empty path.");
+    }
+
+    const written = resolveProjectRelativeFile(projectId, relativePath);
+    if (!projectFileExists(written)) {
+      throw new Error("Image adapter did not write an image file.");
+    }
+  } catch (error) {
+    const failed = persistShot(projectId, volumeId, chapterId, sceneId, current.id, { status: "failed" });
+    writeWorkflowNode(
+      projectId,
+      nodeFromShot({
+        sceneId,
+        shot: failed,
+        continuityConstraints: storedConstraints,
+        previous: previousNode,
+      }),
+    );
+    writeWorkflowRun(projectId, {
+      id: runId,
+      shotId: failed.id,
+      sceneId,
+      mode,
+      status: "failed",
+      prompt: compiled.prompt,
+      selectedImage: failed.selected_image,
+      continuityConstraints: storedConstraints,
+      createdAt: nowIso(),
+    });
+    throw toGenerationError(error);
+  }
+
+  const shot = persistShot(projectId, volumeId, chapterId, sceneId, current.id, {
+    status: "success",
+    selected_image: relativePath,
+  });
+  const node = writeWorkflowNode(
+    projectId,
+    nodeFromShot({
+      sceneId,
+      shot,
+      continuityConstraints: storedConstraints,
+      previous: previousNode,
+    }),
+  );
+  const run = writeWorkflowRun(projectId, {
+    id: runId,
+    shotId: shot.id,
+    sceneId,
+    mode,
+    status: "success",
+    prompt: compiled.prompt,
+    selectedImage: shot.selected_image,
+    continuityConstraints: storedConstraints,
+    createdAt: nowIso(),
+  });
+
+  return {
+    shot,
+    node,
+    run,
+    snapshot: { ...snapshot, continuityConstraints: storedConstraints },
+    compiled,
+    continuityConstraints: storedConstraints,
+  };
+}
+
+export function lockShot(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  shotId: string,
+): { shot: StudioShot; node: StudioWorkflowNode } {
+  return setShotLock(projectId, volumeId, chapterId, sceneId, shotId, true);
+}
+
+export function unlockShot(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  shotId: string,
+): { shot: StudioShot; node: StudioWorkflowNode } {
+  return setShotLock(projectId, volumeId, chapterId, sceneId, shotId, false);
+}
+
+export function listWorkflowNodes(projectId: string): StudioWorkflowNode[] {
+  const locations = listShotLocations(projectId);
+  const nodes = locations.map((location) => {
+    const stored = tryReadWorkflowNode(projectId, location.shot.id);
+    const previous = stored && stored.sceneId === location.sceneId ? stored : null;
+    return nodeFromShot({
+      sceneId: location.sceneId,
+      shot: location.shot,
+      previous,
+    });
+  });
+
+  return nodes.sort((left, right) => compareIds(nodeSortKey(left), nodeSortKey(right)));
+}
+
+export async function rerunUnlockedShot(
+  projectId: string,
+  shotId: string,
+  adapter: ImageAdapter = defaultImageAdapter,
+): Promise<GenerateShotResult> {
+  const location = findShotLocation(projectId, shotId);
+  if (location.shot.status === "locked") {
+    throw new StudioConflictError("This shot is locked and cannot be regenerated.");
+  }
+
+  return generateShot(
+    projectId,
+    location.volumeId,
+    location.chapterId,
+    location.sceneId,
+    location.shot.id,
+    { mode: "regenerate" },
+    adapter,
+  );
+}
+
+type ShotLocation = {
+  volumeId: string;
+  chapterId: string;
+  sceneId: string;
+  shot: StudioShot;
+};
+
+function setShotLock(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  shotId: string,
+  locked: boolean,
+): { shot: StudioShot; node: StudioWorkflowNode } {
+  const scene = readScene(projectId, volumeId, chapterId, sceneId);
+  const current = requireShot(scene.shots, shotId);
+  const previous = tryReadWorkflowNode(projectId, current.id);
+  const nextStatus: StudioShotStatus = locked
+    ? "locked"
+    : current.selected_image
+      ? "success"
+      : "pending";
+  const shot = persistShot(projectId, volumeId, chapterId, sceneId, current.id, { status: nextStatus });
+  const node = writeWorkflowNode(
+    projectId,
+    nodeFromShot({
+      sceneId,
+      shot,
+      previous,
+    }),
+  );
+  return { shot, node };
+}
+
+function persistShot(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  shotId: string,
+  patch: Partial<Pick<StudioShot, "status" | "selected_image">>,
+): StudioShot {
+  const scene = readScene(projectId, volumeId, chapterId, sceneId);
+  const index = scene.shots.findIndex((shot) => shot.id === shotId);
+  const current = scene.shots[index];
+  if (index < 0 || !current) {
+    throw new StudioNotFoundError("Shot not found.");
+  }
+
+  const next: StudioShot = {
+    ...current,
+    ...patch,
+    updatedAt: nowIso(current.updatedAt),
+  };
+  const shots = scene.shots.slice();
+  shots[index] = next;
+  replaceSceneShots(projectId, volumeId, chapterId, sceneId, shots);
+  return next;
+}
+
+function listShotLocations(projectId: string): ShotLocation[] {
+  const tree = readTree(projectId);
+  const locations: ShotLocation[] = [];
+  for (const volume of tree.volumes) {
+    for (const chapter of volume.chapters) {
+      for (const sceneNode of chapter.scenes) {
+        const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
+        for (const shot of scene.shots) {
+          locations.push({
+            volumeId: volume.id,
+            chapterId: chapter.id,
+            sceneId: scene.id,
+            shot,
+          });
+        }
+      }
+    }
+  }
+  return locations;
+}
+
+function findShotLocation(projectId: string, shotId: string): ShotLocation {
+  const id = assertStudioId(shotId, "shotId");
+  const stored = tryReadWorkflowNode(projectId, id);
+  const locations = listShotLocations(projectId);
+  const match =
+    (stored ? locations.find((location) => location.shot.id === id && location.sceneId === stored.sceneId) : undefined) ??
+    locations.find((location) => location.shot.id === id);
+  if (!match) {
+    throw new StudioNotFoundError("Shot not found.");
+  }
+  return match;
+}
+
+function requireShot(shots: readonly StudioShot[], shotId: string): StudioShot {
+  const shot = shots.find((candidate) => candidate.id === shotId);
+  if (!shot) {
+    throw new StudioNotFoundError("Shot not found.");
+  }
+  return shot;
+}
+
+function toGenerationError(error: unknown): Error {
+  if (error instanceof StudioAiError || error instanceof StudioConflictError || error instanceof StudioNotFoundError) {
+    return error;
+  }
+
+  const message = error instanceof Error ? error.message : "Image generation failed.";
+  return new StudioAiError("GENERATION_FAILED", message, 502, true);
+}

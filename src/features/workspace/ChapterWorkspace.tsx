@@ -36,6 +36,7 @@ import {
   listChapterVersions,
   restoreChapterVersion,
 } from "./workspace-api";
+import { useI18n } from "@/features/i18n/LocaleProvider";
 
 export type ChapterWorkspaceHandle = {
   flush: () => Promise<boolean>;
@@ -138,17 +139,17 @@ function workspaceError(value: unknown, fallback: string) {
     : new WorkspaceApiError(0, { code: "INTERNAL_ERROR", message: fallback, retryable: true });
 }
 
-function formatVersionDate(value: string) {
+function formatVersionDate(value: string, locale: "en" | "zh-CN" = "en") {
   try {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+    return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
   } catch {
     return value;
   }
 }
 
-function versionExcerpt(value: string) {
+function versionExcerpt(value: string, noBodyText = "No body text") {
   const singleLine = value.replace(/\s+/g, " ").trim();
-  return singleLine.length > 140 ? `${singleLine.slice(0, 137)}...` : singleLine || "No body text";
+  return singleLine.length > 140 ? `${singleLine.slice(0, 137)}...` : singleLine || noBodyText;
 }
 
 function sortedOutlineNodes(nodes: OutlineNode[]) {
@@ -167,8 +168,9 @@ function statusTone(status: ChapterAutosaveState["status"]) {
 }
 
 function LoadingState() {
+  const { t } = useI18n();
   return (
-    <section aria-label="Loading chapter" className="max-w-[780px] animate-pulse">
+    <section aria-label={t("Loading chapter")} className="max-w-[780px] animate-pulse">
       <div className="h-3 w-28 rounded bg-surface-muted" />
       <div className="mt-5 h-10 w-3/4 rounded-lg bg-surface-muted" />
       <div className="mt-8 h-11 w-full rounded-lg bg-surface-muted" />
@@ -179,29 +181,30 @@ function LoadingState() {
 }
 
 function DraftFieldList({ draft, label }: { draft: ChapterDraft; label: string }) {
+  const { t } = useI18n();
   return (
     <section aria-labelledby={`${label.toLowerCase().replace(/\s+/g, "-")}-draft-heading`} className="min-w-0">
       <h4 id={`${label.toLowerCase().replace(/\s+/g, "-")}-draft-heading`} className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">{label}</h4>
       <dl className="mt-3 space-y-4 text-sm">
         <div>
-          <dt className="text-xs font-semibold text-ink-faint">Title</dt>
-          <dd className="mt-1 break-words text-ink">{draft.title || "Untitled"}</dd>
+          <dt className="text-xs font-semibold text-ink-faint">{t("Title")}</dt>
+          <dd className="mt-1 break-words text-ink">{draft.title || t("Untitled")}</dd>
         </div>
         <div>
-          <dt className="text-xs font-semibold text-ink-faint">Summary</dt>
-          <dd className="mt-1 whitespace-pre-wrap break-words text-ink-muted">{draft.summary || "No summary"}</dd>
+          <dt className="text-xs font-semibold text-ink-faint">{t("Summary")}</dt>
+          <dd className="mt-1 whitespace-pre-wrap break-words text-ink-muted">{draft.summary || t("No summary")}</dd>
         </div>
         <div>
-          <dt className="text-xs font-semibold text-ink-faint">Body</dt>
-          <dd className="mt-1 max-h-52 overflow-y-auto whitespace-pre-wrap break-words text-ink">{draft.body || "No body text"}</dd>
+          <dt className="text-xs font-semibold text-ink-faint">{t("Body")}</dt>
+          <dd className="mt-1 max-h-52 overflow-y-auto whitespace-pre-wrap break-words text-ink">{draft.body || t("No body text")}</dd>
         </div>
         <div>
-          <dt className="text-xs font-semibold text-ink-faint">Status</dt>
-          <dd className="mt-1 text-ink">{draft.status}</dd>
+          <dt className="text-xs font-semibold text-ink-faint">{t("Status")}</dt>
+          <dd className="mt-1 text-ink">{t(draft.status)}</dd>
         </div>
         <div>
-          <dt className="text-xs font-semibold text-ink-faint">Outline link</dt>
-          <dd className="mt-1 text-ink-muted">{draft.outlineNodeId ? "Linked to an outline node" : "Not linked"}</dd>
+          <dt className="text-xs font-semibold text-ink-faint">{t("Outline link")}</dt>
+          <dd className="mt-1 text-ink-muted">{draft.outlineNodeId ? t("Linked to an outline node") : t("Not linked")}</dd>
         </div>
       </dl>
     </section>
@@ -223,6 +226,7 @@ function ConflictReview({
   keepPending: boolean;
   copyError: string | null;
 }) {
+  const { t } = useI18n();
   if (!state.serverChapter) {
     return null;
   }
@@ -235,28 +239,28 @@ function ConflictReview({
       <div className="flex items-start gap-3">
         <WarningCircle size={20} weight="regular" className="mt-0.5 shrink-0 text-danger" aria-hidden="true" />
         <div>
-          <h2 id="chapter-conflict-heading" className="text-base font-semibold text-ink">Review the two chapter versions</h2>
-          <p className="mt-1 max-w-[70ch] text-sm leading-6 text-ink-muted">Your local draft is kept. Review both complete versions before choosing which one should continue.</p>
+          <h2 id="chapter-conflict-heading" className="text-base font-semibold text-ink">{t("Review the two chapter versions")}</h2>
+          <p className="mt-1 max-w-[70ch] text-sm leading-6 text-ink-muted">{t("Your local draft is kept. Review both complete versions before choosing which one should continue.")}</p>
         </div>
       </div>
 
       <div className="mt-6 grid gap-6 border-t border-danger/20 pt-6 lg:grid-cols-2">
-        <DraftFieldList draft={localDraft} label="Your draft" />
-        <DraftFieldList draft={serverDraft} label="Server version" />
+        <DraftFieldList draft={localDraft} label={t("Your draft")} />
+        <DraftFieldList draft={serverDraft} label={t("Server version")} />
       </div>
 
       {state.error ? <p role="alert" className="mt-5 text-sm text-danger">{state.error.message}</p> : null}
       {copyError ? <p role="alert" className="mt-2 text-sm text-danger">{copyError}</p> : null}
-      {keepPending ? <p role="status" aria-live="polite" className="mt-5 text-sm text-ink-muted">Creating a backup and saving your local draft.</p> : null}
+      {keepPending ? <p role="status" aria-live="polite" className="mt-5 text-sm text-ink-muted">{t("Creating a backup and saving your local draft.")}</p> : null}
       <div className="mt-6 flex flex-wrap gap-3 border-t border-danger/20 pt-5">
         <button type="button" onClick={onUseServer} disabled={keepPending} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60">
-          <Check size={17} weight="regular" aria-hidden="true" /> Use server version
+          <Check size={17} weight="regular" aria-hidden="true" /> {t("Use server version")}
         </button>
         <button type="button" onClick={onKeepLocal} disabled={keepPending} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-raised px-4 text-sm font-semibold text-ink transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60">
-          <ArrowCounterClockwise size={17} weight="regular" aria-hidden="true" /> {keepPending ? "Saving local draft" : "Keep my draft"}
+          <ArrowCounterClockwise size={17} weight="regular" aria-hidden="true" /> {keepPending ? t("Saving local draft") : t("Keep my draft")}
         </button>
         <button type="button" onClick={onCopy} disabled={keepPending} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line px-4 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60">
-          <Copy size={17} weight="regular" aria-hidden="true" /> Copy my draft
+          <Copy size={17} weight="regular" aria-hidden="true" /> {t("Copy my draft")}
         </button>
       </div>
     </section>
@@ -286,18 +290,19 @@ function HistoryPanel({
   title?: string;
   headingId?: string;
 }) {
+  const { t, locale } = useI18n();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-line px-5 py-5">
         <div className="mt-2 flex items-center justify-between gap-3">
           <h2 id={headingId} className="text-lg font-semibold tracking-[-0.02em] text-ink">{title}</h2>
-          {onClose ? <button type="button" onClick={onClose} aria-label="Close chapter history" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-muted hover:text-ink"><X size={18} weight="regular" aria-hidden="true" /></button> : null}
+          {onClose ? <button type="button" onClick={onClose} aria-label={t("Close chapter history")} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-muted hover:text-ink"><X size={18} weight="regular" aria-hidden="true" /></button> : null}
         </div>
-        <p className="mt-1 text-sm leading-5 text-ink-muted">Snapshots preserve a point in the manuscript.</p>
+        <p className="mt-1 text-sm leading-5 text-ink-muted">{t("Snapshots preserve a point in the manuscript.")}</p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         {loading ? (
-          <div role="status" aria-label="Loading chapter history" className="space-y-3">
+          <div role="status" aria-label={t("Loading chapter history")} className="space-y-3">
             <div className="h-20 rounded-lg bg-surface-muted" />
             <div className="h-20 rounded-lg bg-surface-muted" />
           </div>
@@ -305,13 +310,13 @@ function HistoryPanel({
         {error ? (
           <div role="alert" className="space-y-3 text-sm leading-6 text-danger">
             <p>{error.message}</p>
-            {onRetry ? <button type="button" onClick={onRetry} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/30 px-3 font-semibold hover:bg-danger/10"><ArrowCounterClockwise size={16} weight="regular" aria-hidden="true" /> Retry</button> : null}
+            {onRetry ? <button type="button" onClick={onRetry} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/30 px-3 font-semibold hover:bg-danger/10"><ArrowCounterClockwise size={16} weight="regular" aria-hidden="true" /> {t("Retry")}</button> : null}
           </div>
         ) : null}
         {!loading && !error && versions.length === 0 ? (
           <div className="border-l-2 border-line pl-4">
-            <p className="text-sm font-semibold text-ink">No snapshots yet</p>
-            <p className="mt-2 text-sm leading-6 text-ink-muted">Create a manual snapshot before a major revision.</p>
+            <p className="text-sm font-semibold text-ink">{t("No snapshots yet")}</p>
+            <p className="mt-2 text-sm leading-6 text-ink-muted">{t("Create a manual snapshot before a major revision.")}</p>
           </div>
         ) : null}
         {!loading && !error && versions.length > 0 ? (
@@ -321,13 +326,13 @@ function HistoryPanel({
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-ink">{chapterVersionSourceLabel(version.source)}</p>
-                    <p className="mt-1 text-xs text-ink-faint">{formatVersionDate(version.createdAt)}</p>
+                    <p className="mt-1 text-xs text-ink-faint">{formatVersionDate(version.createdAt, locale)}</p>
                   </div>
-                  <button type="button" onClick={() => onRestore(version)} disabled={operation !== null || keepLocalPending} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Restore ${chapterVersionSourceLabel(version.source)} from ${formatVersionDate(version.createdAt)}`}>
+                  <button type="button" onClick={() => onRestore(version)} disabled={operation !== null || keepLocalPending} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label={t("Restore {source} from {date}", { source: t(chapterVersionSourceLabel(version.source)), date: formatVersionDate(version.createdAt, locale) })}>
                     <ArrowCounterClockwise size={17} weight="regular" aria-hidden="true" />
                   </button>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-ink-muted">{versionExcerpt(version.body)}</p>
+                <p className="mt-3 text-sm leading-6 text-ink-muted">{versionExcerpt(version.body, t("No body text"))}</p>
               </li>
             ))}
           </ol>
@@ -346,6 +351,7 @@ export const ChapterWorkspace = React.forwardRef<ChapterWorkspaceHandle, Chapter
   onChapterChanged,
   onAdaptationCreated,
 }, ref) {
+  const { t } = useI18n();
   const autosave = useChapterAutosave({ projectId, chapter, onChapterChanged });
   const [historyResult, setHistoryResult] = React.useState<{
     chapterId: string;
@@ -1016,30 +1022,30 @@ export const ChapterWorkspace = React.forwardRef<ChapterWorkspaceHandle, Chapter
           <header className="border-b border-line pb-6">
             <div className="flex flex-wrap items-start justify-between gap-5">
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm text-ink-faint"><FloppyDisk size={18} weight="regular" aria-hidden="true" /> Chapter editor</div>
-                <h2 id="chapter-workspace-heading" className="mt-3 max-w-[30ch] text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">Chapter draft</h2>
-                <p className="mt-3 max-w-[62ch] text-sm leading-6 text-ink-muted">Plain Markdown is preserved while autosave keeps the latest complete draft.</p>
+                <div className="flex items-center gap-2 text-sm text-ink-faint"><FloppyDisk size={18} weight="regular" aria-hidden="true" /> {t("Chapter editor")}</div>
+                <h2 id="chapter-workspace-heading" className="mt-3 max-w-[30ch] text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Chapter draft")}</h2>
+                <p className="mt-3 max-w-[62ch] text-sm leading-6 text-ink-muted">{t("Plain Markdown is preserved while autosave keeps the latest complete draft.")}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span aria-live="polite" className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-3 text-xs font-semibold ${statusTone(state.status)}`}>
                   {state.status === "saved" ? <Check size={15} weight="regular" aria-hidden="true" /> : null}
-                  {chapterStatusLabel(state.status)}
+                  {t(chapterStatusLabel(state.status))}
                 </span>
                 <button type="button" onClick={() => { setHistoryOpen(true); setAiOpen(false); }} disabled={aiAcceptPending || adaptationSavePending} aria-expanded={historyOpen} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-raised px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">
-                  <ClockCounterClockwise size={18} weight="regular" aria-hidden="true" /> History
+                  <ClockCounterClockwise size={18} weight="regular" aria-hidden="true" /> {t("History")}
                 </button>
-                <button type="button" onClick={() => { setAiOpen(true); setHistoryOpen(false); }} disabled={aiAcceptPending || adaptationSavePending} aria-expanded={aiOpen} aria-label="Open AI assist" className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-raised px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">
-                  AI assist
+                <button type="button" onClick={() => { setAiOpen(true); setHistoryOpen(false); }} disabled={aiAcceptPending || adaptationSavePending} aria-expanded={aiOpen} aria-label={t("Open AI assist")} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-raised px-3 text-sm font-semibold text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">
+                  {t("AI assist")}
                 </button>
               </div>
             </div>
           </header>
 
-          {state.recoverySource === "session" && state.status === "dirty" ? <p role="status" className="mt-5 border-l-2 border-accent pl-3 text-sm leading-6 text-ink-muted">A local draft was recovered for this chapter. It will save after you pause.</p> : null}
+          {state.recoverySource === "session" && state.status === "dirty" ? <p role="status" className="mt-5 border-l-2 border-accent pl-3 text-sm leading-6 text-ink-muted">{t("A local draft was recovered for this chapter. It will save after you pause.")}</p> : null}
           {state.error && state.status === "failed" ? (
             <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 border-l-2 border-danger pl-3 text-sm text-danger">
               <span>{state.error.message}</span>
-              <button type="button" onClick={() => { void autosave.retry(); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/30 px-3 font-semibold transition-colors hover:bg-danger/10"><ArrowCounterClockwise size={16} weight="regular" aria-hidden="true" /> Retry</button>
+              <button type="button" onClick={() => { void autosave.retry(); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/30 px-3 font-semibold transition-colors hover:bg-danger/10"><ArrowCounterClockwise size={16} weight="regular" aria-hidden="true" /> {t("Retry")}</button>
             </div>
           ) : null}
           {notice ? <p aria-live="polite" className="mt-5 border-l-2 border-success pl-3 text-sm text-success">{notice}</p> : null}
@@ -1051,56 +1057,56 @@ export const ChapterWorkspace = React.forwardRef<ChapterWorkspaceHandle, Chapter
           <div className="mt-8 max-w-[780px]">
             <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(180px,0.45fr)]">
               <div>
-                <label htmlFor="chapter-title" className="text-sm font-semibold text-ink">Title</label>
+                <label htmlFor="chapter-title" className="text-sm font-semibold text-ink">{t("Title")}</label>
                 <input id="chapter-title" value={state.draft.title} disabled={aiAcceptPending} onChange={(event) => edit("title", event.target.value)} className="mt-2 min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-base text-ink shadow-sm transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" />
               </div>
               <div>
-                <label htmlFor="chapter-status" className="text-sm font-semibold text-ink">Status</label>
+                <label htmlFor="chapter-status" className="text-sm font-semibold text-ink">{t("Status")}</label>
                 <select id="chapter-status" value={state.draft.status} disabled={aiAcceptPending} onChange={(event) => edit("status", event.target.value)} className="mt-2 min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60">
-                  <option value="planned">Planned</option>
-                  <option value="draft">Draft</option>
-                  <option value="revised">Revised</option>
-                  <option value="final">Final</option>
+                  <option value="planned">{t("Planned")}</option>
+                  <option value="draft">{t("Draft")}</option>
+                  <option value="revised">{t("Revised")}</option>
+                  <option value="final">{t("Final")}</option>
                 </select>
               </div>
             </div>
 
             <div className="mt-5">
-              <label htmlFor="chapter-summary" className="text-sm font-semibold text-ink">Summary</label>
+              <label htmlFor="chapter-summary" className="text-sm font-semibold text-ink">{t("Summary")}</label>
               <textarea id="chapter-summary" value={state.draft.summary} disabled={aiAcceptPending} onChange={(event) => edit("summary", event.target.value)} rows={3} className="mt-2 min-h-20 w-full resize-y rounded-lg border border-line bg-surface-raised px-3 py-3 text-sm leading-6 text-ink shadow-sm transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" />
             </div>
 
             <div className="mt-5">
-              <label htmlFor="chapter-outline" className="text-sm font-semibold text-ink">Outline link</label>
+              <label htmlFor="chapter-outline" className="text-sm font-semibold text-ink">{t("Outline link")}</label>
               <select id="chapter-outline" value={state.draft.outlineNodeId ?? ""} disabled={aiAcceptPending} onChange={(event) => edit("outlineNodeId", event.target.value || null)} className="mt-2 min-h-11 w-full rounded-lg border border-line bg-surface-raised px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60">
-                <option value="">Not linked</option>
-                {outlineOptions.map((node) => <option key={node.id} value={node.id}>{node.title} ({node.kind})</option>)}
+                <option value="">{t("Not linked")}</option>
+                {outlineOptions.map((node) => <option key={node.id} value={node.id}>{node.title} ({t(node.kind)})</option>)}
               </select>
             </div>
 
             <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-y border-line py-4">
-              <p className="text-xs leading-5 text-ink-faint">Autosave keeps the latest complete draft. Manual snapshots appear in History.</p>
+              <p className="text-xs leading-5 text-ink-faint">{t("Autosave keeps the latest complete draft. Manual snapshots appear in History.")}</p>
               <button type="button" onClick={() => { void handleSnapshot(); }} disabled={actionBusy || keepLocalPending || aiAcceptPending} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-surface-raised px-4 text-sm font-semibold text-ink transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">
-                <FloppyDisk size={17} weight="regular" aria-hidden="true" /> {operation === "snapshot" ? "Saving snapshot" : "Save snapshot"}
+                <FloppyDisk size={17} weight="regular" aria-hidden="true" /> {operation === "snapshot" ? t("Saving snapshot") : t("Save snapshot")}
               </button>
             </div>
 
             <div className="mt-8 max-w-[78ch]">
-              <label htmlFor="chapter-body" className="text-sm font-semibold text-ink">Markdown body</label>
+              <label htmlFor="chapter-body" className="text-sm font-semibold text-ink">{t("Markdown body")}</label>
               <textarea id="chapter-body" ref={bodyTextareaRef} value={state.draft.body} disabled={aiAcceptPending} onFocus={() => { bodyEditorTouchedRef.current = true; }} onSelect={() => { captureCurrentSelection(); }} onChange={(event) => edit("body", event.target.value)} spellCheck={true} className="mt-2 min-h-[min(62vh,720px)] w-full resize-y rounded-xl border border-line bg-surface-raised px-4 py-4 text-[1.02rem] leading-8 text-ink shadow-sm transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" />
-              <p className="mt-2 text-xs text-ink-faint">Plain Markdown is preserved as you write.</p>
+              <p className="mt-2 text-xs text-ink-faint">{t("Plain Markdown is preserved as you write.")}</p>
             </div>
           </div>
           )}
         </section>
 
         {historyOpen ? (
-          <aside aria-label="Chapter history" className="hidden w-[340px] shrink-0 border-l border-line bg-surface lg:flex">
+          <aside aria-label={t("Chapter history")} className="hidden w-[340px] shrink-0 border-l border-line bg-surface lg:flex">
             <HistoryPanel versions={versions} loading={historyLoading} error={historyError} operation={operation} keepLocalPending={keepLocalPending || aiAcceptPending} onRestore={(version) => { void handleRestore(version); }} onClose={() => setHistoryOpen(false)} onRetry={retryHistory} />
           </aside>
         ) : null}
         {aiOpen ? (
-          <aside aria-label="AI assist" className="hidden w-[350px] shrink-0 border-l border-line bg-surface lg:flex">
+          <aside aria-label={t("AI assist")} className="hidden w-[350px] shrink-0 border-l border-line bg-surface lg:flex">
             {renderAiAssistant(requestAiClose)}
           </aside>
         ) : null}
@@ -1108,17 +1114,17 @@ export const ChapterWorkspace = React.forwardRef<ChapterWorkspaceHandle, Chapter
 
       {historyOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <button type="button" aria-label="Close chapter history" onClick={() => setHistoryOpen(false)} className="absolute inset-0 bg-ink/35" />
+          <button type="button" aria-label={t("Close chapter history")} onClick={() => setHistoryOpen(false)} className="absolute inset-0 bg-ink/35" />
           <div id="chapter-history-drawer" ref={historyDrawerRef} role="dialog" aria-modal="true" aria-labelledby="chapter-history-drawer-heading" className="relative ml-auto flex h-full w-[min(92vw,380px)] flex-col bg-surface shadow-xl">
-            <HistoryPanel title="Chapter history" headingId="chapter-history-drawer-heading" versions={versions} loading={historyLoading} error={historyError} operation={operation} keepLocalPending={keepLocalPending || aiAcceptPending} onRestore={(version) => { void handleRestore(version); }} onClose={() => setHistoryOpen(false)} onRetry={retryHistory} />
+            <HistoryPanel title={t("Chapter history")} headingId="chapter-history-drawer-heading" versions={versions} loading={historyLoading} error={historyError} operation={operation} keepLocalPending={keepLocalPending || aiAcceptPending} onRestore={(version) => { void handleRestore(version); }} onClose={() => setHistoryOpen(false)} onRetry={retryHistory} />
           </div>
         </div>
       ) : null}
 
       {aiOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <button type="button" aria-label="Close AI assist" onClick={requestAiClose} disabled={aiAcceptPending} className="absolute inset-0 bg-ink/35 disabled:cursor-default" />
-          <div ref={aiDrawerRef} role="dialog" aria-modal="true" aria-label="AI assist" className="relative ml-auto flex h-full w-[min(94vw,420px)] flex-col bg-surface shadow-xl">
+          <button type="button" aria-label={t("Close AI assist")} onClick={requestAiClose} disabled={aiAcceptPending} className="absolute inset-0 bg-ink/35 disabled:cursor-default" />
+          <div ref={aiDrawerRef} role="dialog" aria-modal="true" aria-label={t("AI assist")} className="relative ml-auto flex h-full w-[min(94vw,420px)] flex-col bg-surface shadow-xl">
             {renderAiAssistant(requestAiClose)}
           </div>
         </div>

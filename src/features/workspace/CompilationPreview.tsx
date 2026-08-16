@@ -23,6 +23,7 @@ import {
   isCurrentCompilationResponse,
   type CompilationSelection,
 } from "./scripts-workspace-helpers";
+import { useI18n } from "@/features/i18n/LocaleProvider";
 
 type CompilationPreviewProps = {
   projectId: string;
@@ -74,8 +75,9 @@ function AssetList({
   onToggle: (assetId: string, checked: boolean) => void;
   disabled: boolean;
 }) {
+  const { t } = useI18n();
   if (entities.length === 0) {
-    return <p className="mt-3 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">This Shot has no included Character, Location, or Prop entity. Text-only compilation remains available.</p>;
+    return <p className="mt-3 border-l-2 border-line pl-3 text-xs leading-5 text-ink-faint">{t("This Shot has no included Character, Location, or Prop entity. Text-only compilation remains available.")}</p>;
   }
   return (
     <div className="mt-3 min-w-0 space-y-3" data-testid="reference-asset-list">
@@ -84,7 +86,7 @@ function AssetList({
         return (
           <section key={entity.entityId} className="min-w-0 rounded-md border border-line bg-surface-raised p-3" aria-labelledby={`reference-assets-${entity.entityId}`}>
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-              <h6 id={`reference-assets-${entity.entityId}`} className="break-words text-xs font-semibold text-ink">{entity.canonicalName} <span className="font-normal text-ink-faint">· {entity.type}</span></h6>
+              <h6 id={`reference-assets-${entity.entityId}`} className="break-words text-xs font-semibold text-ink">{entity.canonicalName} <span className="font-normal text-ink-faint">· {t(entity.type)}</span></h6>
               <span className="break-all font-mono text-[10px] text-ink-faint">{entity.entityId}</span>
             </div>
             {entityAssets.length > 0 ? (
@@ -96,13 +98,13 @@ function AssetList({
                     <li key={asset.id} className="min-w-0">
                       <label className="flex min-w-0 items-start gap-2 rounded border border-line bg-surface px-2 py-2 text-xs text-ink">
                         <input type="checkbox" checked={checked} onChange={(event) => onToggle(asset.id, event.target.checked)} disabled={disabled || (!checked && atLimit)} className="mt-0.5 size-4 shrink-0 accent-accent" />
-                        <span className="min-w-0 break-words"><span className="font-semibold">{asset.label}</span><span className="mt-1 block break-all font-mono text-[10px] text-ink-faint">approved · metadata {asset.metadataHash}</span></span>
+                        <span className="min-w-0 break-words"><span className="font-semibold">{asset.label}</span><span className="mt-1 block break-all font-mono text-[10px] text-ink-faint">{t("approved · metadata")} {asset.metadataHash}</span></span>
                       </label>
                     </li>
                   );
                 })}
               </ul>
-            ) : <p className="mt-2 text-xs leading-5 text-ink-faint">No approved reference metadata for this entity yet.</p>}
+            ) : <p className="mt-2 text-xs leading-5 text-ink-faint">{t("No approved reference metadata for this entity yet.")}</p>}
           </section>
         );
       })}
@@ -111,55 +113,58 @@ function AssetList({
 }
 
 function IssueList({ title, items, tone, testId }: { title: string; items: readonly string[]; tone: "warning" | "muted"; testId: string }) {
+  const { t } = useI18n();
   return (
     <section className={`min-w-0 rounded-md border p-3 ${tone === "warning" ? "border-accent/40 bg-accent/5" : "border-line bg-surface-muted"}`} data-testid={testId}>
-      <h6 className={`text-[10px] font-semibold uppercase tracking-[0.08em] ${tone === "warning" ? "text-accent" : "text-ink-faint"}`}>{title}</h6>
-      {items.length > 0 ? <ul className="mt-2 min-w-0 space-y-1">{items.map((item, index) => <li key={`${testId}-${index}`} className="break-words text-xs leading-5 text-ink-muted">{item}</li>)}</ul> : <p className="mt-2 text-xs leading-5 text-ink-faint">None recorded.</p>}
+      <h6 className={`text-[10px] font-semibold uppercase tracking-[0.08em] ${tone === "warning" ? "text-accent" : "text-ink-faint"}`}>{t(title)}</h6>
+      {items.length > 0 ? <ul className="mt-2 min-w-0 space-y-1">{items.map((item, index) => <li key={`${testId}-${index}`} className="break-words text-xs leading-5 text-ink-muted">{item}</li>)}</ul> : <p className="mt-2 text-xs leading-5 text-ink-faint">{t("None recorded.")}</p>}
     </section>
   );
 }
 
 function CompileResult({ result, entities }: { result: CompileShotResult; entities: readonly ContextEntity[] }) {
+  const { t } = useI18n();
   const { compiledRequest, preview } = result;
   return (
     <section className="mt-5 min-w-0 space-y-4 border-t border-line pt-4" data-testid="compile-result">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0"><h6 className="text-xs font-semibold text-ink">Compiled request preview</h6><p className="mt-1 text-[11px] leading-5 text-ink-faint">This is a deterministic request preview. It does not submit or generate media.</p></div>
+        <div className="min-w-0"><h6 className="text-xs font-semibold text-ink">{t("Compiled request preview")}</h6><p className="mt-1 text-[11px] leading-5 text-ink-faint">{t("This is a deterministic request preview. It does not submit or generate media.")}</p></div>
         <span className="max-w-full break-all rounded border border-success/40 px-2 py-1 font-mono text-[10px] text-success" data-testid="compiled-hash">compiledHash {compiledRequest.compiledHash}</span>
       </div>
       <dl className="grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-3" data-testid="compiled-normalized-parameters">
-        <div className="min-w-0 rounded bg-surface-raised p-2"><dt className="text-ink-faint">Provider</dt><dd className="mt-1 break-words text-ink">{compiledRequest.provider}</dd></div>
-        <div className="min-w-0 rounded bg-surface-raised p-2"><dt className="text-ink-faint">Model / profile</dt><dd className="mt-1 break-words text-ink">{compiledRequest.model} · {compiledRequest.capabilityProfileId} v{compiledRequest.capabilityProfileVersion}</dd></div>
-        <div className="min-w-0 rounded bg-surface-raised p-2"><dt className="text-ink-faint">Normalized parameters</dt><dd className="mt-1 break-words text-ink">{compiledRequest.parameters.durationSeconds}s · {compiledRequest.parameters.aspectRatio}</dd></div>
+        <div className="min-w-0 rounded bg-surface-raised p-2"><dt className="text-ink-faint">{t("Provider")}</dt><dd className="mt-1 break-words text-ink">{compiledRequest.provider}</dd></div>
+        <div className="min-w-0 rounded bg-surface-raised p-2"><dt className="text-ink-faint">{t("Model / profile")}</dt><dd className="mt-1 break-words text-ink">{compiledRequest.model} · {compiledRequest.capabilityProfileId} v{compiledRequest.capabilityProfileVersion}</dd></div>
+        <div className="min-w-0 rounded bg-surface-raised p-2"><dt className="text-ink-faint">{t("Normalized parameters")}</dt><dd className="mt-1 break-words text-ink">{compiledRequest.parameters.durationSeconds}s · {compiledRequest.parameters.aspectRatio}</dd></div>
       </dl>
 
       <section className="min-w-0 rounded-md border border-line bg-surface-raised p-3" aria-labelledby="compiled-prompt-segments-heading">
-        <h6 id="compiled-prompt-segments-heading" className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Prompt segments / source IDs</h6>
-        <ol className="mt-3 min-w-0 space-y-2">{compiledRequest.promptSegments.map((segment, index) => <li key={`${segment.role}-${index}`} className="min-w-0 rounded border border-line bg-surface p-2" data-testid={`prompt-segment-${index}`}><p className="text-xs font-semibold text-ink">{segment.role}</p><p className="mt-1 break-words whitespace-pre-wrap text-xs leading-5 text-ink-muted">{segment.text}</p><p className="mt-1 break-words text-[10px] text-ink-faint">source IDs: {segment.sourceIds.join(", ")}</p></li>)}</ol>
+        <h6 id="compiled-prompt-segments-heading" className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Prompt segments / source IDs")}</h6>
+         <ol className="mt-3 min-w-0 space-y-2">{compiledRequest.promptSegments.map((segment, index) => <li key={`${segment.role}-${index}`} className="min-w-0 rounded border border-line bg-surface p-2" data-testid={`prompt-segment-${index}`}><p className="text-xs font-semibold text-ink">{segment.role}</p><p className="mt-1 break-words whitespace-pre-wrap text-xs leading-5 text-ink-muted">{segment.text}</p><p className="mt-1 break-words text-[10px] text-ink-faint">{t("source IDs")}: {segment.sourceIds.join(", ")}</p></li>)}</ol>
       </section>
 
       <section className="min-w-0 rounded-md border border-line bg-surface-raised p-3" aria-labelledby="compiled-negative-heading">
-        <h6 id="compiled-negative-heading" className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Negative prompt</h6>
-        <p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink-muted">{compiledRequest.negativePrompt ?? "None"}</p>
+        <h6 id="compiled-negative-heading" className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Negative prompt")}</h6>
+        <p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-ink-muted">{compiledRequest.negativePrompt ?? t("None")}</p>
       </section>
 
       <section className="min-w-0 rounded-md border border-line bg-surface-raised p-3" aria-labelledby="compiled-assets-heading">
-        <h6 id="compiled-assets-heading" className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Selected asset inputs</h6>
-        {compiledRequest.assetInputs.length > 0 ? <ul className="mt-2 min-w-0 space-y-2">{compiledRequest.assetInputs.map((asset) => <li key={asset.assetId} className="min-w-0 break-words text-xs leading-5 text-ink-muted">{entityName(entities, asset.entityId)} · {asset.purpose} · weight {asset.weight} · <span className="break-all font-mono text-[10px]">{asset.assetId}</span></li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">Text-only request; no reference metadata selected.</p>}
+        <h6 id="compiled-assets-heading" className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Selected asset inputs")}</h6>
+        {compiledRequest.assetInputs.length > 0 ? <ul className="mt-2 min-w-0 space-y-2">{compiledRequest.assetInputs.map((asset) => <li key={asset.assetId} className="min-w-0 break-words text-xs leading-5 text-ink-muted">{entityName(entities, asset.entityId)} · {asset.purpose} · {t("weight")} {asset.weight} · <span className="break-all font-mono text-[10px]">{asset.assetId}</span></li>)}</ul> : <p className="mt-2 text-xs text-ink-faint">{t("Text-only request; no reference metadata selected.")}</p>}
       </section>
 
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"><IssueList title="Warnings" items={compiledRequest.warnings} tone="warning" testId="compile-warnings" /><IssueList title="Omitted context" items={compiledRequest.omittedContext} tone="muted" testId="compile-omitted-context" /></div>
 
       <section className="min-w-0 rounded-md border border-accent/40 bg-accent/5 p-3" data-testid="fake-preview-request">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">Fake Video preview request</h6><p className="mt-1 text-xs text-ink-muted">Endpoint: <span className="break-all font-mono">{preview.endpoint}</span></p></div><span className="max-w-full break-all font-mono text-[10px] text-accent" data-testid="preview-request-hash">requestHash {preview.requestHash}</span></div>
+         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">{t("Fake Video preview request")}</h6><p className="mt-1 text-xs text-ink-muted">{t("Endpoint")}: <span className="break-all font-mono">{preview.endpoint}</span></p></div><span className="max-w-full break-all font-mono text-[10px] text-accent" data-testid="preview-request-hash">requestHash {preview.requestHash}</span></div>
         <pre className="mt-3 min-w-0 max-w-full overflow-hidden whitespace-pre-wrap break-words rounded bg-surface p-3 text-[11px] leading-5 text-ink" data-testid="preview-body">{JSON.stringify(preview.body, null, 2)}</pre>
-        <p className="mt-3 text-[11px] leading-5 text-ink-faint">Preview only: no provider submission and no media generation occurred.</p>
+        <p className="mt-3 text-[11px] leading-5 text-ink-faint">{t("Preview only: no provider submission and no media generation occurred.")}</p>
       </section>
     </section>
   );
 }
 
 export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpecId, shot, shotIndex, boardStatus, boardDirty, onCompileResult, renderGenerationPanel }: CompilationPreviewProps) {
+  const { t } = useI18n();
   const entities = React.useMemo(() => relevantEntities(snapshot, shot), [shot, snapshot]);
   const entityIds = React.useMemo(() => entities.map((entity) => entity.entityId), [entities]);
   const entityIdsKey = entityIds.join(",");
@@ -383,8 +388,8 @@ export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpec
   if (boardStatus !== "approved") {
     return (
       <section className="mt-5 min-w-0 rounded-md border border-line bg-surface-raised p-3" data-testid={`compilation-preview-${shotIndex}`}>
-        <h6 className="text-xs font-semibold text-ink">Fake Video Compile Preview</h6>
-        <p className="mt-2 break-words text-xs leading-5 text-ink-muted">{boardStatus === "superseded" ? "This Storyboard is superseded. Select the current approved Storyboard before compiling." : "This Storyboard is a draft. Approve it before compiling a Shot."}</p>
+        <h6 className="text-xs font-semibold text-ink">{t("Fake Video Compile Preview")}</h6>
+        <p className="mt-2 break-words text-xs leading-5 text-ink-muted">{boardStatus === "superseded" ? t("This Storyboard is superseded. Select the current approved Storyboard before compiling.") : t("This Storyboard is a draft. Approve it before compiling a Shot.")}</p>
       </section>
     );
   }
@@ -392,31 +397,31 @@ export function CompilationPreview({ projectId, snapshot, storyboardId, shotSpec
   return (
     <section className="mt-5 min-w-0 rounded-md border border-accent/30 bg-surface-raised p-3" data-testid={`compilation-preview-${shotIndex}`} aria-labelledby={`compilation-preview-heading-${shotIndex}`}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">Phase 5B</p><h6 id={`compilation-preview-heading-${shotIndex}`} className="mt-1 break-words text-xs font-semibold text-ink">Fake Video Compile Preview</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">Compile the approved Shot into a deterministic provider request preview. No media is submitted or generated.</p></div>
-        <span className="max-w-full break-all rounded border border-line px-2 py-1 font-mono text-[10px] text-ink-faint">ShotSpec {shotSpecId ?? "not saved"}</span>
+        <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">{t("Phase 5B")}</p><h6 id={`compilation-preview-heading-${shotIndex}`} className="mt-1 break-words text-xs font-semibold text-ink">{t("Fake Video Compile Preview")}</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">{t("Compile the approved Shot into a deterministic provider request preview. No media is submitted or generated.")}</p></div>
+        <span className="max-w-full break-all rounded border border-line px-2 py-1 font-mono text-[10px] text-ink-faint">ShotSpec {shotSpecId ?? t("not saved")}</span>
       </div>
-      {boardDirty ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">This approved board has local edits. Save a replacement and approve the current board before compiling.</p> : null}
+      {boardDirty ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t("This approved board has local edits. Save a replacement and approve the current board before compiling.")}</p> : null}
 
       <section className="mt-4 min-w-0 rounded-md border border-line bg-surface p-3" data-testid="compilation-capability-profile">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Capability profile</h6><span className="rounded border border-success/40 px-2 py-1 text-[10px] font-semibold text-success">fake-video</span></div>
-        <dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="min-w-0"><dt className="text-ink-faint">Provider</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.provider}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Model</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.model}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Profile ID</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.id}</dd></div><div className="min-w-0"><dt className="text-ink-faint">Profile version</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.version}</dd></div></dl>
-        <p className="mt-3 break-words text-[11px] leading-5 text-ink-faint">Supported durations: {FAKE_VIDEO_CAPABILITY_PROFILE.limits.durationSeconds.join(" / ")} seconds · aspect ratios: {FAKE_VIDEO_CAPABILITY_PROFILE.limits.aspectRatios.join(" / ")} · max {FAKE_VIDEO_CAPABILITY_PROFILE.supports.maxReferenceImages} reference images.</p>
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2"><h6 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Capability profile")}</h6><span className="rounded border border-success/40 px-2 py-1 text-[10px] font-semibold text-success">fake-video</span></div>
+        <dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="min-w-0"><dt className="text-ink-faint">{t("Provider")}</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.provider}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Model")}</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.model}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Profile ID")}</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.id}</dd></div><div className="min-w-0"><dt className="text-ink-faint">{t("Profile version")}</dt><dd className="mt-1 break-words text-ink">{FAKE_VIDEO_CAPABILITY_PROFILE.version}</dd></div></dl>
+        <p className="mt-3 break-words text-[11px] leading-5 text-ink-faint">{t("Supported durations: {durations} seconds · aspect ratios: {ratios} · max {max} reference images.", { durations: FAKE_VIDEO_CAPABILITY_PROFILE.limits.durationSeconds.join(" / "), ratios: FAKE_VIDEO_CAPABILITY_PROFILE.limits.aspectRatios.join(" / "), max: FAKE_VIDEO_CAPABILITY_PROFILE.supports.maxReferenceImages })}</p>
       </section>
 
       <section className="mt-4 min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby={`reference-assets-heading-${shotIndex}`}>
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h6 id={`reference-assets-heading-${shotIndex}`} className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Approved reference metadata</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">Only approved assets for this Shot’s subjects, location, and props are listed. Metadata only / no upload.</p></div><span className="rounded border border-line px-2 py-1 text-[10px] text-ink-faint">{selectedAssetIds.length} / 20 inputs · provider max {FAKE_VIDEO_CAPABILITY_PROFILE.supports.maxReferenceImages}</span></div>
-        {assetLoading ? <p className="mt-3 text-xs text-accent" aria-live="polite">Loading approved reference metadata…</p> : null}
-        {assetError ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{assetError}</p> : null}
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h6 id={`reference-assets-heading-${shotIndex}`} className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Approved reference metadata")}</h6><p className="mt-1 break-words text-[11px] leading-5 text-ink-muted">{t("Only approved assets for this Shot’s subjects, location, and props are listed. Metadata only / no upload.")}</p></div><span className="rounded border border-line px-2 py-1 text-[10px] text-ink-faint">{t("{selected} / 20 inputs · provider max {max}", { selected: selectedAssetIds.length, max: FAKE_VIDEO_CAPABILITY_PROFILE.supports.maxReferenceImages })}</span></div>
+        {assetLoading ? <p className="mt-3 text-xs text-accent" aria-live="polite">{t("Loading approved reference metadata…")}</p> : null}
+        {assetError ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t(assetError)}</p> : null}
         <AssetList assets={assets} entities={entities} selectedIds={selectedAssetIds} onToggle={toggleAsset} disabled={assetLoading || compiling || boardDirty} />
-        {entities.length > 0 ? <form className="mt-4 min-w-0 border-t border-line pt-4" onSubmit={(event) => void createMetadata(event)}><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Create local approved metadata</p><div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2"><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`reference-entity-${shotIndex}`}>Shot-linked entity</label><select id={`reference-entity-${shotIndex}`} value={effectiveAssetEntityId} onChange={(event) => setAssetEntityId(event.target.value)} disabled={assetCreating || boardDirty} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink">{entities.map((entity) => <option key={entity.entityId} value={entity.entityId}>{entity.canonicalName} · {entity.type}</option>)}</select></div><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`reference-label-${shotIndex}`}>Metadata label</label><input id={`reference-label-${shotIndex}`} value={assetLabel} onChange={(event) => setAssetLabel(event.target.value)} maxLength={300} disabled={assetCreating || boardDirty} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink" placeholder="e.g. blue coat reference" /></div></div>{assetCreateError ? <p role="alert" className="mt-2 break-words text-xs leading-5 text-danger">{assetCreateError}</p> : null}{assetCreateNotice ? <p className="mt-2 break-words text-xs leading-5 text-success">{assetCreateNotice}</p> : null}<button type="submit" disabled={assetCreating || boardDirty || !effectiveAssetEntityId || !assetLabel.trim()} className="mt-3 inline-flex min-h-9 items-center rounded-md border border-accent px-3 text-xs font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45">{assetCreating ? "Creating metadata…" : "Create approved reference metadata"}</button></form> : null}
+        {entities.length > 0 ? <form className="mt-4 min-w-0 border-t border-line pt-4" onSubmit={(event) => void createMetadata(event)}><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Create local approved metadata")}</p><div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2"><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`reference-entity-${shotIndex}`}>{t("Shot-linked entity")}</label><select id={`reference-entity-${shotIndex}`} value={effectiveAssetEntityId} onChange={(event) => setAssetEntityId(event.target.value)} disabled={assetCreating || boardDirty} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink">{entities.map((entity) => <option key={entity.entityId} value={entity.entityId}>{entity.canonicalName} · {t(entity.type)}</option>)}</select></div><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`reference-label-${shotIndex}`}>{t("Metadata label")}</label><input id={`reference-label-${shotIndex}`} value={assetLabel} onChange={(event) => setAssetLabel(event.target.value)} maxLength={300} disabled={assetCreating || boardDirty} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink" placeholder={t("e.g. blue coat reference")} /></div></div>{assetCreateError ? <p role="alert" className="mt-2 break-words text-xs leading-5 text-danger">{t(assetCreateError)}</p> : null}{assetCreateNotice ? <p className="mt-2 break-words text-xs leading-5 text-success">{t(assetCreateNotice)}</p> : null}<button type="submit" disabled={assetCreating || boardDirty || !effectiveAssetEntityId || !assetLabel.trim()} className="mt-3 inline-flex min-h-9 items-center rounded-md border border-accent px-3 text-xs font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-45">{assetCreating ? t("Creating metadata…") : t("Create approved reference metadata")}</button></form> : null}
       </section>
 
       <section className="mt-4 min-w-0 rounded-md border border-line bg-surface p-3" aria-labelledby={`compile-parameters-heading-${shotIndex}`}>
-        <h6 id={`compile-parameters-heading-${shotIndex}`} className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Compile parameters</h6>
-        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`compile-duration-${shotIndex}`}>Duration seconds</label><input id={`compile-duration-${shotIndex}`} type="number" min="0.1" max="60" step="0.1" value={durationInput} onChange={(event) => { invalidateCompile(); setDurationInput(event.target.value); }} disabled={compiling || boardDirty} placeholder={shot.durationSeconds === null ? "Provider default" : undefined} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink" /><p className="mt-1 text-[10px] text-ink-faint">Accepts any 0.1–60; provider normalizes unsupported values.</p></div><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`compile-aspect-${shotIndex}`}>Aspect ratio</label><input id={`compile-aspect-${shotIndex}`} value={aspectInput} onChange={(event) => { invalidateCompile(); setAspectInput(event.target.value); }} disabled={compiling || boardDirty} maxLength={20} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink" /><p className="mt-1 text-[10px] text-ink-faint">Supported: 16:9 / 9:16; any ≤20 characters shows server fallback warnings.</p></div></div>
-        {compileValidationError ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{compileValidationError}</p> : null}
-        {compileError ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{compileError}</p> : null}
-        <button type="button" onClick={() => void compile()} disabled={compiling || boardDirty || !selection || assetLoading} className="mt-4 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="compile-preview">{compiling ? "Compiling preview…" : "Compile preview"}</button>
+        <h6 id={`compile-parameters-heading-${shotIndex}`} className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{t("Compile parameters")}</h6>
+        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`compile-duration-${shotIndex}`}>{t("Duration seconds")}</label><input id={`compile-duration-${shotIndex}`} type="number" min="0.1" max="60" step="0.1" value={durationInput} onChange={(event) => { invalidateCompile(); setDurationInput(event.target.value); }} disabled={compiling || boardDirty} placeholder={shot.durationSeconds === null ? t("Provider default") : undefined} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink" /><p className="mt-1 text-[10px] text-ink-faint">{t("Accepts any value from 0.1 to 60; the provider normalizes unsupported values.")}</p></div><div className="min-w-0"><label className="block text-xs font-semibold text-ink" htmlFor={`compile-aspect-${shotIndex}`}>{t("Aspect ratio")}</label><input id={`compile-aspect-${shotIndex}`} value={aspectInput} onChange={(event) => { invalidateCompile(); setAspectInput(event.target.value); }} disabled={compiling || boardDirty} maxLength={20} className="mt-2 min-h-10 w-full min-w-0 rounded-md border border-line bg-surface-raised px-2 text-xs text-ink" /><p className="mt-1 text-[10px] text-ink-faint">{t("Supported: 16:9 / 9:16; any ≤20 characters shows server fallback warnings.")}</p></div></div>
+        {compileValidationError ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t(compileValidationError)}</p> : null}
+        {compileError ? <p role="alert" className="mt-3 break-words border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{t(compileError)}</p> : null}
+        <button type="button" onClick={() => void compile()} disabled={compiling || boardDirty || !selection || assetLoading} className="mt-4 inline-flex min-h-10 items-center rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-45" data-testid="compile-preview">{compiling ? t("Compiling preview…") : t("Compile preview")}</button>
       </section>
 
       {compileResult ? <CompileResult result={compileResult} entities={entities} /> : null}

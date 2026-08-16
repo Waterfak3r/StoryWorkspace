@@ -19,11 +19,18 @@ import { WorkspaceNavigator, type WorkspaceSection } from "./WorkspaceNavigator"
 import { workspaceSelectionKey } from "./workspace-selection";
 import { adaptationSelectionAfterDelete, replaceCanonicalAdaptation, sortAdaptations } from "./adaptation-shell-helpers";
 import { ExportProjectDialog } from "./ExportProjectDialog";
+import { LanguageSwitcher } from "@/features/i18n/LanguageSwitcher";
+import { useI18n } from "@/features/i18n/LocaleProvider";
 
 const ScriptsWorkspace = dynamic(() => import("./ScriptsWorkspace").then((module) => module.ScriptsWorkspace), {
   ssr: false,
-  loading: () => <div className="min-h-32 text-sm text-ink-muted">Loading Scripts…</div>,
+  loading: () => <ScriptsLoadingState />,
 });
+
+function ScriptsLoadingState() {
+  const { t } = useI18n();
+  return <div className="min-h-32 text-sm text-ink-muted">{t("Loading Scripts...")}</div>;
+}
 
 export type WorkspaceInitialData = {
   project: Project;
@@ -38,6 +45,7 @@ type NarrativeWorkspaceProps = {
 };
 
 export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps) {
+  const { t } = useI18n();
   const router = useRouter();
   const { project } = initialWorkspace;
   const [activeSection, setActiveSection] = React.useState<WorkspaceSection>("bible");
@@ -76,22 +84,22 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
     if (!bibleDirty) {
       return true;
     }
-    return typeof window === "undefined" || window.confirm("Discard unsaved changes to this entry?");
-  }, [bibleDirty]);
+    return typeof window === "undefined" || window.confirm(t("Discard unsaved changes to this entry?"));
+  }, [bibleDirty, t]);
 
   const confirmOutlineDiscard = React.useCallback(() => {
     if (!outlineDirty) {
       return true;
     }
-    return typeof window === "undefined" || window.confirm("Discard unsaved changes to this outline node?");
-  }, [outlineDirty]);
+    return typeof window === "undefined" || window.confirm(t("Discard unsaved changes to this outline node?"));
+  }, [outlineDirty, t]);
 
   const confirmScriptDiscard = React.useCallback(() => {
     if (!scriptDirty) {
       return true;
     }
-    return typeof window === "undefined" || window.confirm("Discard unsaved script changes?");
-  }, [scriptDirty]);
+    return typeof window === "undefined" || window.confirm(t("Discard unsaved script changes?"));
+  }, [scriptDirty, t]);
 
   const setNavigationBusy = React.useCallback((busy: boolean) => {
     navigationPendingRef.current = busy;
@@ -139,11 +147,11 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
         : documents[0]?.id ?? null);
       scriptDocumentsLoadedRef.current = true;
     } catch (error) {
-      setScriptDocumentError(error instanceof WorkspaceApiError ? error.message : "The script documents could not be loaded. Try again.");
+      setScriptDocumentError(error instanceof WorkspaceApiError ? error.message : t("The script documents could not be loaded. Try again."));
     } finally {
       setScriptDocumentLoading(false);
     }
-  }, [project.id, scriptDocumentLoading]);
+  }, [project.id, scriptDocumentLoading, t]);
 
   const retryScriptDocuments = React.useCallback(() => {
     void loadScriptDocuments(true);
@@ -622,7 +630,7 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       if (activeSection === "adaptations" && !(await flushCurrentAdaptation())) {
         return;
       }
-      if (typeof window !== "undefined" && !window.confirm(`Delete ${target.title || "Untitled adaptation"}?`)) {
+      if (typeof window !== "undefined" && !window.confirm(t("Delete {title}?", { title: target.title || t("Untitled adaptation") }))) {
         return;
       }
       await deleteAdaptation(id);
@@ -630,11 +638,11 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       setSelectedAdaptationId((current) => adaptationSelectionAfterDelete(adaptations, id, current));
       setAdaptationError(null);
     } catch (error) {
-      setAdaptationError(error instanceof WorkspaceApiError ? error.message : "The adaptation could not be deleted. Try again.");
+      setAdaptationError(error instanceof WorkspaceApiError ? error.message : t("The adaptation could not be deleted. Try again."));
     } finally {
       setAdaptationMutationBusy(false);
     }
-  }, [activeSection, adaptations, flushCurrentAdaptation, setAdaptationMutationBusy]);
+  }, [activeSection, adaptations, flushCurrentAdaptation, setAdaptationMutationBusy, t]);
 
   const handleScriptDocumentCreate = React.useCallback(async () => {
     if (scriptMutationPendingRef.current || navigationPendingRef.current || chapterMutationPendingRef.current || adaptationMutationPendingRef.current) {
@@ -664,26 +672,26 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       setScriptDocumentError(null);
       setMobileNavigationOpen(false);
     } catch (error) {
-      setScriptDocumentError(error instanceof WorkspaceApiError ? error.message : "The script document could not be created. Try again.");
+      setScriptDocumentError(error instanceof WorkspaceApiError ? error.message : t("The script document could not be created. Try again."));
     } finally {
       setScriptMutationBusy(false);
     }
-  }, [activeSection, confirmScriptDiscard, flushActiveDocument, project.id, setScriptMutationBusy]);
+  }, [activeSection, confirmScriptDiscard, flushActiveDocument, project.id, setScriptMutationBusy, t]);
 
   const selectedScriptDocument = scriptDocuments.find((document) => document.id === selectedScriptDocumentId) ?? null;
   const handleScriptDocumentChanged = React.useCallback((canonical: ScriptDocument) => {
     setScriptDocuments((current) => current.map((document) => document.id === canonical.id ? canonical : document));
   }, []);
 
-  const activeLabel = activeSection === "bible" ? "Story bible" : activeSection === "outline" ? "Outline" : activeSection === "chapters" ? "Chapters" : activeSection === "adaptations" ? "Adaptations" : "Scripts";
+  const activeLabel = activeSection === "bible" ? t("Story bible") : activeSection === "outline" ? t("Outline") : activeSection === "chapters" ? t("Chapters") : activeSection === "adaptations" ? t("Adaptations") : t("Scripts");
   const selectedChapter = chapters.find((chapter) => chapter.id === selectedChapterId) ?? null;
   const selectedAdaptation = adaptations.find((adaptation) => adaptation.id === selectedAdaptationId) ?? null;
   const activeTitle = activeSection === "bible"
-    ? (bibleEntries.find((entry) => entry.id === selectedBibleId)?.title ?? "Story bible")
+    ? (bibleEntries.find((entry) => entry.id === selectedBibleId)?.title ?? t("Story bible"))
     : activeSection === "outline"
-      ? (outlineNodes.find((node) => node.id === selectedOutlineId)?.title ?? "Outline")
+      ? (outlineNodes.find((node) => node.id === selectedOutlineId)?.title ?? t("Outline"))
       : activeSection === "chapters"
-        ? (selectedChapter?.title ?? "Chapters")
+        ? (selectedChapter?.title ?? t("Chapters"))
         : activeSection === "adaptations"
           ? (selectedAdaptation?.title ?? activeLabel)
           : (selectedScriptDocument?.title ?? activeLabel);
@@ -732,12 +740,12 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
         <div className="min-w-0 flex-1">
           <header className="sticky top-0 z-20 border-b border-line bg-canvas/95 backdrop-blur-sm">
             <div className="flex min-h-[76px] items-center gap-4 px-5 sm:px-8 lg:px-10">
-              <button type="button" onClick={() => setMobileNavigationOpen(true)} aria-label="Open workspace navigation" aria-expanded={mobileNavigationOpen} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line bg-surface-raised text-ink lg:hidden"><List size={20} weight="regular" aria-hidden="true" /></button>
+              <button type="button" onClick={() => setMobileNavigationOpen(true)} aria-label={t("Open workspace navigation")} aria-expanded={mobileNavigationOpen} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line bg-surface-raised text-ink lg:hidden"><List size={20} weight="regular" aria-hidden="true" /></button>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-medium text-ink-faint">{project.title} <span aria-hidden="true">/</span> {activeLabel}</p>
                 <h1 className="mt-1 truncate text-lg font-semibold tracking-[-0.025em] text-ink">{activeTitle}</h1>
               </div>
-              <ExportProjectDialog
+               <ExportProjectDialog
                 projectId={project.id}
                 projectTitle={project.title}
                 counts={{
@@ -750,7 +758,8 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
                 outlineDirty={outlineDirty}
                 flushActiveDocument={flushActiveDocument}
                  disabled={navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending}
-              />
+               />
+               <LanguageSwitcher />
             </div>
           </header>
 
@@ -826,10 +835,10 @@ export function NarrativeWorkspace({ initialWorkspace }: NarrativeWorkspaceProps
       </div>
 
       {mobileNavigationOpen ? (
-        <div className="fixed inset-0 z-50 lg:hidden" aria-label="Workspace navigation drawer">
-          <button type="button" aria-label="Close workspace navigation" onClick={() => setMobileNavigationOpen(false)} className="absolute inset-0 bg-ink/35" />
-          <div ref={drawerRef} role="dialog" aria-modal="true" aria-label="Workspace navigation" className="relative h-full w-[min(88vw,340px)] bg-surface shadow-xl">
-            <button type="button" onClick={() => setMobileNavigationOpen(false)} aria-label="Close workspace navigation" className="absolute right-3 top-3 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-surface-raised text-ink"><X size={19} weight="regular" aria-hidden="true" /></button>
+        <div className="fixed inset-0 z-50 lg:hidden" aria-label={t("Workspace navigation drawer")}>
+          <button type="button" aria-label={t("Close workspace navigation")} onClick={() => setMobileNavigationOpen(false)} className="absolute inset-0 bg-ink/35" />
+          <div ref={drawerRef} role="dialog" aria-modal="true" aria-label={t("Workspace navigation")} className="relative h-full w-[min(88vw,340px)] bg-surface shadow-xl">
+            <button type="button" onClick={() => setMobileNavigationOpen(false)} aria-label={t("Close workspace navigation")} className="absolute right-3 top-3 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-surface-raised text-ink"><X size={19} weight="regular" aria-hidden="true" /></button>
             <WorkspaceNavigator
               project={project}
               activeSection={activeSection}
@@ -877,36 +886,38 @@ function comparePosition<T extends { position: number; id: string }>(left: T, ri
 }
 
 function ChapterEmptySection({ onCreate, pending, error }: { onCreate: () => void; pending: boolean; error: string | null }) {
+  const { t } = useI18n();
   return (
     <section aria-labelledby="chapter-empty-heading" className="max-w-[780px]">
       <header className="border-b border-line pb-6">
-        <p className="text-sm text-ink-faint">Manuscript</p>
-        <h2 id="chapter-empty-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">Start with the first chapter.</h2>
-        <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">Create a blank chapter, then shape the draft with autosave and history.</p>
+        <p className="text-sm text-ink-faint">{t("Manuscript")}</p>
+        <h2 id="chapter-empty-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Start with the first chapter.")}</h2>
+        <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">{t("Create a blank chapter, then shape the draft with autosave and history.")}</p>
       </header>
       {error ? <p role="alert" className="mt-6 border-l-2 border-danger pl-3 text-sm text-danger">{error}</p> : null}
       <div className="mt-8 border-l-2 border-line pl-4">
-        <p className="text-sm font-semibold text-ink">No chapters yet</p>
-        <p className="mt-2 max-w-[54ch] text-sm leading-6 text-ink-muted">Your first chapter becomes the place where the outline turns into prose.</p>
-        <button type="button" onClick={onCreate} disabled={pending} className="mt-5 inline-flex min-h-11 items-center rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60">{pending ? "Creating chapter" : "New chapter"}</button>
+        <p className="text-sm font-semibold text-ink">{t("No chapters yet")}</p>
+        <p className="mt-2 max-w-[54ch] text-sm leading-6 text-ink-muted">{t("Your first chapter becomes the place where the outline turns into prose.")}</p>
+        <button type="button" onClick={onCreate} disabled={pending} className="mt-5 inline-flex min-h-11 items-center rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60">{pending ? t("Creating chapter") : t("New chapter")}</button>
       </div>
     </section>
   );
 }
 
 function AdaptationEmptySection({ onCreate, pending, error }: { onCreate: () => void; pending: boolean; error: string | null }) {
+  const { t } = useI18n();
   return (
     <section aria-labelledby="adaptation-empty-heading" className="max-w-[780px]">
       <header className="border-b border-line pb-6">
-        <p className="text-sm text-ink-faint">Screenplay</p>
-        <h2 id="adaptation-empty-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">Start an adaptation.</h2>
-        <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">Create a screenplay scene and keep its Markdown draft beside the story.</p>
+        <p className="text-sm text-ink-faint">{t("Screenplay")}</p>
+        <h2 id="adaptation-empty-heading" className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Start an adaptation.")}</h2>
+        <p className="mt-3 max-w-[60ch] text-sm leading-6 text-ink-muted">{t("Create a screenplay scene and keep its Markdown draft beside the story.")}</p>
       </header>
       <div className="mt-8 border-l-2 border-line pl-4">
-        <p className="text-sm font-semibold text-ink">No adaptations yet</p>
-        <p className="mt-2 max-w-[54ch] text-sm leading-6 text-ink-muted">A saved AI adaptation or a blank scene will appear here.</p>
+        <p className="text-sm font-semibold text-ink">{t("No adaptations yet")}</p>
+        <p className="mt-2 max-w-[54ch] text-sm leading-6 text-ink-muted">{t("A saved AI adaptation or a blank scene will appear here.")}</p>
         {error ? <p role="alert" className="mt-5 border-l-2 border-danger pl-3 text-sm text-danger">{error}</p> : null}
-        <button type="button" onClick={onCreate} disabled={pending} className="mt-5 inline-flex min-h-11 items-center rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60">{pending ? "Creating adaptation" : "New adaptation"}</button>
+        <button type="button" onClick={onCreate} disabled={pending} className="mt-5 inline-flex min-h-11 items-center rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60">{pending ? t("Creating adaptation") : t("New adaptation")}</button>
       </div>
     </section>
   );

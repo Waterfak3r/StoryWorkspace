@@ -9,6 +9,7 @@
 [CmdletBinding()]
 param(
     [int]$Port = 3000,
+    [string]$WorkspaceRoot = '.data\projects',
     [string]$DatabasePath = '.data\story-workspace.db',
     [switch]$Production,
     [switch]$SkipInstall
@@ -19,6 +20,9 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = $PSScriptRoot
 $originalLocation = Get-Location
 $exitCode = 0
+$workspaceRootChanged = $false
+$workspaceEnvironmentVariableWasPresent = Test-Path -LiteralPath 'Env:STORY_WORKSPACE_ROOT'
+$previousWorkspaceRoot = $env:STORY_WORKSPACE_ROOT
 $databasePathChanged = $false
 $databaseEnvironmentVariableWasPresent = Test-Path -LiteralPath 'Env:STORY_WORKSPACE_DB_PATH'
 $previousDatabasePath = $env:STORY_WORKSPACE_DB_PATH
@@ -69,6 +73,44 @@ function Test-PortAvailable {
             $listener.Stop()
         }
     }
+}
+
+function Resolve-WorkspaceRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PathValue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        throw 'WorkspaceRoot must name a directory.'
+    }
+
+    try {
+        if ([System.IO.Path]::IsPathRooted($PathValue)) {
+            $fullPath = [System.IO.Path]::GetFullPath($PathValue)
+        }
+        else {
+            $fullPath = [System.IO.Path]::GetFullPath((Join-Path -Path $script:scriptRoot -ChildPath $PathValue))
+        }
+    }
+    catch {
+        throw ("WorkspaceRoot is not a valid path: '{0}'." -f $PathValue)
+    }
+
+    if ([System.IO.File]::Exists($fullPath)) {
+        throw ("WorkspaceRoot points to a file, not a directory: '{0}'." -f $fullPath)
+    }
+
+    if (-not [System.IO.Directory]::Exists($fullPath)) {
+        try {
+            [System.IO.Directory]::CreateDirectory($fullPath) | Out-Null
+        }
+        catch {
+            throw ("Could not create the workspace root directory '{0}': {1}" -f $fullPath, $_.Exception.Message)
+        }
+    }
+
+    return $fullPath
 }
 
 function Resolve-DatabasePath {
@@ -203,7 +245,15 @@ try {
         throw ("Port {0} is unavailable or already in use. Stop the other process or choose another port with -Port." -f $Port)
     }
 
-    $resolvedDatabasePath = Resolve-DatabasePath -PathValue $DatabasePath
+    $resolvedWorkspaceRoot = Resolve-WorkspaceRoot -PathValue $WorkspaceRoot
+
+    $resolvedDatabasePath = $null
+    try {
+        $resolvedDatabasePath = Resolve-DatabasePath -PathValue $DatabasePath
+    }
+    catch {
+        Write-Warning ("[start-local] SQLite leftover path was skipped (not required to start): {0}" -f $_.Exception.Message)
+    }
 
     $nodeModulesPath = Join-Path -Path $scriptRoot -ChildPath 'node_modules'
     if (-not (Test-Path -LiteralPath $nodeModulesPath -PathType Container)) {
@@ -220,8 +270,13 @@ try {
         }
     }
 
-    $env:STORY_WORKSPACE_DB_PATH = $resolvedDatabasePath
-    $databasePathChanged = $true
+    $env:STORY_WORKSPACE_ROOT = $resolvedWorkspaceRoot
+    $workspaceRootChanged = $true
+
+    if (-not [string]::IsNullOrWhiteSpace($resolvedDatabasePath)) {
+        $env:STORY_WORKSPACE_DB_PATH = $resolvedDatabasePath
+        $databasePathChanged = $true
+    }
 
     $mode = 'development'
     if ($Production) {
@@ -229,7 +284,10 @@ try {
     }
 
     Write-Host ("[start-local] Starting {0} server on port {1}." -f $mode, $Port)
-    Write-Host ("[start-local] SQLite database: {0}" -f $resolvedDatabasePath)
+    Write-Host ("[start-local] Workspace root: {0}" -f $resolvedWorkspaceRoot)
+    if (-not [string]::IsNullOrWhiteSpace($resolvedDatabasePath)) {
+        Write-Host ("[start-local] SQLite leftover path: {0}" -f $resolvedDatabasePath)
+    }
     Write-Host '[start-local] Press Ctrl+C to stop the foreground server.'
 
     if ($Production) {
@@ -250,6 +308,15 @@ catch {
     $exitCode = 1
 }
 finally {
+    if ($workspaceRootChanged) {
+        if ($workspaceEnvironmentVariableWasPresent) {
+            $env:STORY_WORKSPACE_ROOT = $previousWorkspaceRoot
+        }
+        else {
+            Remove-Item -LiteralPath 'Env:STORY_WORKSPACE_ROOT' -ErrorAction SilentlyContinue
+        }
+    }
+
     if ($databasePathChanged) {
         if ($databaseEnvironmentVariableWasPresent) {
             $env:STORY_WORKSPACE_DB_PATH = $previousDatabasePath

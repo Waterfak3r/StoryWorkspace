@@ -7,6 +7,7 @@ import type { Adaptation } from "@/domain/adaptation";
 import type { Project } from "@/domain/project";
 import type { ScriptDocument } from "@/domain/document";
 import { projectOutlineTree } from "./outline-tree";
+import { useI18n } from "@/features/i18n/LocaleProvider";
 
 export type WorkspaceSection = "bible" | "outline" | "chapters" | "adaptations" | "scripts";
 
@@ -105,6 +106,7 @@ export function WorkspaceNavigator({
   navigationPending = false,
   onLibraryNavigate,
 }: WorkspaceNavigatorProps) {
+  const { t } = useI18n();
   const tree = projectOutlineTree(outlineNodes);
 
   return (
@@ -112,15 +114,15 @@ export function WorkspaceNavigator({
       <div className="border-b border-line px-5 py-5">
         <Link href="/" aria-disabled={navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending} onNavigate={(event) => { if (onLibraryNavigate) { event.preventDefault(); onLibraryNavigate(); } }} className={`inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink ${navigationPending || chapterMutationPending || adaptationMutationPending || scriptMutationPending ? "cursor-wait opacity-60" : ""}`}>
           <ArrowLeft size={18} weight="regular" aria-hidden="true" />
-          Project library
+          {t("Project library")}
         </Link>
         <div className="mt-5 min-w-0">
           <p className="truncate text-base font-semibold tracking-[-0.02em] text-ink">{project.title}</p>
-          <p className="mt-1 text-xs text-ink-faint">Writing workspace</p>
+          <p className="mt-1 text-xs text-ink-faint">{t("Writing workspace")}</p>
         </div>
       </div>
 
-      <nav aria-label="Workspace sections" className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-4">
+      <nav aria-label={t("Workspace sections")} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-4">
         <div className="space-y-1">
           {sectionItems.map(({ id, label, detail, countKey, Icon }) => {
             const active = activeSection === id;
@@ -135,8 +137,8 @@ export function WorkspaceNavigator({
               >
                 <Icon size={19} weight={active ? "bold" : "regular"} className={active ? "text-accent" : "text-ink-faint"} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold">{label}</span>
-                  <span className="mt-0.5 block truncate text-xs text-ink-faint">{detail}</span>
+                  <span className="block text-sm font-semibold">{t(label)}</span>
+                  <span className="mt-0.5 block truncate text-xs text-ink-faint">{t(detail)}</span>
                 </span>
                  <span className="font-mono text-[11px] text-ink-faint">{countFor({ bibleEntries, outlineNodes, chapters, adaptations, scriptDocuments }, countKey)}</span>
               </button>
@@ -147,7 +149,7 @@ export function WorkspaceNavigator({
         {activeSection === "bible" ? (
           <div className="mt-7">
             <div className="flex items-center justify-between px-3">
-              <p className="text-xs font-semibold text-ink">Entries</p>
+              <p className="text-xs font-semibold text-ink">{t("Entries")}</p>
               <span className="text-xs text-ink-faint">{bibleEntries.length}</span>
             </div>
             {bibleEntries.length > 0 ? (
@@ -162,12 +164,12 @@ export function WorkspaceNavigator({
                   >
                     <CaretRight size={14} weight="regular" className={selectedBibleId === entry.id ? "text-accent" : "text-ink-faint"} aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{entry.title}</span>
-                    <span className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">{bibleCategoryLabels[entry.category]}</span>
+                    <span className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">{t(bibleCategoryLabels[entry.category])}</span>
                   </button>
                 ))}
               </div>
             ) : (
-              <p className="mt-3 px-3 text-xs leading-5 text-ink-faint">Your first entry can hold a person, place, or rule.</p>
+              <p className="mt-3 px-3 text-xs leading-5 text-ink-faint">{t("Your first entry can hold a person, place, or rule.")}</p>
             )}
           </div>
         ) : null}
@@ -175,7 +177,7 @@ export function WorkspaceNavigator({
         {activeSection === "outline" ? (
           <div className="mt-7">
             <div className="flex items-center justify-between px-3">
-              <p className="text-xs font-semibold text-ink">Nodes</p>
+              <p className="text-xs font-semibold text-ink">{t("Nodes")}</p>
               <span className="text-xs text-ink-faint">{outlineNodes.length}</span>
             </div>
             {tree.length > 0 ? (
@@ -185,7 +187,7 @@ export function WorkspaceNavigator({
                 ))}
               </div>
             ) : (
-              <p className="mt-3 px-3 text-xs leading-5 text-ink-faint">Start with a story, act, chapter, or scene.</p>
+              <p className="mt-3 px-3 text-xs leading-5 text-ink-faint">{t("Start with a story, act, chapter, or scene.")}</p>
             )}
           </div>
         ) : null}
@@ -255,29 +257,30 @@ function ScriptDocumentNavigatorList({
   loading: boolean;
   error: string | null;
 }) {
+  const { t } = useI18n();
   return (
     <div className="mt-7">
       <div className="flex items-center justify-between gap-3 px-3">
         <div>
-          <p className="text-xs font-semibold text-ink">Scripts</p>
-          <p className="mt-1 text-xs text-ink-faint">Edit stable scenes</p>
+          <p className="text-xs font-semibold text-ink">{t("Scripts")}</p>
+          <p className="mt-1 text-xs text-ink-faint">{t("Edit stable scenes")}</p>
         </div>
-        <button type="button" onClick={onCreate} disabled={navigationPending || scriptMutationPending || loading} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label="New script document">
+        <button type="button" onClick={onCreate} disabled={navigationPending || scriptMutationPending || loading} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label={t("New script document")}>
           <Plus size={17} weight="regular" aria-hidden="true" />
         </button>
       </div>
-      {loading ? <p className="mt-3 px-3 text-xs text-ink-faint">Loading script documents.</p> : null}
-      {error ? <div className="mt-3 px-3"><p role="alert" className="border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{error}</p>{onRetry ? <button type="button" onClick={onRetry} disabled={loading || navigationPending} className="mt-3 min-h-10 rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">Retry list</button> : null}</div> : null}
-      {!loading && documents.length === 0 ? <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">No script documents yet. Create the first one.</p> : null}
+      {loading ? <p className="mt-3 px-3 text-xs text-ink-faint">{t("Loading script documents.")}</p> : null}
+      {error ? <div className="mt-3 px-3"><p role="alert" className="border-l-2 border-danger pl-3 text-xs leading-5 text-danger">{error}</p>{onRetry ? <button type="button" onClick={onRetry} disabled={loading || navigationPending} className="mt-3 min-h-10 rounded-md border border-line px-3 text-xs font-semibold text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50">{t("Retry list")}</button> : null}</div> : null}
+      {!loading && documents.length === 0 ? <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">{t("No script documents yet. Create the first one.")}</p> : null}
       {documents.length > 0 ? (
-        <ul aria-label="Script documents" className="mt-3 space-y-1">
+        <ul aria-label={t("Script documents")} className="mt-3 space-y-1">
           {documents.map((document) => {
             const selected = selectedDocumentId === document.id;
             return (
               <li key={document.id} className={`min-w-0 rounded-lg ${selected ? "bg-surface-raised shadow-sm" : "hover:bg-surface-muted"}`}>
                 <button type="button" onClick={() => onSelect(document.id)} disabled={navigationPending || scriptMutationPending} aria-pressed={selected} className={`flex min-h-12 w-full min-w-0 items-center gap-2 rounded-lg px-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${selected ? "font-semibold text-ink" : "text-ink-muted hover:text-ink"}`}>
                   <CaretRight size={14} weight="regular" className={selected ? "text-accent" : "text-ink-faint"} aria-hidden="true" />
-                  <span className="min-w-0 flex-1 break-words">{document.title || "Untitled script"}</span>
+                  <span className="min-w-0 flex-1 break-words">{document.title || t("Untitled script")}</span>
                   <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-ink-faint">{document.kind}</span>
                 </button>
               </li>
@@ -308,21 +311,22 @@ function AdaptationNavigatorList({
   navigationPending: boolean;
   error: string | null;
 }) {
+  const { t } = useI18n();
   return (
     <div className="mt-7">
       <div className="flex items-center justify-between gap-3 px-3">
         <div>
-          <p className="text-xs font-semibold text-ink">Adaptations</p>
-          <p className="mt-1 text-xs text-ink-faint">Prepare another format</p>
+          <p className="text-xs font-semibold text-ink">{t("Adaptations")}</p>
+          <p className="mt-1 text-xs text-ink-faint">{t("Prepare another format")}</p>
         </div>
-        <button type="button" onClick={onCreate} disabled={mutationPending || navigationPending} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label="New adaptation">
+        <button type="button" onClick={onCreate} disabled={mutationPending || navigationPending} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label={t("New adaptation")}>
           <Plus size={17} weight="regular" aria-hidden="true" />
         </button>
       </div>
       {error ? <p role="alert" className="mt-3 border-l-2 border-danger px-3 text-xs leading-5 text-danger">{error}</p> : null}
-      {mutationPending ? <p role="status" aria-live="polite" className="mt-3 px-3 text-xs text-ink-faint">Saving adaptation change.</p> : null}
+      {mutationPending ? <p role="status" aria-live="polite" className="mt-3 px-3 text-xs text-ink-faint">{t("Saving adaptation change.")}</p> : null}
       {adaptations.length === 0 ? (
-        <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">No adaptations yet. Create a screenplay scene.</p>
+        <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">{t("No adaptations yet. Create a screenplay scene.")}</p>
       ) : (
         <div className="mt-3 space-y-1">
           {adaptations.map((adaptation) => {
@@ -331,10 +335,10 @@ function AdaptationNavigatorList({
               <div key={adaptation.id} className={`flex min-w-0 items-stretch rounded-lg ${selected ? "bg-surface-raised shadow-sm" : "hover:bg-surface-muted"}`}>
                 <button type="button" onClick={() => onSelect(adaptation.id)} disabled={navigationPending || mutationPending} aria-pressed={selected} className={`flex min-h-12 min-w-0 flex-1 items-center gap-2 rounded-l-lg px-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${selected ? "font-semibold text-ink" : "text-ink-muted hover:text-ink"}`}>
                   <CaretRight size={14} weight="regular" className={selected ? "text-accent" : "text-ink-faint"} aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{adaptation.title || "Untitled adaptation"}</span>
-                  <span className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">Scene</span>
+                  <span className="min-w-0 flex-1 truncate">{adaptation.title || t("Untitled adaptation")}</span>
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">{t("Scene")}</span>
                 </button>
-                <button type="button" onClick={() => onDelete(adaptation.id)} disabled={navigationPending || mutationPending} aria-label={`Delete ${adaptation.title || "Untitled adaptation"}`} className="inline-flex min-h-12 min-w-11 items-center justify-center rounded-r-lg text-ink-faint transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50">
+                <button type="button" onClick={() => onDelete(adaptation.id)} disabled={navigationPending || mutationPending} aria-label={t("Delete {title}", { title: adaptation.title || t("Untitled adaptation") })} className="inline-flex min-h-12 min-w-11 items-center justify-center rounded-r-lg text-ink-faint transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50">
                   <Trash size={16} weight="regular" aria-hidden="true" />
                 </button>
               </div>
@@ -365,21 +369,22 @@ function ChapterNavigatorList({
   navigationPending: boolean;
   error: string | null;
 }) {
+  const { t } = useI18n();
   return (
     <div className="mt-7">
       <div className="flex items-center justify-between gap-3 px-3">
         <div>
-          <p className="text-xs font-semibold text-ink">Chapters</p>
-          <p className="mt-1 text-xs text-ink-faint">Write the manuscript</p>
+          <p className="text-xs font-semibold text-ink">{t("Chapters")}</p>
+          <p className="mt-1 text-xs text-ink-faint">{t("Write the manuscript")}</p>
         </div>
-        <button type="button" onClick={onCreate} disabled={mutationPending || navigationPending} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label="New chapter">
+        <button type="button" onClick={onCreate} disabled={mutationPending || navigationPending} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line text-ink-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50" aria-label={t("New chapter")}>
           <Plus size={17} weight="regular" aria-hidden="true" />
         </button>
       </div>
       {error ? <p role="alert" className="mt-3 border-l-2 border-danger px-3 text-xs leading-5 text-danger">{error}</p> : null}
-      {mutationPending ? <p role="status" aria-live="polite" className="mt-3 px-3 text-xs text-ink-faint">Saving chapter change.</p> : null}
+      {mutationPending ? <p role="status" aria-live="polite" className="mt-3 px-3 text-xs text-ink-faint">{t("Saving chapter change.")}</p> : null}
       {chapters.length === 0 ? (
-        <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">No chapters yet. Create the first page.</p>
+        <p className="mt-4 border-l-2 border-line px-3 text-xs leading-5 text-ink-faint">{t("No chapters yet. Create the first page.")}</p>
       ) : (
         <div className="mt-3 space-y-1">
           {chapters.map((chapter) => {
@@ -388,10 +393,10 @@ function ChapterNavigatorList({
               <div key={chapter.id} className={`flex min-w-0 items-stretch rounded-lg ${selected ? "bg-surface-raised shadow-sm" : "hover:bg-surface-muted"}`}>
                 <button type="button" onClick={() => onSelect(chapter.id)} disabled={navigationPending || mutationPending} aria-pressed={selected} className={`flex min-h-12 min-w-0 flex-1 items-center gap-2 rounded-l-lg px-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${selected ? "font-semibold text-ink" : "text-ink-muted hover:text-ink"}`}>
                   <CaretRight size={14} weight="regular" className={selected ? "text-accent" : "text-ink-faint"} aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{chapter.title || "Untitled chapter"}</span>
+                  <span className="min-w-0 flex-1 truncate">{chapter.title || t("Untitled chapter")}</span>
                   <span className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">{chapter.status}</span>
                 </button>
-                <button type="button" onClick={() => onDelete(chapter.id)} disabled={navigationPending || mutationPending} aria-label={`Delete ${chapter.title || "Untitled chapter"}`} className="inline-flex min-h-12 min-w-11 items-center justify-center rounded-r-lg text-ink-faint transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50">
+                <button type="button" onClick={() => onDelete(chapter.id)} disabled={navigationPending || mutationPending} aria-label={t("Delete {title}", { title: chapter.title || t("Untitled chapter") })} className="inline-flex min-h-12 min-w-11 items-center justify-center rounded-r-lg text-ink-faint transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50">
                   <Trash size={16} weight="regular" aria-hidden="true" />
                 </button>
               </div>

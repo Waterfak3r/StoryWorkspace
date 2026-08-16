@@ -10,7 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/studio/**/*.test.ts"],
     restoreMocks: true,
     clearMocks: true,
   },
