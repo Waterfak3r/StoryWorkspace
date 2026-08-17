@@ -16,6 +16,7 @@ import type {
 } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
 import {
+  confirmStudioProjectDialogue,
   findScenePathInTree,
   getStudioTree,
   getStudioWorkflow,
@@ -49,6 +50,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   const [selectedStage, setSelectedStage] = useState<StudioPipelineStage["id"]>("dialogue");
   const [runningImageId, setRunningImageId] = useState<string | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
+  const [confirmingDialogue, setConfirmingDialogue] = useState(false);
 
   const refresh = useCallback(async () => {
     const next = await getStudioWorkflow(projectId);
@@ -88,6 +90,18 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
       setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
     } finally {
       setLockingId(null);
+    }
+  }
+
+  async function confirmDialogue() {
+    setConfirmingDialogue(true);
+    try {
+      await confirmStudioProjectDialogue(projectId);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+    } finally {
+      setConfirmingDialogue(false);
     }
   }
 
@@ -173,6 +187,18 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
           <p className="mt-3 text-sm leading-relaxed text-ink-muted">
             {t(STAGE_DESCRIPTIONS[selected.id]) || selected.statusLabel}
           </p>
+          {selected.id === "dialogue" ? (
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() => void confirmDialogue()}
+                disabled={confirmingDialogue}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3.5 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {confirmingDialogue ? t("Confirming dialogue") : t("Confirm dialogue")}
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

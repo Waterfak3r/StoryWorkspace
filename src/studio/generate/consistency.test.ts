@@ -7,7 +7,7 @@ import { resolveContext } from "../context";
 import { directScene } from "../director";
 import { readTree } from "../fs";
 import { ingestFixtureStory } from "../test-support/fixture-stories";
-import { compileImagePrompt } from "./compile-prompt";
+import { compileImagePrompt, mentionsCharacterOnScreen } from "./compile-prompt";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
@@ -49,8 +49,12 @@ describe("style and character identity across shots", () => {
     const directed = directScene(project.id, located!.volumeId, located!.chapterId, scene!.id);
     expect(directed.shots.length).toBeGreaterThanOrEqual(2);
 
-    const first = directed.shots[0]!;
-    const second = directed.shots[1]!;
+    const withSue = directed.shots.filter((shot) =>
+      mentionsCharacterOnScreen(`${shot.purpose} ${shot.action}`, "Sue"),
+    );
+    expect(withSue.length).toBeGreaterThanOrEqual(2);
+    const first = withSue[0]!;
+    const second = withSue[1]!;
     const snapA = resolveContext({
       projectId: project.id,
       volumeId: located!.volumeId,

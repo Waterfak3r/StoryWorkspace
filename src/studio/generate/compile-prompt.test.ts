@@ -41,6 +41,7 @@ describe("compileImagePrompt", () => {
         from: null,
         prior: null,
       },
+      storyPosition: { events: [] },
     };
 
     const compiled = compileImagePrompt(snapshot);
@@ -85,6 +86,7 @@ describe("compileImagePrompt", () => {
         camera: "medium two-shot, slight low angle",
       },
       continuity: { from: "shot-01", prior: { purpose: "Streets", action: "Winding streets", camera: "wide" } },
+      storyPosition: { events: [] },
     };
 
     const compiled = compileImagePrompt(snapshot);
@@ -148,6 +150,7 @@ describe("compileImagePrompt", () => {
         camera: "medium",
       },
       continuity: { from: null, prior: null },
+      storyPosition: { events: [] },
     };
 
     const compiled = compileImagePrompt(snapshot);
@@ -196,6 +199,7 @@ describe("compileImagePrompt", () => {
           camera: "medium",
         },
         continuity: { from: null, prior: null },
+        storyPosition: { events: [] },
       },
       {
         scene,
@@ -209,6 +213,7 @@ describe("compileImagePrompt", () => {
           camera: "medium",
         },
         continuity: { from: "shot-17", prior: { purpose: "Johnsy chooses life", action: "Johnsy wants to live", camera: "medium" } },
+        storyPosition: { events: [] },
       },
       {
         scene,
@@ -222,6 +227,7 @@ describe("compileImagePrompt", () => {
           camera: "insert",
         },
         continuity: { from: "shot-18", prior: { purpose: "Sue comforts Johnsy", action: "Sue hugs Johnsy", camera: "medium" } },
+        storyPosition: { events: [] },
       },
     ]);
 
@@ -250,6 +256,7 @@ describe("compileImagePrompt", () => {
             camera: "medium",
           },
           continuity: { from: null, prior: null },
+          storyPosition: { events: [] },
         },
       ],
       "",
@@ -324,6 +331,7 @@ describe("compileImagePrompt", () => {
           camera: "medium",
         },
       },
+      storyPosition: { events: [] },
     };
 
     const compiled = compileImagePrompt(snapshot);
@@ -331,5 +339,44 @@ describe("compileImagePrompt", () => {
     expect(compiled.prompt).toContain("identity lock Johnsy:");
     expect(compiled.prompt).not.toContain("identity lock Behrman");
     expect(compiled.prompt).not.toMatch(/character Behrman/);
+  });
+
+  it("includes prior story titles and stacked entity condition", () => {
+    const snapshot: StudioContextSnapshot = {
+      scene: {
+        id: "scene-02",
+        title: "After the storm",
+        script: "Jill stands injured on the dock.",
+        intent: "Show the cost of the wait.",
+      },
+      entities: [
+        {
+          id: "character-01",
+          kind: "character",
+          name: "Jill",
+          description: "A harbor lookout",
+          visual: { base: "wool coat", references: [] },
+          state: { outfit: "navy coat", condition: "injured" },
+        },
+      ],
+      style: { id: "default", label: "Default", visual: "Cinematic night." },
+      intent: "Show the cost of the wait.",
+      shot: {
+        id: "shot-01",
+        purpose: "Aftermath",
+        action: "Jill stands on the dock",
+        camera: "medium",
+      },
+      continuity: { from: null, prior: null },
+      storyPosition: {
+        events: [{ title: "Harbor watch", summary: "Jill waits under a lantern for a signal." }],
+      },
+    };
+
+    const compiled = compileImagePrompt(snapshot);
+    expect(compiled.prompt).toContain("Prior story:");
+    expect(compiled.prompt).toContain("Harbor watch");
+    expect(compiled.prompt).toContain("condition: injured");
+    expect(compiled.prompt).not.toContain(snapshot.scene.script);
   });
 });

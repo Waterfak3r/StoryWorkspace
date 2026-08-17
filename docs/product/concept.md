@@ -8,17 +8,19 @@
 
 本地优先、API 驱动、以故事结构和可复用资产为核心的 AI 漫画 / 影像工作流工具。不是在线 SaaS，也不是模型聚合器。实现时每次只推进一个清晰 vertical slice。讨论整条链（含尚未进 mvp 的视频 / 配音 / 音乐 / 合成）是本文件的用途，不是越权。
 
-核心目标：角色、地点、道具、风格、声音等信息只描述一次；后续分镜、生图、视频、配音、音乐自动复用同一套上下文。
+核心目标：角色、地点、道具、服饰、对白、风格等信息只描述并确认一次；大纲图随故事变密；分镜与生图只引用这些已确认单元，不另写一套人设或再扫一遍原文。
+
+四条一致性由层保证，不是四句 prompt：风格来自项目 Style；人物来自稳定 Entity + 参考图；情节来自本场在大纲图上的位置；逻辑来自跨场 Story State；对白来自已确认的场×人物台词。
 
 真正的核心不是某个视频模型，而是：
 
-> Story Model + Entity/Asset System + State/Continuity + AI Director + Context Resolver + Prompt Compiler + Workflow Engine
+> Story Model + Entity/Asset System + State/Continuity + Confirmed Dialogue + AI Director + Context Resolver + Prompt Compiler + Workflow Engine
 
 图片、视频、TTS、音乐 API 都只是最后接在这套系统后面的执行器。
 
 ## 原则
 
-1. 信息只描述一次，且必须持久化。
+1. 信息只描述一次，且必须持久化。场、页、prompt 只引用 Entity / 确认对白 / 当前状态的 ID，不复制人设，不在生图时重读剧本抽词。
 2. AI 负责重复劳动，人负责创作判断。正文、实体、分镜、Prompt、模型、参考图、单节点重跑和锁定结果始终可由用户控制。
 3. 自动化不等于黑盒。任何节点都要能打开看输入、上下文、自动 Prompt、覆盖、输出和日志。
 4. 漫画、视频、配音、音乐消费同一套故事上下文。

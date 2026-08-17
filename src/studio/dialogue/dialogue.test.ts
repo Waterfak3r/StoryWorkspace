@@ -8,7 +8,13 @@ import { assembleComicsBook } from "../comics/assemble-pages";
 import { compileComicsPagePrompt } from "../generate/compile-prompt";
 import { fakeImageAdapter, generateShot } from "../generate";
 import { createEntity, createProject, readScene, replaceSceneShots, updateScene } from "../fs";
-import { assembleProjectDialogue, assignDialogueToShots, compilePageLettering, extractAttributedDialogue } from "./index";
+import {
+  assembleProjectDialogue,
+  assignDialogueToShots,
+  compilePageLettering,
+  confirmSceneDialogue,
+  extractAttributedDialogue,
+} from "./index";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
@@ -95,75 +101,13 @@ describe("dialogue extract, assign, and lettering", () => {
     expect(DEFAULT_COMICS_STYLE_VISUAL).not.toMatch(/no speech balloons/i);
   });
 
-  it("letters assembled pages from script dialogue, not panel captions", () => {
-    const project = createProject({ title: "Leaf Talk" });
-    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
-    const johnsy = createEntity(project.id, { kind: "character", name: "Johnsy" });
-    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
-    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
-      script: SCRIPT,
-      characters: [sue.id, johnsy.id],
-      expectedUpdatedAt: scene.updatedAt,
-    });
-    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
-      still("scene-01", "shot-01", "Sue opens the curtain."),
-      still("scene-01", "shot-02", "Johnsy stares at the leaf."),
-    ]);
+  it("does not letter or generate speech from an unprocessed quoted script", async () => {
+    const project = seedQuotedScene();
+    const before = assembleProjectDialogue(project.id);
+    expect(before.lineCount).toBe(0);
+    expect(before.scenes[0]?.shots.every((shot) => shot.lines.length === 0)).toBe(true);
 
-    const book = assembleComicsBook(project.id);
-    const page = book.pages[0];
-    expect(page).toBeDefined();
-    expect(page!.panels.map((panel) => panel.caption)).toEqual([
-      "Sue opens the curtain.",
-      "Johnsy stares at the leaf.",
-    ]);
-    expect(page!.lettering.map((balloon) => ({ speaker: balloon.speaker, text: balloon.text }))).toEqual([
-      { speaker: "Sue", text: "The last leaf is still there." },
-      { speaker: "Johnsy", text: "I thought it would fall." },
-    ]);
-    expect(page!.panels.flatMap((panel) => panel.speech).map((line) => line.text)).toEqual([
-      "The last leaf is still there.",
-      "I thought it would fall.",
-    ]);
-    expect(page!.lettering.some((balloon) => balloon.text === "Sue opens the curtain.")).toBe(false);
-  });
-
-  it("generateShot compiles attributed speech from the script, not shot action", async () => {
-    const project = createProject({ title: "Leaf Talk" });
-    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
-    const johnsy = createEntity(project.id, { kind: "character", name: "Johnsy" });
-    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
-    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
-      script: SCRIPT,
-      characters: [sue.id, johnsy.id],
-      expectedUpdatedAt: scene.updatedAt,
-    });
-    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
-      {
-        id: "shot-01",
-        scene_id: "scene-01",
-        purpose: "Sue checks the vine",
-        action: "Sue looks at the wall.",
-        camera: "medium",
-        continuity_from: null,
-        status: "pending",
-        selected_image: null,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "shot-02",
-        scene_id: "scene-01",
-        purpose: "Johnsy answers",
-        action: "Johnsy watches the leaf.",
-        camera: "close-up",
-        continuity_from: "shot-01",
-        status: "pending",
-        selected_image: null,
-        updatedAt: new Date().toISOString(),
-      },
-    ]);
-
-    const result = await generateShot(
+    const generated = await generateShot(
       project.id,
       "volume-01",
       "chapter-01",
@@ -172,65 +116,80 @@ describe("dialogue extract, assign, and lettering", () => {
       { mode: "generate" },
       fakeImageAdapter,
     );
+    expect(generated.compiled.prompt).not.toMatch(/speech:/);
 
-    expect(result.compiled.prompt).toContain("speech: Sue: The last leaf is still there.");
-    expect(result.compiled.prompt).toContain("speech: Johnsy: I thought it would fall.");
-    expect(result.compiled.prompt).not.toMatch(/speech: Sue looks at the wall/);
-    expect(result.compiled.prompt).not.toMatch(/speech: Johnsy watches the leaf/);
+    const book = assembleComicsBook(project.id);
+    expect(book.pages[0]?.lettering).toEqual([]);
+    expect(book.pages[0]?.panels.flatMap((panel) => panel.speech)).toEqual([]);
+  });
+
+  it("confirms speaker entity ids and keeps generate/lettering on confirmed text after the script changes", async () => {
+    const project = seedQuotedScene();
+    const confirmed = confirmSceneDialogue(project.id, "volume-01", "chapter-01", "scene-01");
+    expect(confirmed.dialogue.status).toBe("confirmed");
+    expect(confirmed.dialogue.lines.map((line) => line.speakerId)).toEqual([
+      expect.stringMatching(/^character-/),
+      expect.stringMatching(/^character-/),
+    ]);
+    const sue = confirmed.dialogue.lines.find((line) => line.speaker === "Sue");
+    const johnsy = confirmed.dialogue.lines.find((line) => line.speaker === "Johnsy");
+    expect(sue?.speakerId).toBeTruthy();
+    expect(johnsy?.speakerId).toBeTruthy();
+    expect(sue?.speakerId).not.toBe(johnsy?.speakerId);
+
+    const assembled = assembleProjectDialogue(project.id);
+    expect(assembled.lineCount).toBe(2);
+    expect(assembled.scenes[0]?.shots[0]?.lines.map((line) => `${line.speaker}:${line.text}`)).toEqual([
+      "Sue:The last leaf is still there.",
+    ]);
+    expect(assembled.scenes[0]?.shots[1]?.lines.map((line) => `${line.speaker}:${line.text}`)).toEqual([
+      "Johnsy:I thought it would fall.",
+    ]);
+
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      script: 'Sue: "The ivy is gone."\nJohnsy: "Then I will die."',
+      expectedUpdatedAt: readScene(project.id, "volume-01", "chapter-01", "scene-01").updatedAt,
+    });
+
+    const generated = await generateShot(
+      project.id,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      fakeImageAdapter,
+    );
+    expect(generated.compiled.prompt).toContain("speech: Sue: The last leaf is still there.");
+    expect(generated.compiled.prompt).toContain("speech: Johnsy: I thought it would fall.");
+    expect(generated.compiled.prompt).not.toContain("The ivy is gone.");
+    expect(generated.compiled.prompt).not.toContain("Then I will die.");
 
     const book = assembleComicsBook(project.id);
     expect(book.pages[0]?.lettering.map((balloon) => `${balloon.speaker}:${balloon.text}`)).toEqual([
       "Sue:The last leaf is still there.",
       "Johnsy:I thought it would fall.",
     ]);
-  });
-
-  it("assembles attributed lines onto shots for the workflow dialogue stage", () => {
-    const project = createProject({ title: "Leaf Talk" });
-    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
-    const johnsy = createEntity(project.id, { kind: "character", name: "Johnsy" });
-    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
-    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
-      script: SCRIPT,
-      characters: [sue.id, johnsy.id],
-      expectedUpdatedAt: scene.updatedAt,
-    });
-    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
-      {
-        id: "shot-01",
-        scene_id: "scene-01",
-        purpose: "Sue checks the vine",
-        action: "Sue looks at the wall.",
-        camera: "medium",
-        continuity_from: null,
-        status: "pending",
-        selected_image: null,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "shot-02",
-        scene_id: "scene-01",
-        purpose: "Johnsy answers",
-        action: "Johnsy watches the leaf.",
-        camera: "close-up",
-        continuity_from: "shot-01",
-        status: "pending",
-        selected_image: null,
-        updatedAt: new Date().toISOString(),
-      },
-    ]);
-
-    const dialogue = assembleProjectDialogue(project.id);
-    expect(dialogue.lineCount).toBe(2);
-    expect(dialogue.scenes[0]?.unassigned).toEqual([]);
-    expect(dialogue.scenes[0]?.shots[0]?.lines.map((line) => `${line.speaker}:${line.text}`)).toEqual([
-      "Sue:The last leaf is still there.",
-    ]);
-    expect(dialogue.scenes[0]?.shots[1]?.lines.map((line) => `${line.speaker}:${line.text}`)).toEqual([
-      "Johnsy:I thought it would fall.",
-    ]);
+    expect(book.pages[0]?.lettering.some((balloon) => balloon.text === "Sue looks at the wall.")).toBe(false);
   });
 });
+
+function seedQuotedScene() {
+  const project = createProject({ title: "Leaf Talk" });
+  const sue = createEntity(project.id, { kind: "character", name: "Sue" });
+  const johnsy = createEntity(project.id, { kind: "character", name: "Johnsy" });
+  const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+  updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+    script: SCRIPT,
+    characters: [sue.id, johnsy.id],
+    expectedUpdatedAt: scene.updatedAt,
+  });
+  replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+    still("scene-01", "shot-01", "Sue looks at the wall."),
+    still("scene-01", "shot-02", "Johnsy watches the leaf."),
+  ]);
+  return project;
+}
 
 function still(sceneId: string, id: string, action: string): StudioShot {
   return {
@@ -276,5 +235,6 @@ function snapshot(shotId: string, action: string): StudioContextSnapshot {
     intent: "Hope.",
     shot: { id: shotId, purpose: "beat", action, camera: "medium" },
     continuity: { from: null, prior: null },
+    storyPosition: { events: [] },
   };
 }

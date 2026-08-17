@@ -3,7 +3,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { createEntity, createProject, readScene, updateEntity, updateScene } from "../fs";
+import { compileImagePrompt } from "../generate/compile-prompt";
+import {
+  createEntity,
+  createProject,
+  createScene,
+  readScene,
+  replaceSceneShots,
+  updateEntity,
+  updateScene,
+  writeContentState,
+} from "../fs";
 import { directScene, type DirectorShotDraft } from "../director";
 import { resolveContext } from "./resolve-context";
 
@@ -111,4 +121,68 @@ describe("context snapshot evidence", () => {
       writeFileSync(path.join(evidenceDir, "context.json"), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
     }
   });
+
+  it("stacks prior scene patches into later snapshots and compile prompts", () => {
+    const project = createProject({ title: "Harbor Night" });
+    const jill = createEntity(project.id, { kind: "character", name: "Jill" });
+    const first = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      title: "Harbor watch",
+      script: "Jill waits under a lantern.",
+      intent: "Establish the wait.",
+      characters: [jill.id],
+      expectedUpdatedAt: first.updatedAt,
+    });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      pendingShot("scene-01", "shot-01", "Jill waits under a lantern"),
+    ]);
+    const second = createScene(project.id, "volume-01", "chapter-01", { title: "After the storm" });
+    updateScene(project.id, "volume-01", "chapter-01", second.id, {
+      script: "Jill stands on the dock.",
+      intent: "The wait has a cost.",
+      characters: [jill.id],
+      expectedUpdatedAt: second.updatedAt,
+    });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", second.id, [
+      pendingShot(second.id, "shot-01", "Jill stands on the dock"),
+    ]);
+    writeContentState(project.id, "volume-01", "chapter-01", "scene-01", {
+      patches: [{ entityId: jill.id, condition: "injured", truth: "inferred" }],
+    });
+
+    const snapA = resolveContext({
+      projectId: project.id,
+      volumeId: "volume-01",
+      chapterId: "chapter-01",
+      sceneId: "scene-01",
+      shotId: "shot-01",
+    });
+    const snapB = resolveContext({
+      projectId: project.id,
+      volumeId: "volume-01",
+      chapterId: "chapter-01",
+      sceneId: second.id,
+      shotId: "shot-01",
+    });
+
+    expect(snapA.entities.find((entity) => entity.id === jill.id)?.state.condition).toBe("");
+    expect(snapB.entities.find((entity) => entity.id === jill.id)?.state.condition).toBe("injured");
+    expect(snapB.storyPosition.events.some((event) => event.title === "Harbor watch")).toBe(true);
+    expect(compileImagePrompt(snapB).prompt).toContain("injured");
+    expect(compileImagePrompt(snapA).prompt).not.toContain("injured");
+  });
 });
+
+function pendingShot(sceneId: string, id: string, action: string) {
+  return {
+    id,
+    scene_id: sceneId,
+    purpose: "beat",
+    action,
+    camera: "medium",
+    continuity_from: null,
+    status: "pending" as const,
+    selected_image: null,
+    updatedAt: new Date().toISOString(),
+  };
+}

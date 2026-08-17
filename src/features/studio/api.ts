@@ -339,6 +339,22 @@ export async function directStudioScene(projectId: string, path: ScenePath) {
   return data.scene;
 }
 
+export async function confirmStudioSceneDialogue(projectId: string, path: ScenePath) {
+  const data = await studioRequest<{ scene: StudioScene }>(`${sceneUrl(projectId, path)}/dialogue/confirm`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return data.scene;
+}
+
+export async function confirmStudioProjectDialogue(projectId: string) {
+  const data = await studioRequest<{ scenes: StudioScene[] }>(
+    `/api/studio/projects/${projectId}/dialogue/confirm`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+  return data.scenes;
+}
+
 export async function listStudioShots(projectId: string, path: ScenePath) {
   const data = await studioRequest<{ shots: StudioShot[] }>(`${sceneUrl(projectId, path)}/shots`);
   return data.shots;

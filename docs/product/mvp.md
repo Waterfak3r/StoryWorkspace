@@ -25,6 +25,9 @@
 | 艺术分镜导演 | 已实现：可注入；无镜时至少 2 镜；机位变化且含景别/运动语汇；已配文本模型则 LLM，失败回退 |
 | [漫画页](./slice-07-comics-pages.md) | 已实现：Image API **一次生成一整页漫画**；遗留静帧合成一张页图；Outputs 一页一图 |
 | [实体参考图](./slice-08-entity-references.md) | 已实现：实体可上传参考图；生图把图片发给 `/images/edits`，保持角色/地点/道具/服饰一致 |
+| [确认对白引用](./slice-09-confirmed-dialogue.md) | 已实现：对白确认到场（说话人=人物实体，赋格）；生图/描字只引用确认行；Workflow 可确认 |
+| [实体大纲图](./slice-10-entity-outline-graph.md) | 已实现：实体上图、出场轨迹、点实体看人设；只读汇编；agy 已过观感一刀 |
+| [Story State + 前情](./slice-11-story-state-context.md) | 后端已实现：场后补丁按卷/章/场落盘；Resolver 叠本场之前；Compiler 带前情与状态。场上补状态编辑器未做 |
 
 ## 当前实现基线
 
@@ -40,9 +43,9 @@
 
 ## 简历级定位
 
-当前演示口径（不是产品上限）：本地优先的 **AI 结构化内容 → 漫画工作流**。
+当前演示口径（不是产品上限）：本地优先的 **实体可复用 → 活大纲图 → 引用进漫画**。
 
-把故事里的角色、地点、状态只描述一次；分镜、生图、重生成时自动复用上下文；支持对单个镜头做带前后一致性约束的重新生成。完整层见 `concept.md`。
+实体、确认对白、项目风格只写一次；大纲图随场/实体/状态变密；生图引用这些单元，不重读原文做人设或对白。完整层见 `concept.md`。
 
 ## 必做
 
@@ -57,8 +60,10 @@
 | 生图 | 调用用户自备 Image API，一次出一整页漫画；出场实体参考图作为图片输入，保持形象一致 |
 | 单镜头重生成 | 重画该镜所在整页；Agent 带连续性约束 |
 | Workflow 面板 | 全链图：文字生成 → 导入 → 分镜 → 对话处理 → 最终生成漫画；状态与依赖边；镜头重跑/锁定是钻入 |
-| 故事大纲栏 | 只读人物×事件时间线：故事序列轴、相邻事件连成可视链、人物泳道、谁在何时参与哪场；不是卷/章/场卡片罗列 |
-| 对白 / 描字 | 从剧本人名台词抽出说话人+对白，赋到格，页内对白气泡描字；shot.action / panel.caption 不是对白 |
+| 故事大纲栏 | 只读活地图：事件节点 + 实体节点（角色必上图，地点为环境锚点，多场道具/服饰上图）+ 参与边 + 序列边；点实体看出场轨迹与人设；不另存大纲库；不是卷/章/场卡片罗列 |
+| 对白 / 描字 | 场+人物确定后处理并确认台词（说话人引用人物实体，赋到格）；生图与描字只引用已确认对白。禁止生成时再扫 `script`。`shot.action` / `panel.caption` 不是对白 |
+| Story State | 按场记录实体场后补丁（outfit / condition 等）；Canon 与推断可区分；Resolver 叠 default + 本场之前的补丁 |
+| 前情进编译 | Compiler 消费出场实体、确认对白、当前叠后状态、本场前情摘要；生成范围（本页）与上下文范围（向前取）分开 |
 | 漫画风格选择 | 项目可选漫画风格并持久化；编译页请求包含所选风格文本，不是只藏在默认文件里 |
 | 实体参考图自动完善 | 无参考图的实体可自动生成真实落盘图片；后续整页生图把图片字节发给 Image adapter |
 | 全本摄入 | 粘贴长文后确认，得到可复用的环境 / 情节 / 实体，供分镜与生图直接引用 |
@@ -101,11 +106,12 @@ Workflow 是演示核心：能看见节点状态，能重跑某个 Shot，能看
 ```
 文本 / 导入
   → AI Parse（Scene + Entity）→ 人工确认
-  → Scene 编辑（剧本 + Intent）
+  → Scene 编辑（剧本 + Intent + 挂实体）
   → AI Director → Storyboard（可改）
-  → Context Resolver
+  → 对话处理：抽词并确认到场×人物×格（此后不再扫剧本）
+  → Context Resolver（实体 + 叠后状态 + 前情 + 确认对白）
   → Prompt Compiler（一页多格）→ Image API 一张漫画页
-  → 遗留多静帧则合成一张页图
+  → 描字引用确认对白
   → 单 Shot：查看自动 Prompt / 连续性约束 / 重画本页 / 锁定
 ```
 
@@ -128,7 +134,7 @@ my-project/
 
 ## 精简模型
 
-**Scene**：`id`、`title`、`script`、`characters[]`、`location`、`props[]`、`costumes[]`、`intent`、`shots[]`
+**Scene**：`id`、`title`、`script`、`characters[]`、`location`、`props[]`、`costumes[]`、`intent`、`shots[]`、`dialogue`（status + 已确认台词，说话人引用人物 id，赋到 shot）
 
 **Character**：`id`、`name`、`description`、`visual.base`、`visual.references[]`、`states.default`
 

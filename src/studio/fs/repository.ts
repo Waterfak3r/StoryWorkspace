@@ -7,6 +7,7 @@ import type { ZodType } from "zod";
 import {
   allocateUniqueSlug,
   chapterRecordSchema,
+  contentStateSchema,
   createChapterInputSchema,
   createEntityInputSchema,
   createProjectInputSchema,
@@ -25,6 +26,7 @@ import {
   STUDIO_SCHEMA_VERSION,
   styleRecordSchema,
   updateChapterInputSchema,
+  updateContentStateInputSchema,
   updateEntityInputSchema,
   updateProjectInputSchema,
   updateSceneInputSchema,
@@ -37,6 +39,7 @@ import {
   type CreateSceneInput,
   type CreateVolumeInput,
   type StudioChapter,
+  type StudioContentState,
   type StudioEntity,
   type StudioEntityKind,
   type StudioProject,
@@ -50,6 +53,7 @@ import {
   type StudioStyle,
   type StudioVolume,
   type UpdateChapterInput,
+  type UpdateContentStateInput,
   type UpdateEntityInput,
   type UpdateProjectInput,
   type UpdateSceneInput,
@@ -349,6 +353,7 @@ export function updateScene(
     props: values.props ?? ctx.scene.props,
     costumes: values.costumes ?? ctx.scene.costumes,
     shots: ctx.scene.shots,
+    dialogue: values.dialogue ?? ctx.scene.dialogue,
     updatedAt: nowIso(ctx.scene.updatedAt),
     provenance: values.provenance ?? ctx.scene.provenance,
     canonFields: values.canonFields ?? ctx.scene.canonFields,
@@ -493,6 +498,59 @@ export function updateStyle(
   if (patch.presetId) {
     next.presetId = patch.presetId;
   }
+  writeJsonFile(file, next);
+  return next;
+}
+
+export function readContentState(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+): StudioContentState | null {
+  const ctx = requireProject(projectId);
+  const volume = assertStudioId(volumeId, "volumeId");
+  const chapter = assertStudioId(chapterId, "chapterId");
+  const id = assertStudioId(sceneId, "sceneId");
+  const file = contentStateFile(ctx, volume, chapter, id);
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  const state = parseJsonRecord(file, contentStateSchema);
+  if (state.volumeId !== volume || state.chapterId !== chapter || state.sceneId !== id) {
+    throw new StudioNotFoundError("Content state not found.");
+  }
+  return state;
+}
+
+export function writeContentState(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  input: UpdateContentStateInput,
+): StudioContentState {
+  const ctx = requireProject(projectId);
+  const volume = assertStudioId(volumeId, "volumeId");
+  const chapter = assertStudioId(chapterId, "chapterId");
+  const id = assertStudioId(sceneId, "sceneId");
+  const values = parseInput(updateContentStateInputSchema, input);
+  const file = contentStateFile(ctx, volume, chapter, id);
+  const existing = fs.existsSync(file) ? parseJsonRecord(file, contentStateSchema) : null;
+  if (existing) {
+    if (!values.expectedUpdatedAt) {
+      throw new StudioValidationError("expectedUpdatedAt is required.", "expectedUpdatedAt");
+    }
+    assertFresh(existing.updatedAt, values.expectedUpdatedAt, existing);
+  }
+
+  const next: StudioContentState = {
+    volumeId: volume,
+    chapterId: chapter,
+    sceneId: id,
+    patches: values.patches,
+    updatedAt: nowIso(existing?.updatedAt),
+  };
   writeJsonFile(file, next);
   return next;
 }
@@ -766,8 +824,18 @@ function defaultScene(id: string, title: string, updatedAt: string): StudioScene
     props: [],
     costumes: [],
     shots: [],
+    dialogue: { status: "unprocessed", lines: [] },
     updatedAt,
   };
+}
+
+function contentStateFile(
+  ctx: ProjectContext,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+): string {
+  return projectFile(ctx, "states", "content-states", volumeId, chapterId, `${sceneId}.json`);
 }
 
 function projectFile(ctx: ProjectContext, ...segments: string[]): string {

@@ -53,6 +53,7 @@ export function compileImagePrompt(
     "Keep character likeness, costume, and comic style identical across shots of this story.",
     intentLine(snapshot, focusedCharacterNames),
     snapshot.scene.title ? `Scene: ${snapshot.scene.title}` : "",
+    ...priorStoryLines(snapshot),
     "Illustrate only this shot's action. Do not draw other episodes from the scene.",
     "Only draw the named characters for this shot. Do not add extra people.",
     ...formattedEntities,
@@ -110,6 +111,7 @@ export function compileComicsPagePrompt(
       : "",
     ...identityLines,
     first.scene.title ? `Scene: ${first.scene.title}` : "",
+    ...priorStoryLines(first),
     ...formatEntityLines(pageEntities),
     ...panelBlocks,
     continuityConstraints ? `Continuity: ${continuityConstraints}` : "",
@@ -131,6 +133,30 @@ function withProvider(prompt: string): CompiledImageRequest {
       quality: image.quality,
     },
   };
+}
+
+const PRIOR_STORY_SUMMARY_MAX = 160;
+
+function priorStoryLines(snapshot: StudioContextSnapshot): string[] {
+  const events = snapshot.storyPosition.events;
+  if (events.length === 0) {
+    return [];
+  }
+  return [
+    "Prior story:",
+    ...events.map((event) => {
+      const summary = truncateText(event.summary, PRIOR_STORY_SUMMARY_MAX);
+      return summary ? `${event.title}: ${summary}` : event.title;
+    }),
+  ];
+}
+
+function truncateText(value: string, max: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) {
+    return normalized;
+  }
+  return `${normalized.slice(0, max - 1).trimEnd()}…`;
 }
 
 function formatEntityLines(entities: ReturnType<typeof entitiesForShot>): string[] {

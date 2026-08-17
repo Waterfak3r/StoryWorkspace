@@ -13,6 +13,7 @@ export {
   listEntities,
   listProjects,
   listShots,
+  readContentState,
   readEntity,
   readProject,
   readScene,
@@ -26,4 +27,5 @@ export {
   updateScene,
   updateShot,
   updateVolume,
+  writeContentState,
 } from "./repository";

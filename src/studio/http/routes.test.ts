@@ -32,6 +32,12 @@ import { POST as postDirector } from "@/app/api/studio/projects/[projectId]/volu
 import { GET as getShots } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/shots/route";
 import { PATCH as patchShot } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/shots/[shotId]/route";
 import { GET as getContext } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/context/route";
+import { POST as postSceneDialogueConfirm } from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/dialogue/confirm/route";
+import { POST as postProjectDialogueConfirm } from "@/app/api/studio/projects/[projectId]/dialogue/confirm/route";
+import {
+  GET as getSceneState,
+  PUT as putSceneState,
+} from "@/app/api/studio/projects/[projectId]/volumes/[volumeId]/chapters/[chapterId]/scenes/[sceneId]/state/route";
 import { getWorkspaceRoot } from "@/studio/fs";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
@@ -768,6 +774,110 @@ describe("studio HTTP routes", () => {
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+
+  it("confirms scene dialogue and reads empty then written scene state", async () => {
+    await postProject(jsonRequest("http://localhost/api/studio/projects", "POST", { title: "Harbor Night" }));
+    const createdEntity = await postEntity(
+      jsonRequest("http://localhost/api/studio/entities", "POST", { kind: "character", name: "Jill" }),
+      projectParams(),
+    );
+    const entityId = (await createdEntity.json()).data.entity.id as string;
+    const scene = await getScene(new Request("http://localhost/api/studio/scenes/scene-01"), sceneParams());
+    const sceneBody = await scene.json();
+    await patchScene(
+      jsonRequest("http://localhost/api/studio/scenes/scene-01", "PATCH", {
+        script: 'Jill: "The lantern is still lit."',
+        characters: [entityId],
+        expectedUpdatedAt: sceneBody.data.scene.updatedAt,
+      }),
+      sceneParams(),
+    );
+    const scenePath = path.join(
+      getWorkspaceRoot(),
+      "harbor-night",
+      "content",
+      "volumes",
+      "volume-01",
+      "chapters",
+      "chapter-01",
+      "scenes",
+      "scene-01.json",
+    );
+    const sceneRecord = JSON.parse(readFileSync(scenePath, "utf8")) as { shots: unknown[]; updatedAt: string };
+    sceneRecord.shots = [
+      {
+        id: "shot-01",
+        scene_id: "scene-01",
+        purpose: "Establish",
+        action: "Jill waits on the pier.",
+        camera: "wide",
+        continuity_from: null,
+        status: "pending",
+        selected_image: null,
+        updatedAt: sceneRecord.updatedAt,
+      },
+    ];
+    writeFileSync(scenePath, `${JSON.stringify(sceneRecord, null, 2)}\n`, "utf8");
+
+    const confirmed = await postSceneDialogueConfirm(
+      jsonRequest("http://localhost/api/studio/scenes/scene-01/dialogue/confirm", "POST", {}),
+      sceneParams(),
+    );
+    const confirmedBody = await confirmed.json();
+    expect(confirmed.status).toBe(200);
+    expect(confirmedBody.data.scene.dialogue.status).toBe("confirmed");
+    expect(confirmedBody.data.scene.dialogue.lines[0]).toMatchObject({
+      speaker: "Jill",
+      speakerId: entityId,
+      text: "The lantern is still lit.",
+      shotId: "shot-01",
+    });
+
+    const projectConfirmed = await postProjectDialogueConfirm(
+      jsonRequest("http://localhost/api/studio/projects/harbor-night/dialogue/confirm", "POST", {}),
+      projectParams(),
+    );
+    expect(projectConfirmed.status).toBe(200);
+    expect((await projectConfirmed.json()).data.scenes).toHaveLength(1);
+
+    const emptyState = await getSceneState(
+      new Request("http://localhost/api/studio/scenes/scene-01/state"),
+      sceneParams(),
+    );
+    const emptyBody = await emptyState.json();
+    expect(emptyState.status).toBe(200);
+    expect(emptyBody.data.state).toEqual({
+      volumeId: "volume-01",
+      chapterId: "chapter-01",
+      sceneId: "scene-01",
+      patches: [],
+    });
+
+    const written = await putSceneState(
+      jsonRequest("http://localhost/api/studio/scenes/scene-01/state", "PUT", {
+        patches: [{ entityId, condition: "injured", truth: "inferred" }],
+      }),
+      sceneParams(),
+    );
+    const writtenBody = await written.json();
+    expect(written.status).toBe(200);
+    expect(writtenBody.data.state.patches).toEqual([
+      { entityId, condition: "injured", truth: "inferred" },
+    ]);
+    expect(
+      existsSync(
+        path.join(
+          getWorkspaceRoot(),
+          "harbor-night",
+          "states",
+          "content-states",
+          "volume-01",
+          "chapter-01",
+          "scene-01.json",
+        ),
+      ),
+    ).toBe(true);
   });
 });
 

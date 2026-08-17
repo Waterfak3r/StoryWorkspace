@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { assembleStoryOutline } from "./assemble-outline";
+import { createEntity, createProject, createScene, getWorkspaceRoot, readScene, updateScene, writeContentState } from "../fs";
 import { ingestFixtureStory } from "../test-support/fixture-stories";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
@@ -125,7 +126,77 @@ describe("assembleStoryOutline", () => {
       });
     }
   });
+
+  it("puts Last Leaf characters and a location on timeline.entities with appearance event ids", async () => {
+    const { project } = await ingestFixtureStory("The Last Leaf", "last-leaf");
+    const outline = assembleStoryOutline(project.id);
+    const sue = outline.timeline.entities.find((entity) => entity.name === "Sue");
+    const johnsy = outline.timeline.entities.find((entity) => entity.name === "Johnsy");
+    expect(sue?.kind).toBe("character");
+    expect(johnsy?.kind).toBe("character");
+    expect(sue?.appearanceEventIds.length).toBeGreaterThanOrEqual(1);
+    expect(johnsy?.appearanceEventIds.length).toBeGreaterThanOrEqual(1);
+    expect(outline.timeline.entities.some((entity) => entity.kind === "location")).toBe(true);
+    expect(listBasenames(path.join(getWorkspaceRoot(), project.id))).not.toContain("outline.json");
+  });
+
+  it("records two appearance event ids when the same character is in two scenes", () => {
+    const project = createProject({ title: "Two Scenes" });
+    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
+    const first = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      title: "Studio morning",
+      characters: [sue.id],
+      expectedUpdatedAt: first.updatedAt,
+    });
+    const second = createScene(project.id, "volume-01", "chapter-01", { title: "Studio night" });
+    updateScene(project.id, "volume-01", "chapter-01", second.id, {
+      characters: [sue.id],
+      expectedUpdatedAt: second.updatedAt,
+    });
+
+    const outline = assembleStoryOutline(project.id);
+    const entity = outline.timeline.entities.find((item) => item.id === sue.id);
+    expect(entity?.appearanceEventIds).toHaveLength(2);
+    expect(new Set(entity?.appearanceEventIds).size).toBe(2);
+    expect(listBasenames(path.join(getWorkspaceRoot(), project.id))).not.toContain("outline.json");
+  });
+
+  it("adds timeline stateChanges when a scene has content-state patches", () => {
+    const project = createProject({ title: "Injured Watch" });
+    const jill = createEntity(project.id, { kind: "character", name: "Jill" });
+    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      title: "Harbor watch",
+      characters: [jill.id],
+      expectedUpdatedAt: scene.updatedAt,
+    });
+    writeContentState(project.id, "volume-01", "chapter-01", "scene-01", {
+      patches: [{ entityId: jill.id, condition: "injured", truth: "inferred" }],
+    });
+
+    const outline = assembleStoryOutline(project.id);
+    expect(outline.timeline.stateChanges).toEqual([
+      expect.objectContaining({
+        entityId: jill.id,
+        eventId: outline.timeline.events[0]?.id,
+        condition: "injured",
+        truth: "inferred",
+      }),
+    ]);
+  });
 });
+
+function listBasenames(directoryPath: string): string[] {
+  const names: string[] = [];
+  for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
+    names.push(entry.name);
+    if (entry.isDirectory()) {
+      names.push(...listBasenames(path.join(directoryPath, entry.name)));
+    }
+  }
+  return names;
+}
 
 function mustEvent(
   events: { id: string; title: string; participantIds: string[] }[],

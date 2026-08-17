@@ -2,12 +2,10 @@ import "server-only";
 
 import {
   pipelineGraphSchema,
-  type StudioEntity,
   type StudioPipelineGraph,
   type StudioPipelineStageId,
 } from "../domain";
-import { extractAttributedDialogue } from "../dialogue";
-import { readEntity, readProject, readScene, readTree } from "../fs";
+import { readProject, readScene, readTree } from "../fs";
 import { listParseRuns } from "../parse";
 
 export const PIPELINE_STAGE_ORDER: readonly { id: StudioPipelineStageId; label: string }[] = [
@@ -57,12 +55,11 @@ export function assemblePipelineGraph(projectId: string): StudioPipelineGraph {
   const parseRuns = listParseRuns(projectId);
 
   let hasStoryText = parseRuns.some((run) => run.sourceText.trim().length > 0);
-  let importConfirmed =
-    parseRuns.some((run) => run.status === "confirmed") ||
-    false;
+  let importConfirmed = parseRuns.some((run) => run.status === "confirmed") || false;
   let hasStoryboard = false;
   let hasComicsPage = false;
-  let hasDialogue = false;
+  let storyboarded = 0;
+  let confirmedDialogue = 0;
 
   for (const volume of tree.volumes) {
     for (const chapter of volume.chapters) {
@@ -76,15 +73,13 @@ export function assemblePipelineGraph(projectId: string): StudioPipelineGraph {
         }
         if (scene.shots.length > 0) {
           hasStoryboard = true;
+          storyboarded += 1;
+          if (scene.dialogue.status === "confirmed") {
+            confirmedDialogue += 1;
+          }
         }
         if (scene.shots.some((shot) => (shot.selected_image ?? "").trim().length > 0)) {
           hasComicsPage = true;
-        }
-        const characters = scene.characters
-          .map((id) => tryReadCharacter(projectId, id))
-          .filter((entity): entity is { id: string; name: string } => entity !== null);
-        if (extractAttributedDialogue(scene.script, characters).length > 0) {
-          hasDialogue = true;
         }
       }
     }
@@ -94,20 +89,7 @@ export function assemblePipelineGraph(projectId: string): StudioPipelineGraph {
     hasStoryText,
     importConfirmed,
     hasStoryboard,
-    hasDialogue,
+    hasDialogue: storyboarded > 0 && confirmedDialogue === storyboarded,
     hasComicsPage,
   });
-}
-
-function tryReadCharacter(projectId: string, entityId: string): { id: string; name: string } | null {
-  let entity: StudioEntity;
-  try {
-    entity = readEntity(projectId, entityId);
-  } catch {
-    return null;
-  }
-  if (entity.kind !== "character") {
-    return null;
-  }
-  return { id: entity.id, name: entity.name };
 }

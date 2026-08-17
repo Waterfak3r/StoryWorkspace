@@ -3,10 +3,13 @@ import "server-only";
 import {
   storyOutlineSchema,
   type StudioEntity,
+  type StudioScene,
   type StudioStoryOutline,
   type StudioStoryOutlineEntityRef,
+  type StudioStoryTimelineEntity,
+  type StudioStoryTimelineStateChange,
 } from "../domain";
-import { listEntities, readEntity, readProject, readScene, readTree } from "../fs";
+import { listEntities, readContentState, readEntity, readProject, readScene, readTree } from "../fs";
 import { buildStoryTimeline, type TimelineEventInput } from "./build-timeline";
 
 export function assembleStoryOutline(projectId: string): StudioStoryOutline {
@@ -17,6 +20,7 @@ export function assembleStoryOutline(projectId: string): StudioStoryOutline {
     name: entity.name,
   }));
   const events: TimelineEventInput[] = [];
+  const scenes: { scene: StudioScene; volumeId: string; chapterId: string }[] = [];
 
   const outline = {
     projectId: project.id,
@@ -30,6 +34,7 @@ export function assembleStoryOutline(projectId: string): StudioStoryOutline {
         scenes: chapter.scenes.map((sceneNode) => {
           const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
           const linked = collectLinkedEntities(projectId, scene);
+          scenes.push({ scene, volumeId: volume.id, chapterId: chapter.id });
           events.push({
             title: scene.title,
             volumeId: volume.id,
@@ -58,7 +63,109 @@ export function assembleStoryOutline(projectId: string): StudioStoryOutline {
     timeline: buildStoryTimeline({ characters, events }),
   };
 
-  return storyOutlineSchema.parse(outline);
+  const timeline = outline.timeline;
+  return storyOutlineSchema.parse({
+    ...outline,
+    timeline: {
+      ...timeline,
+      entities: assembleTimelineEntities(projectId, scenes, timeline.events),
+      stateChanges: assembleStateChanges(projectId, scenes, timeline.events),
+    },
+  });
+}
+
+function assembleTimelineEntities(
+  projectId: string,
+  scenes: readonly { scene: StudioScene; volumeId: string; chapterId: string }[],
+  events: readonly { id: string; volumeId: string; chapterId: string; sceneId: string }[],
+): StudioStoryTimelineEntity[] {
+  const byId = new Map<string, { entity: StudioEntity; appearanceEventIds: string[] }>();
+
+  for (const entity of [...listEntities(projectId, "character"), ...listEntities(projectId, "location")]) {
+    byId.set(entity.id, { entity, appearanceEventIds: [] });
+  }
+
+  for (const item of scenes) {
+    const event = events.find(
+      (candidate) =>
+        candidate.volumeId === item.volumeId &&
+        candidate.chapterId === item.chapterId &&
+        candidate.sceneId === item.scene.id,
+    );
+    for (const entityId of referencedEntityIds(item.scene)) {
+      let entry = byId.get(entityId);
+      if (!entry) {
+        const entity = tryReadEntity(projectId, entityId);
+        if (!entity) {
+          continue;
+        }
+        entry = { entity, appearanceEventIds: [] };
+        byId.set(entityId, entry);
+      }
+      if (event && !entry.appearanceEventIds.includes(event.id)) {
+        entry.appearanceEventIds.push(event.id);
+      }
+    }
+  }
+
+  return [...byId.values()]
+    .map(({ entity, appearanceEventIds }) => ({
+      id: entity.id,
+      kind: entity.kind,
+      name: entity.name,
+      description: entity.description,
+      visualBase: entity.visual.base,
+      appearanceEventIds,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id, "en", { numeric: true }));
+}
+
+function assembleStateChanges(
+  projectId: string,
+  scenes: readonly { scene: StudioScene; volumeId: string; chapterId: string }[],
+  events: readonly { id: string; volumeId: string; chapterId: string; sceneId: string }[],
+): StudioStoryTimelineStateChange[] {
+  const changes: StudioStoryTimelineStateChange[] = [];
+
+  for (const item of scenes) {
+    const state = readContentState(projectId, item.volumeId, item.chapterId, item.scene.id);
+    if (!state || state.patches.length === 0) {
+      continue;
+    }
+    const event = events.find(
+      (candidate) =>
+        candidate.volumeId === item.volumeId &&
+        candidate.chapterId === item.chapterId &&
+        candidate.sceneId === item.scene.id,
+    );
+    if (!event) {
+      continue;
+    }
+    for (const patch of state.patches) {
+      const change: StudioStoryTimelineStateChange = {
+        entityId: patch.entityId,
+        eventId: event.id,
+        truth: patch.truth,
+      };
+      if (patch.condition !== undefined) {
+        change.condition = patch.condition;
+      }
+      if (patch.outfit !== undefined) {
+        change.outfit = patch.outfit;
+      }
+      changes.push(change);
+    }
+  }
+
+  return changes;
+}
+
+function referencedEntityIds(scene: StudioScene): string[] {
+  const ids = [...scene.characters, ...scene.props, ...scene.costumes];
+  if (scene.location) {
+    ids.push(scene.location);
+  }
+  return ids;
 }
 
 function collectLinkedEntities(

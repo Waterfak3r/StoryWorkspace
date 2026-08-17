@@ -57,6 +57,8 @@ export function buildStoryTimeline(input: {
       fromEventId: events[index]!.id,
       toEventId: event.id,
     })),
+    entities: [],
+    stateChanges: [],
   };
 }
 

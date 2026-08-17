@@ -8,10 +8,9 @@ import {
   type StudioAttributedSpeechLine,
   type StudioComicsBook,
   type StudioComicsPage,
-  type StudioEntity,
 } from "../domain";
-import { assignDialogueToShots, compilePageLettering, extractAttributedDialogue } from "../dialogue";
-import { readEntity, readProject, readScene, readTree } from "../fs";
+import { compilePageLettering, confirmedSpeechByShot } from "../dialogue";
+import { readProject, readScene, readTree } from "../fs";
 import { resolveProjectStillFile, writeComicsPageFile } from "../generate/image-output";
 import { composeComicsPagePng } from "./compose-page";
 
@@ -185,12 +184,8 @@ function letterPage(projectId: string, page: StudioComicsPage): StudioComicsPage
     }
     seenScenes.add(key);
     const scene = readScene(projectId, panel.volumeId, panel.chapterId, panel.sceneId);
-    const characters = scene.characters
-      .map((id) => tryReadCharacter(projectId, id))
-      .filter((entity): entity is { id: string; name: string } => entity !== null);
-    const lines = extractAttributedDialogue(scene.script, characters);
-    for (const assignment of assignDialogueToShots(lines, scene.shots)) {
-      speechByShot.set(assignment.shotId, assignment.lines);
+    for (const [shotId, lines] of Object.entries(confirmedSpeechByShot(scene))) {
+      speechByShot.set(shotId, lines);
     }
   }
 
@@ -210,17 +205,4 @@ function letterPage(projectId: string, page: StudioComicsPage): StudioComicsPage
       })),
     ),
   };
-}
-
-function tryReadCharacter(projectId: string, entityId: string): { id: string; name: string } | null {
-  let entity: StudioEntity;
-  try {
-    entity = readEntity(projectId, entityId);
-  } catch {
-    return null;
-  }
-  if (entity.kind !== "character") {
-    return null;
-  }
-  return { id: entity.id, name: entity.name };
 }

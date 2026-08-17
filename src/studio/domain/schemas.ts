@@ -57,6 +57,22 @@ export const shotRecordSchema = z.strictObject({
   updatedAt: studioTimestampSchema,
 });
 
+export const sceneDialogueLineSchema = z.strictObject({
+  id: z.string().min(1),
+  speaker: z.string().min(1),
+  speakerId: studioIdSchema.nullable(),
+  text: z.string().min(1),
+  shotId: studioIdSchema.nullable(),
+});
+
+export const sceneDialogueStatusSchema = z.enum(["unprocessed", "confirmed"]);
+
+export const sceneDialogueSchema = z.strictObject({
+  status: sceneDialogueStatusSchema.default("unprocessed"),
+  lines: z.array(sceneDialogueLineSchema).default([]),
+  confirmedAt: studioTimestampSchema.optional(),
+});
+
 export const sceneRecordSchema = z.strictObject({
   id: studioIdSchema,
   title: z.string(),
@@ -67,6 +83,7 @@ export const sceneRecordSchema = z.strictObject({
   props: z.array(z.string()),
   costumes: z.array(z.string()).default([]),
   shots: z.array(shotRecordSchema).default([]),
+  dialogue: sceneDialogueSchema.default({ status: "unprocessed", lines: [] }),
   updatedAt: studioTimestampSchema,
   provenance: parseProvenanceSchema.optional(),
   canonFields: z.array(z.string()).optional(),
@@ -197,12 +214,31 @@ export const storyTimelineConnectionSchema = z.strictObject({
   toEventId: studioIdSchema,
 });
 
+export const storyTimelineEntitySchema = z.strictObject({
+  id: studioIdSchema,
+  kind: entityKindSchema,
+  name: z.string(),
+  description: z.string(),
+  visualBase: z.string(),
+  appearanceEventIds: z.array(z.string()),
+});
+
+export const storyTimelineStateChangeSchema = z.strictObject({
+  entityId: studioIdSchema,
+  eventId: studioIdSchema,
+  condition: z.string().optional(),
+  outfit: z.string().optional(),
+  truth: z.enum(["canon", "inferred"]),
+});
+
 export const storyTimelineSchema = z.strictObject({
   axis: z.literal("sequence"),
   events: z.array(storyTimelineEventSchema),
   characters: z.array(storyTimelineCharacterSchema),
   intersections: z.array(storyTimelineIntersectionSchema),
   connections: z.array(storyTimelineConnectionSchema),
+  entities: z.array(storyTimelineEntitySchema).default([]),
+  stateChanges: z.array(storyTimelineStateChangeSchema).default([]),
 });
 
 export const storyOutlineSchema = z.strictObject({
@@ -382,9 +418,31 @@ export const updateSceneInputSchema = z.strictObject({
   location: z.string().nullable().optional(),
   props: z.array(z.string()).optional(),
   costumes: z.array(z.string()).optional(),
+  dialogue: sceneDialogueSchema.optional(),
   provenance: parseProvenanceSchema.optional(),
   canonFields: z.array(z.string()).optional(),
   expectedUpdatedAt: studioTimestampSchema,
+});
+
+export const contentStatePatchSchema = z.strictObject({
+  entityId: studioIdSchema,
+  outfit: z.string().optional(),
+  condition: z.string().optional(),
+  note: z.string().optional(),
+  truth: z.enum(["canon", "inferred"]),
+});
+
+export const contentStateSchema = z.strictObject({
+  volumeId: studioIdSchema,
+  chapterId: studioIdSchema,
+  sceneId: studioIdSchema,
+  patches: z.array(contentStatePatchSchema),
+  updatedAt: studioTimestampSchema,
+});
+
+export const updateContentStateInputSchema = z.strictObject({
+  patches: z.array(contentStatePatchSchema),
+  expectedUpdatedAt: studioTimestampSchema.optional(),
 });
 
 export const updateShotInputSchema = z.strictObject({
@@ -436,6 +494,16 @@ export const contextSnapshotSchema = z.strictObject({
       })
       .nullable(),
   }),
+  storyPosition: z
+    .strictObject({
+      events: z.array(
+        z.strictObject({
+          title: z.string(),
+          summary: z.string(),
+        }),
+      ),
+    })
+    .default({ events: [] }),
 });
 
 export const workflowStatusLabelSchema = z.enum(["待跑", "成功", "失败", "锁定"]);
@@ -506,6 +574,8 @@ export type StudioVolume = z.infer<typeof volumeRecordSchema>;
 export type StudioChapter = z.infer<typeof chapterRecordSchema>;
 export type StudioShotStatus = z.infer<typeof shotStatusSchema>;
 export type StudioShot = z.infer<typeof shotRecordSchema>;
+export type StudioSceneDialogueLine = z.infer<typeof sceneDialogueLineSchema>;
+export type StudioSceneDialogue = z.infer<typeof sceneDialogueSchema>;
 export type StudioScene = z.infer<typeof sceneRecordSchema>;
 export type StudioEntity = z.infer<typeof entityRecordSchema>;
 export type StudioEntityKind = z.infer<typeof entityKindSchema>;
@@ -523,6 +593,8 @@ export type StudioStoryTimeline = z.infer<typeof storyTimelineSchema>;
 export type StudioStoryTimelineCharacter = z.infer<typeof storyTimelineCharacterSchema>;
 export type StudioStoryTimelineEvent = z.infer<typeof storyTimelineEventSchema>;
 export type StudioStoryTimelineIntersection = z.infer<typeof storyTimelineIntersectionSchema>;
+export type StudioStoryTimelineEntity = z.infer<typeof storyTimelineEntitySchema>;
+export type StudioStoryTimelineStateChange = z.infer<typeof storyTimelineStateChangeSchema>;
 export type StudioAttributedSpeechLine = z.infer<typeof attributedSpeechLineSchema>;
 export type StudioLetteringBalloon = z.infer<typeof letteringBalloonSchema>;
 export type StudioProjectDialogue = z.infer<typeof projectDialogueSchema>;
@@ -537,6 +609,9 @@ export type StudioComicsPanel = z.infer<typeof comicsPanelSchema>;
 export type StudioComicsPage = z.infer<typeof comicsPageSchema>;
 export type StudioComicsBook = z.infer<typeof comicsBookSchema>;
 export type StudioContextSnapshot = z.infer<typeof contextSnapshotSchema>;
+export type StudioContentStatePatch = z.infer<typeof contentStatePatchSchema>;
+export type StudioContentState = z.infer<typeof contentStateSchema>;
+export type UpdateContentStateInput = z.input<typeof updateContentStateInputSchema>;
 export type StudioWorkflowStatusLabel = z.infer<typeof workflowStatusLabelSchema>;
 export type StudioWorkflowNode = z.infer<typeof workflowNodeSchema>;
 export type StudioWorkflowRun = z.infer<typeof workflowRunSchema>;

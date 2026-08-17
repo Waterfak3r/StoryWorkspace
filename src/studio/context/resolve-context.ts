@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   contextSnapshotSchema,
+  type StudioContentStatePatch,
   type StudioContextSnapshot,
   type StudioEntity,
   type StudioScene,
@@ -9,7 +10,10 @@ import {
   type StudioStyle,
 } from "../domain";
 import { StudioNotFoundError } from "../errors";
-import { readEntity, readScene, readStyle } from "../fs";
+import { readContentState, readEntity, readScene, readStyle, readTree } from "../fs";
+
+const STORY_POSITION_LIMIT = 8;
+const STORY_POSITION_SUMMARY_MAX = 240;
 
 export function resolveContext(input: {
   projectId: string;
@@ -21,7 +25,23 @@ export function resolveContext(input: {
   const scene = readScene(input.projectId, input.volumeId, input.chapterId, input.sceneId);
   const style = readStyle(input.projectId);
   const entities = loadReferencedEntities(input.projectId, scene);
-  return buildContextSnapshot({ scene, style, entities, shotId: input.shotId });
+  const prior = priorStoryScenes(input.projectId, input.volumeId, input.chapterId, input.sceneId);
+  const priorPatches = prior.flatMap(
+    (item) => readContentState(input.projectId, item.volumeId, item.chapterId, item.sceneId)?.patches ?? [],
+  );
+  return buildContextSnapshot({
+    scene,
+    style,
+    entities,
+    shotId: input.shotId,
+    storyPosition: {
+      events: prior.slice(-STORY_POSITION_LIMIT).map((item) => ({
+        title: item.title,
+        summary: truncateSummary(item.summary),
+      })),
+    },
+    priorPatches,
+  });
 }
 
 export function buildContextSnapshot(input: {
@@ -29,6 +49,8 @@ export function buildContextSnapshot(input: {
   style: StudioStyle;
   entities: readonly StudioEntity[];
   shotId: string;
+  storyPosition?: { events: { title: string; summary: string }[] };
+  priorPatches?: readonly StudioContentStatePatch[];
 }): StudioContextSnapshot {
   const index = input.scene.shots.findIndex((shot) => shot.id === input.shotId);
   const shot = input.scene.shots[index];
@@ -49,7 +71,7 @@ export function buildContextSnapshot(input: {
       name: entity.name,
       description: entity.description,
       visual: { base: entity.visual.base, references: [...entity.visual.references] },
-      state: { outfit: entity.states.default.outfit, condition: entity.states.default.condition },
+      state: stackedEntityState(entity, input.priorPatches ?? []),
     })),
     style: {
       id: input.style.id,
@@ -64,7 +86,69 @@ export function buildContextSnapshot(input: {
       camera: shot.camera,
     },
     continuity: continuityFor(input.scene.shots, shot, index),
+    storyPosition: input.storyPosition ?? { events: [] },
   });
+}
+
+function stackedEntityState(
+  entity: StudioEntity,
+  patches: readonly StudioContentStatePatch[],
+): { outfit: string; condition: string } {
+  let outfit = entity.states.default.outfit;
+  let condition = entity.states.default.condition;
+  for (const patch of patches) {
+    if (patch.entityId !== entity.id) {
+      continue;
+    }
+    if (patch.outfit !== undefined) {
+      outfit = patch.outfit;
+    }
+    if (patch.condition !== undefined) {
+      condition = patch.condition;
+    }
+  }
+  return { outfit, condition };
+}
+
+function priorStoryScenes(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+): { volumeId: string; chapterId: string; sceneId: string; title: string; summary: string }[] {
+  const tree = readTree(projectId);
+  const ordered: { volumeId: string; chapterId: string; sceneId: string; title: string; summary: string }[] = [];
+
+  for (const volume of tree.volumes) {
+    for (const chapter of volume.chapters) {
+      for (const sceneNode of chapter.scenes) {
+        const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
+        ordered.push({
+          volumeId: volume.id,
+          chapterId: chapter.id,
+          sceneId: scene.id,
+          title: scene.title,
+          summary: scene.intent.trim() || scene.script.trim(),
+        });
+      }
+    }
+  }
+
+  const currentIndex = ordered.findIndex(
+    (item) => item.volumeId === volumeId && item.chapterId === chapterId && item.sceneId === sceneId,
+  );
+  if (currentIndex <= 0) {
+    return [];
+  }
+  return ordered.slice(0, currentIndex);
+}
+
+function truncateSummary(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= STORY_POSITION_SUMMARY_MAX) {
+    return normalized;
+  }
+  return `${normalized.slice(0, STORY_POSITION_SUMMARY_MAX - 1).trimEnd()}…`;
 }
 
 function continuityFor(shots: readonly StudioShot[], shot: StudioShot, index: number) {

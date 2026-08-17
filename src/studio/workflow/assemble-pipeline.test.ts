@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { assemblePipelineGraph } from "./assemble-pipeline";
 import type { StudioShot } from "../domain";
+import { confirmSceneDialogue } from "../dialogue";
 import { createProject, readScene, readTree, replaceSceneShots, updateScene } from "../fs";
 import { ingestFixtureStory } from "../test-support/fixture-stories";
 
@@ -88,8 +89,12 @@ describe("assemblePipelineGraph", () => {
       script: 'Sue: "The last leaf is still there."\nJohnsy: "I thought it would fall."',
       expectedUpdatedAt: readScene(project.id, pathIds.volumeId, pathIds.chapterId, scene.id).updatedAt,
     });
-    const withDialogue = assemblePipelineGraph(project.id);
-    expect(stage(withDialogue, "dialogue").status).toBe("success");
+    const withScriptOnly = assemblePipelineGraph(project.id);
+    expect(stage(withScriptOnly, "dialogue").status).toBe("pending");
+
+    confirmSceneDialogue(project.id, pathIds.volumeId, pathIds.chapterId, scene.id);
+    const confirmed = assemblePipelineGraph(project.id);
+    expect(stage(confirmed, "dialogue").status).toBe("success");
   });
 });
 
