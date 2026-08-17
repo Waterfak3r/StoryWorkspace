@@ -578,6 +578,17 @@ export async function rejectStudioParseRun(projectId: string, runId: string) {
   return data.run;
 }
 
+export function findScenePathInTree(tree: StudioStoryTree, sceneId: string): ScenePath | null {
+  for (const volume of tree.volumes) {
+    for (const chapter of volume.chapters) {
+      if (chapter.scenes.some((scene) => scene.id === sceneId)) {
+        return { volumeId: volume.id, chapterId: chapter.id, sceneId };
+      }
+    }
+  }
+  return null;
+}
+
 export function firstScenePath(tree: StudioStoryTree): ScenePath | null {
   for (const volume of tree.volumes) {
     for (const chapter of volume.chapters) {

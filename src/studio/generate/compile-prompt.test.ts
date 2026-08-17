@@ -182,7 +182,7 @@ describe("compileImagePrompt", () => {
       script: "Johnsy wants to live. Sue hugged her. The painted leaf stays.",
       intent: "Hope returns.",
     };
-    const style = { id: "default", label: "Default", visual: "Sequential comic stills." };
+    const style = { id: "default" as const, label: "Default", visual: "Sequential comic stills." };
     const compiled = compileComicsPagePrompt([
       {
         scene,

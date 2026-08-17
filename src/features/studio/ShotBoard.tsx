@@ -5,10 +5,14 @@ import type { StudioContextSnapshot, StudioScene, StudioShot, StudioShotStatus }
 import { useI18n } from "@/features/i18n/LocaleProvider";
 import {
   directStudioScene,
+  generateStudioShot,
   getStudioContextSnapshot,
+  listStudioShots,
+  lockStudioShot,
   shotDraftFrom,
   shotDraftsEqual,
   StudioRequestError,
+  studioImageUrl,
   updateStudioShot,
   type ScenePath,
   type ShotDraft,
@@ -47,6 +51,8 @@ export function ShotBoard({
   const [drafts, setDrafts] = useState<Record<string, ShotDraft>>(() => draftsFrom(shots));
   const [committed, setCommitted] = useState<Record<string, ShotDraft>>(() => draftsFrom(shots));
   const [directing, setDirecting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [locking, setLocking] = useState(false);
   const [inspectingId, setInspectingId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<StudioContextSnapshot | null>(null);
   const [inspecting, setInspecting] = useState(false);
@@ -181,6 +187,63 @@ export function ShotBoard({
     }
   }
 
+  function replaceRecords(next: StudioShot[]) {
+    recordsRef.current = next;
+    setRecords(next);
+    for (const shot of next) {
+      onShotSavedRef.current(shot);
+    }
+  }
+
+  async function generatePage() {
+    const pageShot = recordsRef.current[0];
+    if (!pageShot || generating || locking) {
+      return;
+    }
+    const ok = await flush();
+    if (!ok) {
+      return;
+    }
+    setGenerating(true);
+    try {
+      const { shot } = await generateStudioShot(projectId, path, pageShot.id);
+      let next: StudioShot[];
+      try {
+        next = await listStudioShots(projectId, path);
+      } catch {
+        next = applyGeneratedPage(recordsRef.current, shot);
+      }
+      replaceRecords(next);
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("The request could not be completed."));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function togglePageLock() {
+    const pageShot = recordsRef.current[0];
+    if (!pageShot || generating || locking) {
+      return;
+    }
+    const ok = await flush();
+    if (!ok) {
+      return;
+    }
+    const nextLocked = pageShot.status !== "locked";
+    setLocking(true);
+    try {
+      const { shot } = await lockStudioShot(projectId, path, pageShot.id, nextLocked);
+      replaceRecords(applyLockedShot(recordsRef.current, shot));
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("The request could not be completed."));
+    } finally {
+      setLocking(false);
+    }
+  }
+
   async function inspect(shotId: string) {
     if (inspectingId === shotId && snapshot) {
       setInspectingId(null);
@@ -204,6 +267,12 @@ export function ShotBoard({
     }
   }
 
+  const pageShot = records[0];
+  const pageImage = pageSelectedImage(records);
+  const pageImageUrl = pageImage ? studioImageUrl(projectId, pageImage) : "";
+  const pageLocked = pageShot?.status === "locked";
+  const pageBusy = generating || locking;
+
   return (
     <section className="space-y-4 border-t border-line pt-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -217,13 +286,41 @@ export function ShotBoard({
           >
             {directing ? t("Directing") : t("Run director")}
           </button>
-        ) : null}
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void generatePage()}
+              disabled={pageBusy || pageLocked}
+              className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {generating ? t("Generating comic page") : t("Generate comic page")}
+            </button>
+            {pageImage || pageLocked ? (
+              <button
+                type="button"
+                onClick={() => void togglePageLock()}
+                disabled={pageBusy}
+                className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {locking
+                  ? pageLocked
+                    ? t("Unlocking")
+                    : t("Locking")
+                  : pageLocked
+                    ? t("Unlock")
+                    : t("Lock")}
+              </button>
+            ) : null}
+          </div>
+        )}
       </div>
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
       {records.length === 0 ? (
         <p className="text-xs text-ink-faint">{t("No shots yet. Run the director to split this scene.")}</p>
       ) : (
-        <ol className="space-y-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <ol className="min-w-0 flex-1 space-y-4">
           {records.map((shot) => {
             const draft = drafts[shot.id] ?? shotDraftFrom(shot);
             const saved = committed[shot.id] ?? shotDraftFrom(shot);
@@ -295,10 +392,49 @@ export function ShotBoard({
               </li>
             );
           })}
-        </ol>
+          </ol>
+          {pageImageUrl ? (
+            <figure className="w-full shrink-0 lg:max-w-sm lg:w-[42%]">
+              <img
+                src={pageImageUrl}
+                alt={t("Generated comic page")}
+                className="w-full rounded-lg border border-line bg-surface-muted object-contain"
+              />
+            </figure>
+          ) : null}
+        </div>
       )}
     </section>
   );
+}
+
+export function pageSelectedImage(shots: readonly StudioShot[]): string | null {
+  for (const shot of shots) {
+    if (shot.selected_image) {
+      return shot.selected_image;
+    }
+  }
+  return null;
+}
+
+export function applyGeneratedPage(records: StudioShot[], shot: StudioShot): StudioShot[] {
+  return records.map((item) => {
+    if (item.id === shot.id) {
+      return shot;
+    }
+    if (shot.selected_image && item.selected_image === shot.selected_image) {
+      return {
+        ...item,
+        selected_image: shot.selected_image,
+        status: item.status === "locked" ? "locked" : shot.status,
+      };
+    }
+    return item;
+  });
+}
+
+export function applyLockedShot(records: StudioShot[], shot: StudioShot): StudioShot[] {
+  return records.map((item) => (item.id === shot.id ? shot : item));
 }
 
 function draftsFrom(shots: StudioShot[]): Record<string, ShotDraft> {

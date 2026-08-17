@@ -3,13 +3,21 @@
 import { useCallback, useEffect, useState } from "react";
 import type { StudioWorkflowNode } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
-import { getStudioWorkflow, rerunStudioWorkflowNode, studioImageUrl } from "./api";
+import {
+  findScenePathInTree,
+  getStudioTree,
+  getStudioWorkflow,
+  lockStudioShot,
+  rerunStudioWorkflowNode,
+  studioImageUrl,
+} from "./api";
 
 export function WorkflowPanel({ projectId }: { projectId: string }) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<StudioWorkflowNode[] | null>(null);
   const [error, setError] = useState("");
   const [runningImageId, setRunningImageId] = useState<string | null>(null);
+  const [lockingId, setLockingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const next = await getStudioWorkflow(projectId);
@@ -32,6 +40,23 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
       window.clearTimeout(requestId);
     };
   }, [refresh, t]);
+
+  async function toggleLock(node: StudioWorkflowNode) {
+    setLockingId(node.shotId);
+    try {
+      const tree = await getStudioTree(projectId);
+      const path = findScenePathInTree(tree, node.sceneId);
+      if (!path) {
+        throw new Error(t("The request could not be completed."));
+      }
+      await lockStudioShot(projectId, path, node.shotId, !node.locked);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+    } finally {
+      setLockingId(null);
+    }
+  }
 
   async function rerunImage(node: StudioWorkflowNode) {
     if (node.locked) {
@@ -72,6 +97,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
         <ol className="mt-8 space-y-3">
           {nodes.map((node) => {
             const imageBusy = runningImageId === node.shotId;
+            const lockBusy = lockingId === node.shotId;
             return (
               <li key={`${node.sceneId}-${node.shotId}`} className="rounded-xl border border-line bg-surface-raised px-4 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -102,10 +128,25 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
                   <button
                     type="button"
                     onClick={() => void rerunImage(node)}
-                    disabled={node.locked || imageBusy}
+                    disabled={node.locked || imageBusy || lockBusy}
                     className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {imageBusy ? t("Rerunning") : t("Re-run")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void toggleLock(node)}
+                    disabled={imageBusy || lockBusy}
+                    aria-pressed={node.locked}
+                    className="inline-flex min-h-10 items-center rounded-lg border border-line px-3 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {lockBusy
+                      ? node.locked
+                        ? t("Unlocking")
+                        : t("Locking")
+                      : node.locked
+                        ? t("Unlock")
+                        : t("Lock")}
                   </button>
                 </div>
               </li>

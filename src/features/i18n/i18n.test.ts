@@ -43,5 +43,12 @@ describe("i18n translations", () => {
     expect(zhTranslations["Comics pages"]).toBe("漫画页");
     expect(zhTranslations["Reference images"]).toBe("参考图");
     expect(zhTranslations["Save API settings"]).toBe("保存 API 设置");
+    expect(zhTranslations["Generate comic page"]).toBe("生成漫画页");
+    expect(zhTranslations["Generating comic page"]).toBe("正在生成漫画页");
+    expect(zhTranslations["Generated comic page"]).toBe("已生成的漫画页");
+    expect(zhTranslations["Lock"]).toBe("锁定");
+    expect(zhTranslations["Unlock"]).toBe("解锁");
+    expect(zhTranslations["Locking"]).toBe("正在锁定");
+    expect(zhTranslations["Unlocking"]).toBe("正在解锁");
   });
 });
