@@ -45,6 +45,9 @@ describe("Story and Workflow generate/lock wiring", () => {
     expect(workflowSource).toContain('t("Unlock")');
     expect(workflowSource).toContain("disabled={node.locked || imageBusy || lockBusy}");
     expect(workflowSource).toContain("!node.locked");
+    expect(workflowSource).toContain("generateStudioShot");
+    expect(workflowSource).toContain("directStudioScene");
+    expect(workflowSource).toContain('data-workflow-action="comics"');
   });
 
   it("binds the page preview to studioImageUrl(selected_image)", () => {

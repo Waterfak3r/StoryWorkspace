@@ -72,3 +72,85 @@ test("story outline is a linked timeline and workflow is a connected stage graph
 
   expect(pageErrors).toEqual([]);
 });
+
+test("Workflow clicks run director, confirm dialogue, and generate a page", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => {
+    pageErrors.push(error.message);
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await createOpenProject(page, "Workflow Click Harbor");
+  await expect(page).toHaveURL(/\/projects\/workflow-click-harbor(?:\?|$)/);
+
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story", exact: true }).click();
+  await expect(page.getByLabel("Script")).toBeVisible();
+  const save = page.waitForResponse((response) => {
+    return (
+      response.request().method() === "PATCH"
+      && /\/api\/studio\/projects\/[^/]+\/volumes\/[^/]+\/chapters\/[^/]+\/scenes\/[^/]+$/.test(
+        new URL(response.url()).pathname,
+      )
+      && response.ok()
+    );
+  }, { timeout: 15_000 });
+  await page.getByLabel("Script").fill('Sue: "The last leaf is still there."\nJohnsy: "I thought it would fall."');
+  await save;
+
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Workflow", exact: true }).click();
+  await expect(page.locator("[data-workflow-pipeline]")).toBeVisible();
+  await expect(page.locator("[data-pipeline-stage=storyboard]")).toHaveAttribute("data-pipeline-status", "pending");
+  await expect(page.locator("[data-pipeline-stage=dialogue]")).toHaveAttribute("data-pipeline-status", "pending");
+  await expect(page.locator("[data-pipeline-stage=comics]")).toHaveAttribute("data-pipeline-status", "pending");
+
+  await page.locator("[data-pipeline-stage=storyboard]").click();
+  const directed = page.waitForResponse((response) => {
+    return (
+      response.request().method() === "POST"
+      && /\/director$/.test(new URL(response.url()).pathname)
+      && response.ok()
+    );
+  }, { timeout: 30_000 });
+  await page.locator("[data-workflow-action=storyboard]").click();
+  await directed;
+  await expect(page.locator("[data-pipeline-stage=storyboard]")).toHaveAttribute("data-pipeline-status", "success");
+  await expect(page.locator("[data-pipeline-stage=dialogue]")).toHaveAttribute("data-pipeline-status", "pending");
+
+  await page.locator("[data-pipeline-stage=dialogue]").click();
+  const confirmed = page.waitForResponse((response) => {
+    return (
+      response.request().method() === "POST"
+      && /\/dialogue\/confirm$/.test(new URL(response.url()).pathname)
+      && response.ok()
+    );
+  }, { timeout: 15_000 });
+  await page.locator("[data-workflow-action=dialogue]").click();
+  await confirmed;
+  await expect(page.locator("[data-pipeline-stage=dialogue]")).toHaveAttribute("data-pipeline-status", "success");
+
+  await page.locator("[data-pipeline-stage=comics]").click();
+  const generated = page.waitForResponse((response) => {
+    return (
+      response.request().method() === "POST"
+      && /\/shots\/[^/]+\/generate$/.test(new URL(response.url()).pathname)
+      && response.ok()
+    );
+  }, { timeout: 30_000 });
+  await page.locator("[data-workflow-action=comics]").click();
+  await generated;
+  await expect(page.locator("[data-pipeline-stage=comics]")).toHaveAttribute("data-pipeline-status", "success");
+
+  const pageImage = page.getByRole("img", { name: "Generated comic page" }).first();
+  await expect(pageImage).toBeVisible();
+  await expect.poll(async () => pageImage.evaluate((element) => {
+    const image = element as HTMLImageElement;
+    return image.naturalWidth;
+  })).toBeGreaterThan(0);
+
+  const evidence = process.env.GOAL_SCRATCH;
+  if (evidence) {
+    await page.screenshot({ path: `${evidence}/workflow-click-generate.png`, fullPage: true });
+  }
+
+  expect(pageErrors).toEqual([]);
+});

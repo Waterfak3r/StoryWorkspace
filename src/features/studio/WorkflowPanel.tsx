@@ -15,12 +15,21 @@ import type {
   StudioWorkflowNode,
 } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
+import type { StudioParseRun } from "@/studio/parse/schemas";
+import type { ScenePath } from "./api";
 import {
+  confirmStudioParseRun,
   confirmStudioProjectDialogue,
+  directStudioScene,
   findScenePathInTree,
+  generateStudioShot,
+  getStudioScene,
   getStudioTree,
   getStudioWorkflow,
+  listScenePaths,
+  listStudioParseRuns,
   lockStudioShot,
+  parseStudioText,
   rerunStudioWorkflowNode,
   studioImageUrl,
 } from "./api";
@@ -50,13 +59,18 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   const [selectedStage, setSelectedStage] = useState<StudioPipelineStage["id"]>("dialogue");
   const [runningImageId, setRunningImageId] = useState<string | null>(null);
   const [lockingId, setLockingId] = useState<string | null>(null);
-  const [confirmingDialogue, setConfirmingDialogue] = useState(false);
+  const [busyAction, setBusyAction] = useState<"import-parse" | "import" | "storyboard" | "dialogue" | "comics" | null>(
+    null,
+  );
+  const [importText, setImportText] = useState("");
+  const [parseRuns, setParseRuns] = useState<StudioParseRun[]>([]);
 
   const refresh = useCallback(async () => {
-    const next = await getStudioWorkflow(projectId);
+    const [next, runs] = await Promise.all([getStudioWorkflow(projectId), listStudioParseRuns(projectId)]);
     setPipeline(next.pipeline);
     setNodes(next.nodes);
     setDialogue(next.dialogue);
+    setParseRuns(runs);
     setError("");
   }, [projectId]);
 
@@ -93,15 +107,102 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
     }
   }
 
+  async function loadScenePaths(): Promise<ScenePath[]> {
+    const tree = await getStudioTree(projectId);
+    return listScenePaths(tree);
+  }
+
+  async function parseImport() {
+    const source = importText.trim();
+    if (!source || busyAction) {
+      return;
+    }
+    setBusyAction("import-parse");
+    try {
+      await parseStudioText(projectId, source);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function confirmImport() {
+    const pending = parseRuns.find((run) => run.status === "pending");
+    if (!pending || busyAction) {
+      if (!pending) {
+        setError(t("No pending import to confirm. Parse pasted text first."));
+      }
+      return;
+    }
+    setBusyAction("import");
+    try {
+      await confirmStudioParseRun(projectId, pending.id);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function runDirector() {
+    if (busyAction) {
+      return;
+    }
+    setBusyAction("storyboard");
+    try {
+      const paths = await loadScenePaths();
+      for (const path of paths) {
+        const scene = await getStudioScene(projectId, path);
+        if (scene.shots.length === 0) {
+          await directStudioScene(projectId, path);
+        }
+      }
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function confirmDialogue() {
-    setConfirmingDialogue(true);
+    if (busyAction) {
+      return;
+    }
+    setBusyAction("dialogue");
     try {
       await confirmStudioProjectDialogue(projectId);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
     } finally {
-      setConfirmingDialogue(false);
+      setBusyAction(null);
+    }
+  }
+
+  async function generateComics() {
+    if (busyAction) {
+      return;
+    }
+    setBusyAction("comics");
+    try {
+      const paths = await loadScenePaths();
+      for (const path of paths) {
+        const scene = await getStudioScene(projectId, path);
+        const needsPage = scene.shots.length > 0 && scene.shots.every((shot) => !(shot.selected_image ?? "").trim());
+        const first = scene.shots[0];
+        if (needsPage && first) {
+          await generateStudioShot(projectId, path, first.id);
+        }
+      }
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -187,15 +288,84 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
           <p className="mt-3 text-sm leading-relaxed text-ink-muted">
             {t(STAGE_DESCRIPTIONS[selected.id]) || selected.statusLabel}
           </p>
-          {selected.id === "dialogue" ? (
+          {selected.id === "import" ? (
+            <div className="mt-4 space-y-3">
+              <label className="block text-xs font-semibold text-ink-muted" htmlFor="workflow-import-text">
+                {t("Paste story text to import")}
+              </label>
+              <textarea
+                id="workflow-import-text"
+                data-workflow-import-text="true"
+                value={importText}
+                onChange={(event) => setImportText(event.target.value)}
+                rows={5}
+                className="w-full rounded-lg border border-line bg-surface px-3.5 py-2 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-ink-faint focus:border-accent focus:ring-4 focus:ring-accent/15"
+              />
+              <div className="flex flex-wrap gap-2.5">
+                <button
+                  type="button"
+                  data-workflow-action="import-parse"
+                  onClick={() => void parseImport()}
+                  disabled={busyAction !== null || importText.trim().length === 0}
+                  className={stageActionClass}
+                >
+                  {busyAction === "import-parse" ? t("Parsing story text") : t("Parse story text")}
+                </button>
+                <button
+                  type="button"
+                  data-workflow-action="import"
+                  onClick={() => void confirmImport()}
+                  disabled={busyAction !== null || !parseRuns.some((run) => run.status === "pending")}
+                  className={stageActionClass}
+                >
+                  {busyAction === "import" ? t("Confirming import") : t("Confirm import")}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {selected.id === "storyboard" ? (
             <div className="mt-4">
+              <p className="mb-3 text-xs text-ink-faint">{t("Run director on scenes that do not have shots yet.")}</p>
               <button
                 type="button"
-                onClick={() => void confirmDialogue()}
-                disabled={confirmingDialogue}
-                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3.5 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                data-workflow-action="storyboard"
+                onClick={() => void runDirector()}
+                disabled={busyAction !== null}
+                className={stageActionClass}
               >
-                {confirmingDialogue ? t("Confirming dialogue") : t("Confirm dialogue")}
+                {busyAction === "storyboard" ? t("Directing") : t("Run director")}
+              </button>
+            </div>
+          ) : null}
+          {selected.id === "dialogue" ? (
+            <div className="mt-4">
+              <p className="mb-3 text-xs text-ink-faint">
+                {t("Confirm extracted dialogue for every storyboarded scene.")}
+              </p>
+              <button
+                type="button"
+                data-workflow-action="dialogue"
+                onClick={() => void confirmDialogue()}
+                disabled={busyAction !== null}
+                className={stageActionClass}
+              >
+                {busyAction === "dialogue" ? t("Confirming dialogue") : t("Confirm dialogue")}
+              </button>
+            </div>
+          ) : null}
+          {selected.id === "comics" ? (
+            <div className="mt-4">
+              <p className="mb-3 text-xs text-ink-faint">
+                {t("Generate the first unfinished comics page from existing shots.")}
+              </p>
+              <button
+                type="button"
+                data-workflow-action="comics"
+                onClick={() => void generateComics()}
+                disabled={busyAction !== null}
+                className={stageActionClass}
+              >
+                {busyAction === "comics" ? t("Generating comic page") : t("Generate comic page")}
               </button>
             </div>
           ) : null}
@@ -253,7 +423,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
                     <div className="mt-4 overflow-hidden rounded-xl border border-line bg-surface-muted">
                       <img
                         src={studioImageUrl(projectId, node.selectedImage)}
-                        alt={`${node.shotId} still`}
+                        alt={t("Generated comic page")}
                         className="max-h-96 w-full object-contain"
                       />
                     </div>
@@ -426,6 +596,9 @@ function DialogueStageList({ dialogue }: { dialogue: StudioProjectDialogue | nul
     </div>
   );
 }
+
+const stageActionClass =
+  "inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-3.5 text-xs font-semibold text-ink transition-colors hover:bg-surface-muted active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60";
 
 function stageDotClass(status: StudioPipelineStage["status"]): string {
   if (status === "success") {
