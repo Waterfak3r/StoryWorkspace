@@ -6,7 +6,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1 --port 5173",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

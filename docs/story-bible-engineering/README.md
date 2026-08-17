@@ -1,7 +1,7 @@
 # AI-native 剧本编辑器与 Story Bible 工程设计规范
 
 > 文档状态：Draft v0.1  
-> 目标读者：Codex、产品工程师、后端工程师、AI/生成管线工程师  
+> 目标读者：实现代理、产品工程师、后端工程师、AI/生成管线工程师  
 > 默认技术假设：TypeScript 单体仓库、PostgreSQL、对象存储、异步任务队列；具体框架可替换  
 > 规范关键词：**MUST** 表示必须满足，**SHOULD** 表示无充分理由不得偏离，**MAY** 表示可选实现
 
@@ -19,7 +19,7 @@
 4. [写作与视频化工作流](./04-authoring-and-generation-workflows.md)：增量分析、审核体验、Storyboard、Shot 与生成阻断条件。
 5. [Context、Provider 与 RAG 边界](./05-context-providers-and-rag.md)：确定性上下文、能力感知编译、适配器和受控检索。
 6. [API、模块边界与持久化](./06-api-and-persistence.md)：模块/API、领域事件、表结构、SQL 示例与数据不变量。
-7. [分阶段交付、实现约束与验收](./07-delivery-and-acceptance.md)：Phase 0–7、Codex 约束、测试、验收场景、首个闭环与待决策项。
+7. [分阶段交付、实现约束与验收](./07-delivery-and-acceptance.md)：Phase 0–7、实现约束、测试、验收场景、首个闭环与待决策项。
 
 ## 在当前仓库中的采用方式
 
