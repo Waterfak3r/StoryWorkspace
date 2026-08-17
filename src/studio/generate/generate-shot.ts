@@ -35,6 +35,12 @@ import {
 
 export type GenerateShotOptions = {
   mode?: StudioGenerateMode;
+  pageSize?: number;
+  image?: {
+    model?: string;
+    size?: string;
+    quality?: string;
+  };
 };
 
 export type GenerateShotResult = {
@@ -68,7 +74,8 @@ export async function generateShot(
   }
 
   const shotIndex = scene.shots.findIndex((shot) => shot.id === current.id);
-  const pageShots = comicsPageGroup(scene.shots, shotIndex);
+  const pageSize = options.pageSize && options.pageSize > 0 ? options.pageSize : undefined;
+  const pageShots = comicsPageGroup(scene.shots, shotIndex, pageSize);
   if (pageShots.some((shot) => shot.status === "locked")) {
     throw new StudioConflictError("This comics page has a locked shot and cannot be regenerated.");
   }
@@ -87,10 +94,19 @@ export async function generateShot(
     mode === "regenerate" ? continuityConstraints : "",
     identityReferencePromptLines(referenceImages),
   );
+  if (options.image?.model) {
+    compiled.provider.model = options.image.model;
+  }
+  if (options.image?.size) {
+    compiled.provider.size = options.image.size;
+  }
+  if (options.image?.quality) {
+    compiled.provider.quality = options.image.quality;
+  }
   const storedConstraints = mode === "regenerate" ? continuityConstraints : "";
   const runId = allocateRunId(projectId);
   const previousNode = tryReadWorkflowNode(projectId, current.id);
-  const pageId = comicsPageId(sceneId, shotIndex);
+  const pageId = comicsPageId(sceneId, shotIndex, pageSize);
 
   let relativePath = "";
   try {

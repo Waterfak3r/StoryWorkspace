@@ -172,6 +172,48 @@ describe("generate, lock, and workflow", () => {
     expect(result.compiled.prompt).toContain("Match identity from the attached reference images");
   });
 
+  it("forwards an image provider override to the adapter", async () => {
+    const fixture = seedDirectedScene();
+    const seen: ImageAdapterInput[] = [];
+    await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate", image: { model: "gpt-image-2", size: "1024x1024", quality: "low" } },
+      async (input) => {
+        seen.push(input);
+        return fakeImageAdapter(input);
+      },
+    );
+    expect(seen[0]?.provider).toMatchObject({
+      model: "gpt-image-2",
+      size: "1024x1024",
+      quality: "low",
+    });
+  });
+
+  it("can compile a two-panel page when pageSize is 2", async () => {
+    const fixture = seedDirectedScene();
+    const seen: ImageAdapterInput[] = [];
+    await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate", pageSize: 2 },
+      async (input) => {
+        seen.push(input);
+        return fakeImageAdapter(input);
+      },
+    );
+    expect(seen[0]?.prompt).toContain("Panel 1");
+    expect(seen[0]?.prompt).toContain("two stacked panels");
+    expect(seen[0]?.prompt).not.toContain("Panel 3");
+  });
+
   it("includes a non-empty continuityConstraints string on regenerate payload, node, and snapshot", async () => {
     const fixture = seedDirectedScene();
 

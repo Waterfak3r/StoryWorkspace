@@ -4,6 +4,7 @@ import { parseStudioBody, runStudioRoute, studioDataResponse } from "@/studio/ht
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type ShotGenerateRouteContext = {
   params: Promise<{

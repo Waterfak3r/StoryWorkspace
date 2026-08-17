@@ -96,7 +96,7 @@ describe("openaiCompatibleImageAdapter", () => {
       expect(body).toEqual({
         model: "gpt-image-2",
         prompt: "Wide harbor night establishing shot",
-        size: "3840x2160",
+        size: "1536x1024",
         quality: "high",
         n: 1,
         response_format: "b64_json",

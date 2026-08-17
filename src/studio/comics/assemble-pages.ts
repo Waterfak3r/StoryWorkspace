@@ -77,15 +77,62 @@ export function collectComicsStillFrames(projectId: string): ComicsStillFrame[] 
 
 export function assembleComicsBook(projectId: string): StudioComicsBook {
   const project = readProject(projectId);
-  const pages = paginateComicsStills(collectComicsStillFrames(projectId)).map((page) => ({
+  const pages = paginateGeneratedAndLegacyPages(collectComicsStillFrames(projectId)).map((page, index) => ({
     ...page,
-    pageImage: ensurePageImage(projectId, page),
+    index,
+    pageImage: ensurePageImage(projectId, { ...page, index }),
+    panels: page.panels.map((panel, panelIndex) => ({ ...panel, pageIndex: index, panelIndex })),
   }));
   return comicsBookSchema.parse({
     projectId: project.id,
     title: project.title,
     pages,
   });
+}
+
+function paginateGeneratedAndLegacyPages(frames: readonly ComicsStillFrame[]): StudioComicsPage[] {
+  const pages: StudioComicsPage[] = [];
+  const leftover: ComicsStillFrame[] = [];
+
+  const flushLeftover = () => {
+    if (leftover.length === 0) {
+      return;
+    }
+    pages.push(...paginateComicsStills(leftover.splice(0)));
+  };
+
+  let index = 0;
+  while (index < frames.length) {
+    const current = frames[index]!;
+    let end = index + 1;
+    while (end < frames.length && frames[end]?.stillPath === current.stillPath) {
+      end += 1;
+    }
+    const run = frames.slice(index, end);
+    const generatedPage = current.stillPath.startsWith("outputs/comics/pages/") || run.length > 1;
+    if (generatedPage) {
+      flushLeftover();
+      pages.push({
+        index: pages.length,
+        pageImage: current.stillPath,
+        panels: run.map((frame, panelIndex) => ({
+          pageIndex: pages.length,
+          panelIndex,
+          volumeId: frame.volumeId,
+          chapterId: frame.chapterId,
+          sceneId: frame.sceneId,
+          shotId: frame.shotId,
+          stillPath: frame.stillPath,
+          caption: frame.caption,
+        })),
+      });
+    } else {
+      leftover.push(current);
+    }
+    index = end;
+  }
+  flushLeftover();
+  return pages;
 }
 
 function ensurePageImage(projectId: string, page: StudioComicsPage): string {

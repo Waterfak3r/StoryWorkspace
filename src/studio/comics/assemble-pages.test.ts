@@ -94,6 +94,23 @@ describe("assembleComicsBook", () => {
     ]);
   });
 
+  it("keeps one book page per generated comics PNG shared by sibling shots", () => {
+    const project = createProject({ title: "Shared Page" });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      stillShot("scene-01", "shot-01", "Sue opens the curtain.", "outputs/comics/pages/page-01-01/run-01.png"),
+      stillShot("scene-01", "shot-02", "Johnsy stares at the leaf.", "outputs/comics/pages/page-01-01/run-01.png"),
+      stillShot("scene-01", "shot-03", "Sue hugs Johnsy.", "outputs/comics/pages/page-01-02/run-01.png"),
+      stillShot("scene-01", "shot-04", "The leaf stays.", "outputs/comics/pages/page-01-02/run-01.png"),
+    ]);
+
+    const book = assembleComicsBook(project.id);
+    expect(book.pages).toHaveLength(2);
+    expect(book.pages[0]?.pageImage).toBe("outputs/comics/pages/page-01-01/run-01.png");
+    expect(book.pages[0]?.panels.map((panel) => panel.shotId)).toEqual(["shot-01", "shot-02"]);
+    expect(book.pages[1]?.pageImage).toBe("outputs/comics/pages/page-01-02/run-01.png");
+    expect(book.pages[1]?.panels.map((panel) => panel.caption)).toEqual(["Sue hugs Johnsy.", "The leaf stays."]);
+  });
+
   it("walks volume, chapter, and scene order and splits five stills into two pages", () => {
     const project = createProject({ title: "Five Stills" });
     replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
@@ -178,15 +195,11 @@ describe("assembleComicsBook", () => {
 
     process.env.STORY_WORKSPACE_ROOT = repoWorkspace;
     const book = assembleComicsBook("the-last-leaf");
-    expect(book.pages).toHaveLength(1);
-    expect(book.pages[0]?.pageImage).toBe("outputs/comics/pages/page-01/composed.png");
-    expect(book.pages[0]?.panels).toHaveLength(3);
-    expect(book.pages[0]?.panels.map((panel) => panel.shotId)).toEqual(["shot-17", "shot-18", "shot-23"]);
-    expect(book.pages[0]?.panels.map((panel) => panel.caption)).toEqual([
-      "Johnsy continues watching the leaf, then says she wants to live and paint again.",
-      "Sue hugs Johnsy, expressing joy.",
-      "The painted leaf remains on the wall, a testament to Behrman's sacrifice.",
-    ]);
+    const sceneIds = new Set(book.pages.flatMap((page) => page.panels.map((panel) => panel.sceneId)));
+    expect(book.pages.length).toBeGreaterThan(1);
+    expect(sceneIds.has("scene-02")).toBe(true);
+    expect(sceneIds.has("scene-06")).toBe(true);
+    expect(book.pages.every((page) => page.pageImage.startsWith("outputs/"))).toBe(true);
   });
 });
 

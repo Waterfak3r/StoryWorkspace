@@ -78,16 +78,19 @@ export function compileComicsPagePrompt(
   }
 
   const first = snapshots[0]!;
+  const pageEntities = uniqueById(snapshots.flatMap((snapshot) => entitiesForShot(snapshot)));
   const panelBlocks = snapshots.map((snapshot, index) => {
-    const entities = formatEntityLines(entitiesForShot(snapshot));
+    const names = entitiesForShot(snapshot)
+      .filter((entity) => entity.kind === "character")
+      .map((entity) => entity.name);
     const slot = panelSlotLabel(snapshots.length, index);
     return [
-      `Panel ${index + 1} (${slot}):`,
-      `purpose: ${snapshot.shot.purpose}`,
-      `action: ${snapshot.shot.action}`,
+      `Panel ${index + 1} (${slot}): ${snapshot.shot.action}`,
       `camera: ${snapshot.shot.camera}`,
-      ...entities,
-    ].join("\n");
+      names.length > 0 ? `on-screen: ${names.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   });
 
   const prompt = [
@@ -100,6 +103,7 @@ export function compileComicsPagePrompt(
     "Keep character likeness, costume, and comic style identical across every panel on this page.",
     ...identityLines,
     first.scene.title ? `Scene: ${first.scene.title}` : "",
+    ...formatEntityLines(pageEntities),
     ...panelBlocks,
     continuityConstraints ? `Continuity: ${continuityConstraints}` : "",
   ]
@@ -138,6 +142,19 @@ function formatEntityLines(entities: ReturnType<typeof entitiesForShot>): string
       .filter(Boolean)
       .join("; ");
   });
+}
+
+function uniqueById<T extends { id: string }>(items: readonly T[]): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) {
+      continue;
+    }
+    seen.add(item.id);
+    unique.push(item);
+  }
+  return unique;
 }
 
 function panelSlotLabel(count: number, index: number): string {

@@ -4,6 +4,7 @@ import { StudioAiError } from "../errors";
 import { resolveImageProvider } from "../settings";
 import type { ImageAdapterInput, ImageAdapterResult } from "./adapter";
 import { writeShotImageFile } from "./image-output";
+import { normalizeImageSize } from "./image-size";
 
 const MAX_IMAGE_PAYLOAD_BYTES = 40 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 300_000;
@@ -59,7 +60,7 @@ function errorForStatus(status: number, providerMessage?: string) {
   }
   return new StudioAiError(
     "AI_PROVIDER_ERROR",
-    providerMessage ?? "The image provider could not complete this request. Try again.",
+    providerMessage ?? `The image provider could not complete this request (${status}). Try again.`,
     502,
     true,
   );
@@ -170,7 +171,7 @@ export async function openaiCompatibleImageAdapter(input: ImageAdapterInput): Pr
   }
 
   const model = input.provider.model.trim() || image.model;
-  const size = input.provider.size.trim() || image.size;
+  const size = normalizeImageSize(input.provider.size.trim() || image.size, model);
   const quality = input.provider.quality.trim() || image.quality;
   const references = input.referenceImages ?? [];
   const response =
