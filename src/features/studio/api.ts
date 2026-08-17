@@ -8,6 +8,7 @@ import type {
   StudioScene,
   StudioShot,
   StudioComicsBook,
+  StudioPipelineGraph,
   StudioStoryOutline,
   StudioStoryTree,
   StudioStoryTreeVolume,
@@ -372,8 +373,9 @@ export function studioImageUrl(projectId: string, relativePath: string) {
 }
 
 export async function getStudioWorkflow(projectId: string) {
-  const data = await studioRequest<{ nodes: StudioWorkflowNode[] }>(`/api/studio/projects/${projectId}/workflow`);
-  return data.nodes;
+  return studioRequest<{ pipeline: StudioPipelineGraph; nodes: StudioWorkflowNode[] }>(
+    `/api/studio/projects/${projectId}/workflow`,
+  );
 }
 
 export async function rerunStudioWorkflowNode(projectId: string, shotId: string) {

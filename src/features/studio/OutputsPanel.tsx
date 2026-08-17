@@ -66,24 +66,55 @@ export function OutputsPanel({ projectId, active = true }: { projectId: string; 
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">
                 {t("Page {n}", { n: page.index + 1 })}
               </p>
-              <figure data-testid="comics-page-image" className="mt-3 overflow-hidden rounded-lg border border-line bg-surface-muted">
+              <figure data-testid="comics-page-image" className="relative mt-3 overflow-hidden rounded-lg border border-line bg-surface-muted">
                 <img
                   src={studioImageUrl(projectId, page.pageImage)}
                   alt={t("Page {n}", { n: page.index + 1 })}
                   className="w-full object-contain"
                 />
+                {page.lettering.length > 0 ? (
+                  <ol
+                    data-testid="comics-lettering"
+                    className="pointer-events-none absolute inset-0 grid"
+                    style={{ gridTemplateAreas: letteringGrid(page.panels.length) }}
+                  >
+                    {page.lettering.map((balloon) => (
+                      <li
+                        key={balloon.id}
+                        data-testid="speech-balloon"
+                        data-speaker={balloon.speaker}
+                        data-shot={balloon.shotId}
+                        className="flex items-start justify-center p-3"
+                        style={{ gridArea: `p${balloon.panelIndex}` }}
+                      >
+                        <span className="max-w-[90%] rounded-2xl border border-line bg-white/95 px-2.5 py-1 text-center text-[11px] leading-4 text-ink shadow-sm">
+                          <span className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-ink-faint">
+                            {balloon.speaker}
+                          </span>
+                          {balloon.text}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
               </figure>
-              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-ink">
-                {page.panels.map((panel) => (
-                  <li key={`${panel.volumeId}-${panel.chapterId}-${panel.sceneId}-${panel.shotId}`} data-testid="comics-panel">
-                    {panel.caption}
-                  </li>
-                ))}
-              </ol>
             </li>
           ))}
         </ol>
       )}
     </div>
   );
+}
+
+function letteringGrid(panelCount: number): string {
+  if (panelCount <= 1) {
+    return `"p0"`;
+  }
+  if (panelCount === 2) {
+    return `"p0" "p1"`;
+  }
+  if (panelCount === 3) {
+    return `"p0 p1" "p2 p2"`;
+  }
+  return `"p0 p1" "p2 p3"`;
 }

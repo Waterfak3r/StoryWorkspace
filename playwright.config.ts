@@ -53,7 +53,12 @@ delete appEnvironment.IMAGE_QUALITY;
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: ["studio-workspace.spec.ts", "i18n.spec.ts", "studio-storyboard-generate-lock.spec.ts"],
+  testMatch: [
+    "studio-workspace.spec.ts",
+    "i18n.spec.ts",
+    "studio-storyboard-generate-lock.spec.ts",
+    "studio-outline-workflow.spec.ts",
+  ],
   testIgnore: ["mvp.spec.ts", "phase*.spec.ts"],
   timeout: 45_000,
   expect: { timeout: 10_000 },

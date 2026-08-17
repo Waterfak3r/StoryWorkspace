@@ -2,6 +2,7 @@ import "server-only";
 
 import { comicsPageGroup, comicsPageId } from "../comics/page-group";
 import { resolveContext } from "../context";
+import { assignDialogueToShots, extractAttributedDialogue, speechByShotId } from "../dialogue";
 import type {
   StudioContextSnapshot,
   StudioGenerateMode,
@@ -89,10 +90,15 @@ export async function generateShot(
     projectId,
     uniqueEntities(snapshots.flatMap((item) => entitiesForShot(item))),
   );
+  const speakers = snapshot.entities
+    .filter((entity) => entity.kind === "character")
+    .map((entity) => ({ id: entity.id, name: entity.name }));
+  const dialogue = assignDialogueToShots(extractAttributedDialogue(scene.script, speakers), pageShots);
   const compiled = compileComicsPagePrompt(
     snapshots,
     mode === "regenerate" ? continuityConstraints : "",
     identityReferencePromptLines(referenceImages),
+    speechByShotId(dialogue),
   );
   if (options.image?.model) {
     compiled.provider.model = options.image.model;

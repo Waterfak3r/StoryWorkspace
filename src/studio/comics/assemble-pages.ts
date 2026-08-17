@@ -5,10 +5,13 @@ import fs from "node:fs";
 import {
   COMICS_PANELS_PER_PAGE,
   comicsBookSchema,
+  type StudioAttributedSpeechLine,
   type StudioComicsBook,
   type StudioComicsPage,
+  type StudioEntity,
 } from "../domain";
-import { readProject, readScene, readTree } from "../fs";
+import { assignDialogueToShots, compilePageLettering, extractAttributedDialogue } from "../dialogue";
+import { readEntity, readProject, readScene, readTree } from "../fs";
 import { resolveProjectStillFile, writeComicsPageFile } from "../generate/image-output";
 import { composeComicsPagePng } from "./compose-page";
 
@@ -39,7 +42,9 @@ export function paginateComicsStills(frames: readonly ComicsStillFrame[]): Studi
         shotId: frame.shotId,
         stillPath: frame.stillPath,
         caption: frame.caption,
+        speech: [],
       })),
+      lettering: [],
     });
   }
 
@@ -77,12 +82,15 @@ export function collectComicsStillFrames(projectId: string): ComicsStillFrame[] 
 
 export function assembleComicsBook(projectId: string): StudioComicsBook {
   const project = readProject(projectId);
-  const pages = paginateGeneratedAndLegacyPages(collectComicsStillFrames(projectId)).map((page, index) => ({
-    ...page,
-    index,
-    pageImage: ensurePageImage(projectId, { ...page, index }),
-    panels: page.panels.map((panel, panelIndex) => ({ ...panel, pageIndex: index, panelIndex })),
-  }));
+  const pages = paginateGeneratedAndLegacyPages(collectComicsStillFrames(projectId)).map((page, index) => {
+    const next = {
+      ...page,
+      index,
+      pageImage: ensurePageImage(projectId, { ...page, index }),
+      panels: page.panels.map((panel, panelIndex) => ({ ...panel, pageIndex: index, panelIndex })),
+    };
+    return letterPage(projectId, next);
+  });
   return comicsBookSchema.parse({
     projectId: project.id,
     title: project.title,
@@ -124,7 +132,9 @@ function paginateGeneratedAndLegacyPages(frames: readonly ComicsStillFrame[]): S
           shotId: frame.shotId,
           stillPath: frame.stillPath,
           caption: frame.caption,
+          speech: [],
         })),
+        lettering: [],
       });
     } else {
       leftover.push(current);
@@ -162,4 +172,55 @@ function tryReadStillBytes(projectId: string, relativePath: string): Buffer | nu
   } catch {
     return null;
   }
+}
+
+function letterPage(projectId: string, page: StudioComicsPage): StudioComicsPage {
+  const speechByShot = new Map<string, StudioAttributedSpeechLine[]>();
+  const seenScenes = new Set<string>();
+
+  for (const panel of page.panels) {
+    const key = `${panel.volumeId}/${panel.chapterId}/${panel.sceneId}`;
+    if (seenScenes.has(key)) {
+      continue;
+    }
+    seenScenes.add(key);
+    const scene = readScene(projectId, panel.volumeId, panel.chapterId, panel.sceneId);
+    const characters = scene.characters
+      .map((id) => tryReadCharacter(projectId, id))
+      .filter((entity): entity is { id: string; name: string } => entity !== null);
+    const lines = extractAttributedDialogue(scene.script, characters);
+    for (const assignment of assignDialogueToShots(lines, scene.shots)) {
+      speechByShot.set(assignment.shotId, assignment.lines);
+    }
+  }
+
+  const panels = page.panels.map((panel) => ({
+    ...panel,
+    speech: speechByShot.get(panel.shotId) ?? [],
+  }));
+
+  return {
+    ...page,
+    panels,
+    lettering: compilePageLettering(
+      panels.map((panel) => ({
+        shotId: panel.shotId,
+        panelIndex: panel.panelIndex,
+        lines: panel.speech,
+      })),
+    ),
+  };
+}
+
+function tryReadCharacter(projectId: string, entityId: string): { id: string; name: string } | null {
+  let entity: StudioEntity;
+  try {
+    entity = readEntity(projectId, entityId);
+  } catch {
+    return null;
+  }
+  if (entity.kind !== "character") {
+    return null;
+  }
+  return { id: entity.id, name: entity.name };
 }

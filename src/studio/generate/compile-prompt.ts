@@ -1,7 +1,7 @@
 import "server-only";
 
 import { comicsPageLayoutLabel } from "../comics/page-group";
-import type { StudioContextSnapshot } from "../domain";
+import type { StudioAttributedSpeechLine, StudioContextSnapshot } from "../domain";
 import { resolveImageProvider } from "../settings";
 
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
@@ -72,6 +72,7 @@ export function compileComicsPagePrompt(
   snapshots: readonly StudioContextSnapshot[],
   continuityConstraints = "",
   identityLines: readonly string[] = [],
+  speechByShotId: Readonly<Record<string, readonly StudioAttributedSpeechLine[]>> = {},
 ): CompiledImageRequest {
   if (snapshots.length === 0) {
     return withProvider("Sequential comic page.");
@@ -79,15 +80,18 @@ export function compileComicsPagePrompt(
 
   const first = snapshots[0]!;
   const pageEntities = uniqueById(snapshots.flatMap((snapshot) => entitiesForShot(snapshot)));
+  const hasSpeech = snapshots.some((snapshot) => (speechByShotId[snapshot.shot.id] ?? []).length > 0);
   const panelBlocks = snapshots.map((snapshot, index) => {
     const names = entitiesForShot(snapshot)
       .filter((entity) => entity.kind === "character")
       .map((entity) => entity.name);
     const slot = panelSlotLabel(snapshots.length, index);
+    const speech = speechByShotId[snapshot.shot.id] ?? [];
     return [
       `Panel ${index + 1} (${slot}): ${snapshot.shot.action}`,
       `camera: ${snapshot.shot.camera}`,
       names.length > 0 ? `on-screen: ${names.join(", ")}` : "",
+      ...speech.map((line) => `speech: ${line.speaker}: ${line.text}`),
     ]
       .filter(Boolean)
       .join("\n");
@@ -101,6 +105,9 @@ export function compileComicsPagePrompt(
     `Layout: ${comicsPageLayoutLabel(snapshots.length)}.`,
     "Reading order: left to right, then top to bottom. Separate panels with clear ink gutters.",
     "Keep character likeness, costume, and comic style identical across every panel on this page.",
+    hasSpeech
+      ? "Leave empty space in each panel for the listed speech balloons. Do not invent extra dialogue. Do not letter the words in the pixels; speech is applied as a lettering layer."
+      : "",
     ...identityLines,
     first.scene.title ? `Scene: ${first.scene.title}` : "",
     ...formatEntityLines(pageEntities),

@@ -6,11 +6,17 @@ import {
   type StudioStoryOutline,
   type StudioStoryOutlineEntityRef,
 } from "../domain";
-import { readEntity, readProject, readScene, readTree } from "../fs";
+import { listEntities, readEntity, readProject, readScene, readTree } from "../fs";
+import { buildStoryTimeline, type TimelineEventInput } from "./build-timeline";
 
 export function assembleStoryOutline(projectId: string): StudioStoryOutline {
   const project = readProject(projectId);
   const tree = readTree(projectId);
+  const characters = listEntities(projectId, "character").map((entity) => ({
+    id: entity.id,
+    name: entity.name,
+  }));
+  const events: TimelineEventInput[] = [];
 
   const outline = {
     projectId: project.id,
@@ -24,6 +30,14 @@ export function assembleStoryOutline(projectId: string): StudioStoryOutline {
         scenes: chapter.scenes.map((sceneNode) => {
           const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
           const linked = collectLinkedEntities(projectId, scene);
+          events.push({
+            title: scene.title,
+            volumeId: volume.id,
+            chapterId: chapter.id,
+            sceneId: scene.id,
+            summary: scene.intent.trim() || scene.script.trim(),
+            participantIds: scene.characters,
+          });
           return {
             id: scene.id,
             title: scene.title,
@@ -41,6 +55,7 @@ export function assembleStoryOutline(projectId: string): StudioStoryOutline {
         }),
       })),
     })),
+    timeline: buildStoryTimeline({ characters, events }),
   };
 
   return storyOutlineSchema.parse(outline);

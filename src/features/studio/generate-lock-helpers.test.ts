@@ -74,7 +74,7 @@ describe("generateStudioShot and lockStudioShot against real HTTP routes", () =>
     expect(locked.node.locked).toBe(true);
     expect(locked.node.status).toBe("locked");
 
-    const nodes = await getStudioWorkflow(fixture.projectId);
+    const { nodes } = await getStudioWorkflow(fixture.projectId);
     const node = nodes.find((item) => item.shotId === "shot-01");
     expect(node?.locked).toBe(true);
     expect(node?.status).toBe("locked");

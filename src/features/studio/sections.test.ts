@@ -26,13 +26,36 @@ describe("readSectionFromLocation", () => {
   });
 });
 
+describe("Outline and Workflow surfaces", () => {
+  it("renders a timeline and a connected pipeline, not the old lists", () => {
+    const outline = readFileSync(path.join(__dirname, "OutlinePanel.tsx"), "utf8");
+    expect(outline).toContain("data-outline-timeline");
+    expect(outline).toContain("data-timeline-event");
+    expect(outline).toContain("data-timeline-lane");
+    expect(outline).toContain("data-timeline-cell");
+    expect(outline).toContain("event.sceneId");
+    expect(outline).toContain("event.volumeId");
+    expect(outline).toContain("event.chapterId");
+    expect(outline).not.toContain("OutlineSceneCard");
+
+    const workflow = readFileSync(path.join(__dirname, "WorkflowPanel.tsx"), "utf8");
+    expect(workflow).toContain("data-workflow-pipeline");
+    expect(workflow).toContain("data-pipeline-stage");
+    expect(workflow).toContain("data-pipeline-edge");
+    expect(workflow).toContain("data-pipeline-label");
+    expect(workflow).toContain("lockStudioShot");
+  });
+});
+
 describe("Outputs comics presentation", () => {
   it("renders four-panel pages from the comics HTTP read, not only a flat still list", () => {
     const source = readFileSync(path.join(__dirname, "OutputsPanel.tsx"), "utf8");
     expect(source).toContain("getStudioComics");
     expect(source).toContain("page.pageImage");
     expect(source).not.toContain("grid-cols-2");
-    expect(source).toContain("panel.caption");
+    expect(source).not.toContain("panel.caption");
+    expect(source).toContain("page.lettering");
+    expect(source).toContain('data-testid="speech-balloon"');
     expect(source).toContain('data-testid="comics-page"');
     expect(source).toContain("if (!active)");
     expect(source).not.toContain("getStudioWorkflow");

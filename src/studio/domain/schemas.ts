@@ -117,7 +117,7 @@ export const styleRecordSchema = z.strictObject({
 });
 
 export const DEFAULT_COMICS_STYLE_VISUAL =
-  "Sequential comic stills; consistent inked character designs reused across shots; muted watercolor palette; cinematic comic framing; no photorealism; no speech balloons or captions.";
+  "Sequential comic stills; consistent inked character designs reused across shots; muted watercolor palette; cinematic comic framing; no photorealism; leave space for speech balloons.";
 
 export const storyOutlineEntityRefSchema = z.strictObject({
   id: studioIdSchema,
@@ -154,13 +154,59 @@ export const storyOutlineVolumeSchema = z.strictObject({
   chapters: z.array(storyOutlineChapterSchema),
 });
 
+export const storyTimelineCharacterSchema = z.strictObject({
+  id: studioIdSchema,
+  name: z.string(),
+});
+
+export const storyTimelineEventSchema = z.strictObject({
+  id: studioIdSchema,
+  sequence: z.number().int().min(0),
+  title: z.string(),
+  volumeId: studioIdSchema,
+  chapterId: studioIdSchema,
+  sceneId: studioIdSchema,
+  summary: z.string(),
+  participantIds: z.array(studioIdSchema),
+});
+
+export const storyTimelineIntersectionSchema = z.strictObject({
+  characterId: studioIdSchema,
+  eventId: studioIdSchema,
+});
+
+export const storyTimelineSchema = z.strictObject({
+  axis: z.literal("sequence"),
+  events: z.array(storyTimelineEventSchema),
+  characters: z.array(storyTimelineCharacterSchema),
+  intersections: z.array(storyTimelineIntersectionSchema),
+});
+
 export const storyOutlineSchema = z.strictObject({
   projectId: studioIdSchema,
   title: z.string(),
+  timeline: storyTimelineSchema,
   volumes: z.array(storyOutlineVolumeSchema),
 });
 
 export const COMICS_PANELS_PER_PAGE = 4;
+
+export const attributedSpeechLineSchema = z.strictObject({
+  id: z.string().min(1),
+  speaker: z.string().min(1),
+  speakerId: studioIdSchema.nullable(),
+  text: z.string().min(1),
+});
+
+export const letteringBalloonSchema = z.strictObject({
+  id: z.string().min(1),
+  speaker: z.string().min(1),
+  speakerId: studioIdSchema.nullable(),
+  text: z.string().min(1),
+  panelIndex: z.number().int().min(0).max(COMICS_PANELS_PER_PAGE - 1),
+  shotId: studioIdSchema,
+  kind: z.literal("speech"),
+});
 
 export const comicsPanelSchema = z.strictObject({
   pageIndex: z.number().int().min(0),
@@ -171,12 +217,35 @@ export const comicsPanelSchema = z.strictObject({
   shotId: studioIdSchema,
   stillPath: z.string().min(1),
   caption: z.string(),
+  speech: z.array(attributedSpeechLineSchema).default([]),
 });
 
 export const comicsPageSchema = z.strictObject({
   index: z.number().int().min(0),
   pageImage: z.string().min(1),
   panels: z.array(comicsPanelSchema).min(1).max(COMICS_PANELS_PER_PAGE),
+  lettering: z.array(letteringBalloonSchema).default([]),
+});
+
+export const pipelineStageIdSchema = z.enum(["text", "import", "storyboard", "dialogue", "comics"]);
+
+export const pipelineStageStatusSchema = z.enum(["pending", "success", "failed", "running"]);
+
+export const pipelineStageSchema = z.strictObject({
+  id: pipelineStageIdSchema,
+  label: z.string(),
+  status: pipelineStageStatusSchema,
+  statusLabel: z.enum(["待跑", "成功", "失败", "进行中"]),
+});
+
+export const pipelineEdgeSchema = z.strictObject({
+  from: pipelineStageIdSchema,
+  to: pipelineStageIdSchema,
+});
+
+export const pipelineGraphSchema = z.strictObject({
+  stages: z.array(pipelineStageSchema).min(4),
+  edges: z.array(pipelineEdgeSchema),
 });
 
 export const comicsBookSchema = z.strictObject({
@@ -402,6 +471,17 @@ export type StudioStoryOutlineChapter = z.infer<typeof storyOutlineChapterSchema
 export type StudioStoryOutlineScene = z.infer<typeof storyOutlineSceneSchema>;
 export type StudioStoryOutlineEntityRef = z.infer<typeof storyOutlineEntityRefSchema>;
 export type StudioStoryOutlineBeat = z.infer<typeof storyOutlineBeatSchema>;
+export type StudioStoryTimeline = z.infer<typeof storyTimelineSchema>;
+export type StudioStoryTimelineCharacter = z.infer<typeof storyTimelineCharacterSchema>;
+export type StudioStoryTimelineEvent = z.infer<typeof storyTimelineEventSchema>;
+export type StudioStoryTimelineIntersection = z.infer<typeof storyTimelineIntersectionSchema>;
+export type StudioAttributedSpeechLine = z.infer<typeof attributedSpeechLineSchema>;
+export type StudioLetteringBalloon = z.infer<typeof letteringBalloonSchema>;
+export type StudioPipelineStageId = z.infer<typeof pipelineStageIdSchema>;
+export type StudioPipelineStageStatus = z.infer<typeof pipelineStageStatusSchema>;
+export type StudioPipelineStage = z.infer<typeof pipelineStageSchema>;
+export type StudioPipelineEdge = z.infer<typeof pipelineEdgeSchema>;
+export type StudioPipelineGraph = z.infer<typeof pipelineGraphSchema>;
 export type StudioComicsPanel = z.infer<typeof comicsPanelSchema>;
 export type StudioComicsPage = z.infer<typeof comicsPageSchema>;
 export type StudioComicsBook = z.infer<typeof comicsBookSchema>;
