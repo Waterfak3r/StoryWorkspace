@@ -42,6 +42,15 @@ describe("buildStoryTimeline", () => {
       { characterId: sue.id, eventId: "volume-01-chapter-03-scene-02" },
       { characterId: doctor.id, eventId: "volume-01-chapter-03-scene-02" },
     ]);
+    expect(timeline.events.map((event) => event.sequence)).toEqual([0, 1]);
+    expect(timeline.connections).toEqual([
+      {
+        fromEventId: "volume-01-chapter-01-scene-02",
+        toEventId: "volume-01-chapter-03-scene-02",
+      },
+    ]);
+    expect(timeline.connections[0]?.fromEventId).toBe(timeline.events[0]?.id);
+    expect(timeline.connections[0]?.toEventId).toBe(timeline.events[1]?.id);
   });
 });
 

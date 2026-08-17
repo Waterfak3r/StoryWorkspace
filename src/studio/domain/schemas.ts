@@ -109,12 +109,29 @@ export const entityRecordSchema = z.strictObject({
   canonFields: z.array(z.string()).optional(),
 });
 
+export const COMICS_STYLE_PRESET_IDS = [
+  "sequential-ink",
+  "shonen-manga",
+  "ligne-claire",
+  "watercolor-indie",
+  "noir-comics",
+] as const;
+
+export const comicsStylePresetIdSchema = z.enum(COMICS_STYLE_PRESET_IDS);
+
 export const styleRecordSchema = z.strictObject({
   id: z.literal("default"),
+  presetId: comicsStylePresetIdSchema.optional(),
   label: z.string(),
   visual: z.string(),
   updatedAt: studioTimestampSchema,
 });
+
+export const updateStyleInputSchema = z.strictObject({
+  presetId: comicsStylePresetIdSchema,
+});
+
+export const DEFAULT_COMICS_STYLE_PRESET_ID = "sequential-ink" as const;
 
 export const DEFAULT_COMICS_STYLE_VISUAL =
   "Sequential comic stills; consistent inked character designs reused across shots; muted watercolor palette; cinematic comic framing; no photorealism; leave space for speech balloons.";
@@ -175,11 +192,17 @@ export const storyTimelineIntersectionSchema = z.strictObject({
   eventId: studioIdSchema,
 });
 
+export const storyTimelineConnectionSchema = z.strictObject({
+  fromEventId: studioIdSchema,
+  toEventId: studioIdSchema,
+});
+
 export const storyTimelineSchema = z.strictObject({
   axis: z.literal("sequence"),
   events: z.array(storyTimelineEventSchema),
   characters: z.array(storyTimelineCharacterSchema),
   intersections: z.array(storyTimelineIntersectionSchema),
+  connections: z.array(storyTimelineConnectionSchema),
 });
 
 export const storyOutlineSchema = z.strictObject({
@@ -206,6 +229,28 @@ export const letteringBalloonSchema = z.strictObject({
   panelIndex: z.number().int().min(0).max(COMICS_PANELS_PER_PAGE - 1),
   shotId: studioIdSchema,
   kind: z.literal("speech"),
+});
+
+export const projectDialogueShotSchema = z.strictObject({
+  shotId: studioIdSchema,
+  action: z.string(),
+  purpose: z.string(),
+  lines: z.array(attributedSpeechLineSchema),
+});
+
+export const projectDialogueSceneSchema = z.strictObject({
+  volumeId: studioIdSchema,
+  chapterId: studioIdSchema,
+  sceneId: studioIdSchema,
+  title: z.string(),
+  unassigned: z.array(attributedSpeechLineSchema),
+  shots: z.array(projectDialogueShotSchema),
+});
+
+export const projectDialogueSchema = z.strictObject({
+  projectId: studioIdSchema,
+  lineCount: z.number().int().min(0),
+  scenes: z.array(projectDialogueSceneSchema),
 });
 
 export const comicsPanelSchema = z.strictObject({
@@ -465,6 +510,9 @@ export type StudioScene = z.infer<typeof sceneRecordSchema>;
 export type StudioEntity = z.infer<typeof entityRecordSchema>;
 export type StudioEntityKind = z.infer<typeof entityKindSchema>;
 export type StudioStyle = z.infer<typeof styleRecordSchema>;
+export type ComicsStylePresetId = z.infer<typeof comicsStylePresetIdSchema>;
+export type UpdateStyleInput = z.input<typeof updateStyleInputSchema>;
+export type StudioStoryTimelineConnection = z.infer<typeof storyTimelineConnectionSchema>;
 export type StudioStoryOutline = z.infer<typeof storyOutlineSchema>;
 export type StudioStoryOutlineVolume = z.infer<typeof storyOutlineVolumeSchema>;
 export type StudioStoryOutlineChapter = z.infer<typeof storyOutlineChapterSchema>;
@@ -477,6 +525,9 @@ export type StudioStoryTimelineEvent = z.infer<typeof storyTimelineEventSchema>;
 export type StudioStoryTimelineIntersection = z.infer<typeof storyTimelineIntersectionSchema>;
 export type StudioAttributedSpeechLine = z.infer<typeof attributedSpeechLineSchema>;
 export type StudioLetteringBalloon = z.infer<typeof letteringBalloonSchema>;
+export type StudioProjectDialogue = z.infer<typeof projectDialogueSchema>;
+export type StudioProjectDialogueScene = z.infer<typeof projectDialogueSceneSchema>;
+export type StudioProjectDialogueShot = z.infer<typeof projectDialogueShotSchema>;
 export type StudioPipelineStageId = z.infer<typeof pipelineStageIdSchema>;
 export type StudioPipelineStageStatus = z.infer<typeof pipelineStageStatusSchema>;
 export type StudioPipelineStage = z.infer<typeof pipelineStageSchema>;

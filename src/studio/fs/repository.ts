@@ -19,6 +19,7 @@ import {
   projectRecordSchema,
   sceneRecordSchema,
   slugifyTitle,
+  DEFAULT_COMICS_STYLE_PRESET_ID,
   DEFAULT_COMICS_STYLE_VISUAL,
   STUDIO_ENTITY_KINDS,
   STUDIO_SCHEMA_VERSION,
@@ -475,15 +476,23 @@ export function readStyle(projectId: string): StudioStyle {
   return parseJsonRecord(file, styleRecordSchema);
 }
 
-export function updateStyle(projectId: string, visual: string): StudioStyle {
+export function updateStyle(
+  projectId: string,
+  visualOrPatch: string | { visual?: string; label?: string; presetId?: StudioStyle["presetId"] },
+): StudioStyle {
   const ctx = requireProject(projectId);
   const file = projectFile(ctx, "styles", "default.json");
   const current = readStyle(projectId);
+  const patch = typeof visualOrPatch === "string" ? { visual: visualOrPatch } : visualOrPatch;
   const next: StudioStyle = {
     ...current,
-    visual: visual.trim(),
+    visual: patch.visual !== undefined ? patch.visual.trim() : current.visual,
+    label: patch.label !== undefined ? patch.label.trim() || current.label : current.label,
     updatedAt: nowIso(current.updatedAt),
   };
+  if (patch.presetId) {
+    next.presetId = patch.presetId;
+  }
   writeJsonFile(file, next);
   return next;
 }
@@ -739,6 +748,7 @@ function writeDefaultProjectTree(projectDir: string, project: StudioProject, now
   ensureDirectory(path.join(projectDir, "entities", "costumes"));
   writeJsonFile(path.join(projectDir, "styles", "default.json"), {
     id: "default",
+    presetId: DEFAULT_COMICS_STYLE_PRESET_ID,
     label: "Default",
     visual: DEFAULT_COMICS_STYLE_VISUAL,
     updatedAt: now,

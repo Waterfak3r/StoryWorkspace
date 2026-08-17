@@ -33,13 +33,25 @@ describe("Outline and Workflow surfaces", () => {
     expect(outline).toContain("data-timeline-event");
     expect(outline).toContain("data-timeline-lane");
     expect(outline).toContain("data-timeline-cell");
+    expect(outline).toContain("data-timeline-link");
+    expect(outline).toContain("data-timeline-chain");
     expect(outline).toContain("event.sceneId");
     expect(outline).toContain("event.volumeId");
     expect(outline).toContain("event.chapterId");
     expect(outline).not.toContain("OutlineSceneCard");
 
+    const overview = readFileSync(path.join(__dirname, "OverviewPanel.tsx"), "utf8");
+    expect(overview).toContain("data-comics-style");
+    expect(overview).toContain("saveStudioStyle");
+
+    const entities = readFileSync(path.join(__dirname, "EntitiesPanel.tsx"), "utf8");
+    expect(entities).toContain("data-complete-reference");
+    expect(entities).toContain("completeStudioEntityReference");
+
     const workflow = readFileSync(path.join(__dirname, "WorkflowPanel.tsx"), "utf8");
     expect(workflow).toContain("data-workflow-pipeline");
+    expect(workflow).toContain("data-dialogue-list");
+    expect(workflow).toContain("data-dialogue-line");
     expect(workflow).toContain("data-pipeline-stage");
     expect(workflow).toContain("data-pipeline-edge");
     expect(workflow).toContain("data-pipeline-label");

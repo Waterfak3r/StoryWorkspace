@@ -1,15 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { createEntity, createProject } from "../fs";
-import { FAKE_PNG_BYTES } from "./fake-image-adapter";
+import {
+  createEntity,
+  createProject,
+  getWorkspaceRoot,
+  readScene,
+  readStyle,
+  replaceSceneShots,
+  updateScene,
+} from "../fs";
+import type { ImageAdapterInput } from "./adapter";
+import { completeEntityReference, compileEntityReferencePrompt } from "./complete-reference";
 import {
   addEntityReferenceImage,
   identityReferencePromptLines,
   loadEntityReferenceImages,
 } from "./entity-references";
+import { FAKE_PNG_BYTES, fakeImageAdapter, generateShot } from "./index";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
@@ -64,5 +74,63 @@ describe("entity reference images", () => {
       },
     ]);
     expect(loaded).toEqual([]);
+  });
+
+  it("auto-completes a missing reference into a real image file used as bytes on generate", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
+    expect(sue.visual.references).toEqual([]);
+
+    const style = readStyle(project.id);
+    const compiled = compileEntityReferencePrompt(sue, style);
+    expect(compiled).toContain(`Style: ${style.visual}`);
+    expect(compiled).toContain("Subject: Sue");
+    expect(compiled).not.toContain("speech: ");
+
+    const completed = await completeEntityReference(project.id, sue.id, fakeImageAdapter);
+    expect(completed.relativePath).toBe(`assets/images/${sue.id}/ref-01.png`);
+    expect(completed.entity.visual.references).toEqual([completed.relativePath]);
+    expect(completed.compiled).toBe(compiled);
+
+    const absolute = path.join(getWorkspaceRoot(), project.id, ...completed.relativePath.split("/"));
+    expect(existsSync(absolute)).toBe(true);
+    expect(readFileSync(absolute).equals(FAKE_PNG_BYTES)).toBe(true);
+
+    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      characters: [sue.id],
+      expectedUpdatedAt: scene.updatedAt,
+    });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      {
+        id: "shot-01",
+        scene_id: "scene-01",
+        purpose: "Establish",
+        action: "Sue waits at the desk.",
+        camera: "medium",
+        continuity_from: null,
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const seen: ImageAdapterInput[] = [];
+    const result = await generateShot(
+      project.id,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      async (input) => {
+        seen.push(input);
+        return fakeImageAdapter(input);
+      },
+    );
+
+    expect(seen[0]?.referenceImages?.length).toBe(1);
+    expect(seen[0]?.referenceImages?.[0]?.bytes.equals(FAKE_PNG_BYTES)).toBe(true);
+    expect(result.compiled.prompt).toContain("Attached image 1: character Sue");
   });
 });

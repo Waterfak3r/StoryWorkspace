@@ -1,6 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type MutableRefObject } from "react";
+import {
+  CheckCircle,
+  MapPin,
+  Package,
+  Sparkle,
+  TShirt,
+  UploadSimple,
+  User,
+  UsersThree,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import type { StudioEntity, StudioEntityKind } from "@/studio/domain";
 import { STUDIO_ENTITY_KINDS } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
@@ -14,6 +25,7 @@ import {
   StudioRequestError,
   studioImageUrl,
   updateStudioEntity,
+  completeStudioEntityReference,
   uploadStudioEntityReference,
   type EntityDraft,
 } from "./api";
@@ -21,7 +33,7 @@ import { ConflictBanner } from "./ConflictBanner";
 import { useDebouncedSave } from "./useDebouncedSave";
 
 const fieldClassName =
-  "w-full rounded-lg border border-line bg-surface px-3.5 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-ink-faint focus:border-accent focus:ring-4 focus:ring-accent/15";
+  "w-full rounded-xl border border-line bg-surface px-4 py-2.5 text-sm text-ink outline-none transition-[border-color,box-shadow] placeholder:text-ink-faint focus:border-accent focus:ring-4 focus:ring-accent/15";
 
 const emptyDraft: EntityDraft = {
   name: "",
@@ -50,6 +62,13 @@ const KIND_CREATE_LABELS: Record<StudioEntityKind, string> = {
   location: "New location",
   prop: "New prop",
   costume: "New costume",
+};
+
+const KIND_ICONS: Record<StudioEntityKind, typeof User> = {
+  character: User,
+  location: MapPin,
+  prop: Package,
+  costume: TShirt,
 };
 
 const emptyNameDrafts = (): Record<StudioEntityKind, string> => ({
@@ -181,7 +200,12 @@ export function EntitiesPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <aside className="flex min-h-0 flex-col gap-8 border-b border-line bg-surface px-4 py-5 lg:w-80 lg:shrink-0 lg:border-b-0 lg:border-r lg:overflow-y-auto">
+      {/* Sidebar: Entity categories and list */}
+      <aside className="flex min-h-0 flex-col gap-6 border-b border-line bg-surface px-4 py-5 lg:w-80 lg:shrink-0 lg:border-b-0 lg:border-r lg:overflow-y-auto">
+        <div className="flex items-center gap-2 border-b border-line pb-3">
+          <UsersThree size={20} className="text-accent" />
+          <h1 className="text-sm font-bold uppercase tracking-wider text-ink">{t("Entity Bible")}</h1>
+        </div>
         {listError ? <p role="alert" className="text-sm text-danger">{listError}</p> : null}
         {STUDIO_ENTITY_KINDS.map((kind) => (
           <EntityKindSection
@@ -201,6 +225,7 @@ export function EntitiesPanel({
         ))}
       </aside>
 
+      {/* Main editor area */}
       {selectedId ? (
         <EntityEditor
           key={selectedId}
@@ -220,8 +245,11 @@ export function EntitiesPanel({
           }}
         />
       ) : (
-        <section className="min-h-0 min-w-0 flex-1 px-5 py-6 sm:px-8">
-          <p className="text-sm text-ink-muted">{t("Select an entity")}</p>
+        <section className="flex min-h-0 min-w-0 flex-1 items-center justify-center px-5 py-12 sm:px-8">
+          <div className="text-center">
+            <UsersThree size={36} className="mx-auto text-ink-faint" />
+            <p className="mt-3 text-sm font-medium text-ink-muted">{t("Select an entity to view or edit its model sheet.")}</p>
+          </div>
         </section>
       )}
     </div>
@@ -253,44 +281,73 @@ function EntityKindSection({
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
   onSelect: (id: string) => void;
 }) {
+  const Icon = KIND_ICONS[kind];
   const inputId = `${kind}-name`;
+
   return (
-    <section>
-      <h2 className="text-sm font-semibold text-ink">{title}</h2>
-      <form className="mt-3 space-y-2" onSubmit={onCreate}>
-        <label htmlFor={inputId} className="block text-xs font-semibold text-ink-muted">
+    <section className="rounded-xl border border-line/70 bg-surface-raised/50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Icon size={16} className="text-accent" />
+          <h2 className="text-xs font-bold uppercase tracking-wider text-ink">{title}</h2>
+        </div>
+        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-bold text-ink-muted">
+          {entities.length}
+        </span>
+      </div>
+
+      <form className="mt-2.5 space-y-1.5" onSubmit={onCreate}>
+        <label htmlFor={inputId} className="sr-only">
           {nameLabel}
         </label>
-        <input
-          id={inputId}
-          value={nameValue}
-          onChange={(event) => onNameChange(event.target.value)}
-          autoComplete="off"
-          maxLength={120}
-          className={`${fieldClassName} min-h-11`}
-        />
-        <button
-          type="submit"
-          disabled={creating !== null || nameValue.trim().length === 0}
-          className="inline-flex min-h-10 items-center rounded-lg bg-accent px-3 text-xs font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:opacity-60"
-        >
-          {createLabel}
-        </button>
+        <div className="flex gap-1.5">
+          <input
+            id={inputId}
+            aria-label={nameLabel}
+            placeholder={nameLabel}
+            value={nameValue}
+            onChange={(event) => onNameChange(event.target.value)}
+            autoComplete="off"
+            maxLength={120}
+            className="min-h-9 flex-1 rounded-lg border border-line bg-surface px-2.5 text-xs text-ink outline-none transition-[border-color,box-shadow] placeholder:text-ink-faint focus:border-accent focus:ring-2 focus:ring-accent/15"
+          />
+          <button
+            type="submit"
+            disabled={creating !== null || nameValue.trim().length === 0}
+            className="inline-flex min-h-9 shrink-0 items-center justify-center rounded-lg bg-accent px-2.5 text-xs font-semibold text-on-accent transition-colors hover:bg-accent-strong disabled:opacity-60"
+          >
+            {createLabel}
+          </button>
+        </div>
       </form>
-      <ul className="mt-3 space-y-1">
-        {entities.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              onClick={() => onSelect(item.id)}
-              aria-pressed={selectedId === item.id}
-              className={`flex min-h-10 w-full items-center rounded-lg px-2 text-left text-sm transition-colors ${selectedId === item.id ? "bg-accent-soft font-semibold text-ink" : "text-ink-muted hover:bg-surface-muted hover:text-ink"}`}
-            >
-              <span className="truncate">{item.name}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
+
+      {entities.length > 0 ? (
+        <ul className="mt-2.5 space-y-1 border-t border-line/50 pt-2">
+          {entities.map((item) => {
+            const isSelected = selectedId === item.id;
+            return (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(item.id)}
+                  aria-pressed={isSelected}
+                  className={`group flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs font-medium transition-colors ${
+                    isSelected
+                      ? "bg-accent-soft font-bold text-ink shadow-2xs"
+                      : "text-ink-muted hover:bg-surface-muted hover:text-ink"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${isSelected ? "bg-accent" : "bg-line"}`}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">{item.name}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </section>
   );
 }
@@ -488,6 +545,29 @@ function EntityEditor({
     }
   }
 
+  async function completeReference() {
+    const current = entityRef.current;
+    if (!current) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const savedDraft = await persist();
+      if (!savedDraft && conflictRef.current) {
+        return;
+      }
+      const latest = entityRef.current ?? current;
+      const saved = await completeStudioEntityReference(projectId, latest.id);
+      applyRecord(saved, entityRef, draftRef, committedRef, conflictRef, setEntity, setDraft, setCommitted, setConflict);
+      setSaveError("");
+      onSavedRef.current(saved);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : t("The request could not be completed."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadReference(file: File) {
     const current = entityRef.current;
     if (!current) {
@@ -535,16 +615,58 @@ function EntityEditor({
     return (
       <section className="min-h-0 min-w-0 flex-1 px-5 py-6 sm:px-8">
         <div className="space-y-4">
-          <div className="h-11 animate-pulse rounded-lg bg-surface-muted" />
-          <div className="h-32 animate-pulse rounded-lg bg-surface-muted" />
+          <div className="h-11 animate-pulse rounded-xl bg-surface-muted" />
+          <div className="h-48 animate-pulse rounded-xl bg-surface-muted" />
         </div>
       </section>
     );
   }
 
+  const KindIcon = KIND_ICONS[entity.kind];
+
   return (
     <section className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8">
-      <div className="mx-auto flex max-w-[760px] flex-col gap-5">
+      <div className="mx-auto flex max-w-[800px] flex-col gap-6">
+        {/* Top bar with entity kind badge and save state */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-accent/20 bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent">
+              <KindIcon size={14} />
+              {t(KIND_LABELS[entity.kind])}
+            </span>
+            <h1 className="text-xl font-bold tracking-tight text-ink">{draft.name || t("Untitled entity")}</h1>
+          </div>
+
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
+              conflict
+                ? "border border-danger/30 bg-danger/10 text-danger"
+                : dirty
+                  ? "border border-accent/30 bg-accent-soft text-accent"
+                  : "border border-line bg-surface text-ink-muted"
+            }`}
+            aria-live="polite"
+            data-save-state={conflict ? "conflict" : dirty ? "saving" : "saved"}
+          >
+            {conflict ? (
+              <>
+                <WarningCircle size={13} className="text-danger" />
+                {t("Unsaved changes")}
+              </>
+            ) : dirty ? (
+              <>
+                <Sparkle size={13} className="animate-spin text-accent" />
+                {t("Saving")}
+              </>
+            ) : (
+              <>
+                <CheckCircle size={13} className="text-success" />
+                {t("Saved")}
+              </>
+            )}
+          </span>
+        </div>
+
         {conflict ? (
           <ConflictBanner
             busy={busy}
@@ -561,115 +683,168 @@ function EntityEditor({
             }
           />
         ) : null}
-        {saveError ? <p role="alert" className="text-sm text-danger">{saveError}</p> : null}
-        <div className="space-y-2">
-          <label htmlFor="entity-name" className="block text-sm font-semibold text-ink">
-            {t("Name")}
-          </label>
-          <input
-            id="entity-name"
-            value={draft.name}
-            onChange={(event) => updateDraft({ name: event.target.value })}
-            onBlur={() => void flush()}
-            aria-invalid={Boolean(nameError)}
-            className={`${fieldClassName} min-h-11`}
-          />
-          {nameError ? <p className="text-sm text-danger">{nameError}</p> : null}
-        </div>
-        <div className="space-y-2">
-          <label htmlFor="entity-description" className="block text-sm font-semibold text-ink">
-            {t("Description")}
-          </label>
-          <textarea
-            id="entity-description"
-            value={draft.description}
-            onChange={(event) => updateDraft({ description: event.target.value })}
-            onBlur={() => void flush()}
-            rows={5}
-            className={`${fieldClassName} resize-y py-3 leading-6`}
-          />
-        </div>
-        <div className="space-y-2">
-          <label htmlFor="entity-visual-base" className="block text-sm font-semibold text-ink">
-            {t("Visual base")}
-          </label>
-          <textarea
-            id="entity-visual-base"
-            value={draft.visualBase}
-            onChange={(event) => updateDraft({ visualBase: event.target.value })}
-            onBlur={() => void flush()}
-            rows={4}
-            className={`${fieldClassName} resize-y py-3 leading-6`}
-          />
-        </div>
-        <div className="space-y-2">
-          <p className="block text-sm font-semibold text-ink">{t("Reference images")}</p>
-          <p className="text-xs text-ink-muted">{t("These images are sent to the Image API so the same face, place, and props stay consistent.")}</p>
-          {entity.visual.references.length > 0 ? (
-            <ul className="flex flex-wrap gap-2">
-              {entity.visual.references.map((relativePath) => (
-                <li key={relativePath} className="overflow-hidden rounded-lg border border-line">
-                  <img
-                    src={studioImageUrl(projectId, relativePath)}
-                    alt={relativePath}
-                    className="h-24 w-24 object-cover"
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-ink-faint">{t("No reference images yet.")}</p>
-          )}
-          <label className="inline-flex min-h-11 cursor-pointer items-center rounded-lg border border-line bg-surface px-3 text-sm font-semibold text-ink">
-            {t("Add reference image")}
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="sr-only"
-              disabled={busy}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) {
-                  void uploadReference(file);
-                }
-              }}
-            />
-          </label>
-        </div>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label htmlFor="entity-outfit" className="block text-sm font-semibold text-ink">
-              {t("Outfit")}
+
+        {saveError ? (
+          <p role="alert" className="rounded-xl border border-danger/30 bg-danger/10 p-3.5 text-sm text-danger">
+            {saveError}
+          </p>
+        ) : null}
+
+        {/* Section 1: Core Identity */}
+        <div className="space-y-4 rounded-2xl border border-line bg-surface-raised p-5 shadow-xs">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-ink-faint">{t("Core identity")}</h2>
+          <div className="space-y-1.5">
+            <label htmlFor="entity-name" className="block text-sm font-semibold text-ink">
+              {t("Name")}
             </label>
             <input
-              id="entity-outfit"
-              value={draft.outfit}
-              onChange={(event) => updateDraft({ outfit: event.target.value })}
+              id="entity-name"
+              value={draft.name}
+              onChange={(event) => updateDraft({ name: event.target.value })}
               onBlur={() => void flush()}
+              aria-invalid={Boolean(nameError)}
               className={`${fieldClassName} min-h-11`}
             />
+            {nameError ? <p className="text-xs text-danger">{nameError}</p> : null}
           </div>
-          <div className="space-y-2">
-            <label htmlFor="entity-condition" className="block text-sm font-semibold text-ink">
-              {t("Condition")}
+
+          <div className="space-y-1.5">
+            <label htmlFor="entity-description" className="block text-sm font-semibold text-ink">
+              {t("Description")}
             </label>
-            <input
-              id="entity-condition"
-              value={draft.condition}
-              onChange={(event) => updateDraft({ condition: event.target.value })}
+            <textarea
+              id="entity-description"
+              value={draft.description}
+              onChange={(event) => updateDraft({ description: event.target.value })}
               onBlur={() => void flush()}
-              className={`${fieldClassName} min-h-11`}
+              rows={4}
+              placeholder={t("Narrative background and key traits...")}
+              className={`${fieldClassName} resize-y py-3 leading-relaxed`}
             />
           </div>
         </div>
-        <p
-          className="text-xs text-ink-faint"
-          aria-live="polite"
-          data-save-state={conflict ? "conflict" : dirty ? "saving" : "saved"}
-        >
-          {conflict ? t("Unsaved changes") : dirty ? t("Saving") : t("Saved")}
-        </p>
+
+        {/* Section 2: Visual Style & Continuity */}
+        <div className="space-y-4 rounded-2xl border border-line bg-surface-raised p-5 shadow-xs">
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-ink-faint">{t("Visual model sheet")}</h2>
+            <p className="mt-1 text-xs text-ink-muted">
+              {t("Visual prompt cues and reference photos ensuring character/setting consistency across panels.")}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="entity-visual-base" className="block text-sm font-semibold text-ink">
+              {t("Visual base")}
+            </label>
+            <textarea
+              id="entity-visual-base"
+              value={draft.visualBase}
+              onChange={(event) => updateDraft({ visualBase: event.target.value })}
+              onBlur={() => void flush()}
+              rows={3}
+              placeholder={t("Visual appearance details, facial structure, materials, colors...")}
+              className={`${fieldClassName} resize-y py-3 leading-relaxed`}
+            />
+          </div>
+
+          <div className="space-y-2.5 border-t border-line/70 pt-4">
+            <div className="flex items-center justify-between">
+              <span className="block text-sm font-semibold text-ink">{t("Reference images")}</span>
+              <span className="text-xs text-ink-faint">
+                {entity.visual.references.length} {t("images")}
+              </span>
+            </div>
+
+            {entity.visual.references.length > 0 ? (
+              <ul className="flex flex-wrap gap-3">
+                {entity.visual.references.map((relativePath) => (
+                  <li
+                    key={relativePath}
+                    className="group relative overflow-hidden rounded-xl border border-line bg-surface-muted shadow-2xs"
+                  >
+                    <img
+                      src={studioImageUrl(projectId, relativePath)}
+                      alt={relativePath}
+                      className="h-28 w-28 object-cover transition-transform group-hover:scale-105"
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="rounded-xl border border-dashed border-line bg-surface/40 p-4 text-center text-xs text-ink-faint">
+                {t("No reference images yet. Generate or upload one below.")}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2.5 pt-1">
+              <button
+                type="button"
+                data-complete-reference="true"
+                disabled={busy}
+                onClick={() => void completeReference()}
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-on-accent shadow-xs transition-[background-color,transform] hover:bg-accent-strong active:translate-y-px disabled:opacity-60"
+              >
+                <Sparkle size={16} weight="bold" />
+                {busy ? t("Generating reference") : t("Generate reference")}
+              </button>
+
+              <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface px-4 text-sm font-semibold text-ink transition-colors hover:bg-surface-muted">
+                <UploadSimple size={16} weight="bold" className="text-ink-muted" />
+                {t("Add reference image")}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="sr-only"
+                  disabled={busy}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) {
+                      void uploadReference(file);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <p className="text-xs text-ink-faint">
+              {t("Generate a reference image from the name, description, and visual base.")}
+            </p>
+          </div>
+        </div>
+
+        {/* Section 3: State & Wardrobe */}
+        <div className="space-y-4 rounded-2xl border border-line bg-surface-raised p-5 shadow-xs">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-ink-faint">{t("Current state & wardrobe")}</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label htmlFor="entity-outfit" className="block text-sm font-semibold text-ink">
+                {t("Outfit")}
+              </label>
+              <input
+                id="entity-outfit"
+                value={draft.outfit}
+                onChange={(event) => updateDraft({ outfit: event.target.value })}
+                onBlur={() => void flush()}
+                placeholder={t("Default costume / clothing...")}
+                className={`${fieldClassName} min-h-11`}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="entity-condition" className="block text-sm font-semibold text-ink">
+                {t("Condition")}
+              </label>
+              <input
+                id="entity-condition"
+                value={draft.condition}
+                onChange={(event) => updateDraft({ condition: event.target.value })}
+                onBlur={() => void flush()}
+                placeholder={t("Physical state, injuries, mood...")}
+                className={`${fieldClassName} min-h-11`}
+              />
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -710,3 +885,4 @@ function upsertEntity(list: StudioEntity[], entity: StudioEntity) {
   const without = list.filter((item) => item.id !== entity.id);
   return [...without, entity].sort((left, right) => left.id.localeCompare(right.id));
 }
+

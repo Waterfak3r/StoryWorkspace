@@ -53,6 +53,10 @@ export function buildStoryTimeline(input: {
     intersections: events.flatMap((event) =>
       event.participantIds.map((characterId) => ({ characterId, eventId: event.id })),
     ),
+    connections: events.slice(1).map((event, index) => ({
+      fromEventId: events[index]!.id,
+      toEventId: event.id,
+    })),
   };
 }
 

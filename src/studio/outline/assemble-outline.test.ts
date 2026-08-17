@@ -116,6 +116,14 @@ describe("assembleStoryOutline", () => {
     expect(presentOn(timeline.intersections, doctor!.id, illness.id)).toBe(true);
     expect(presentOn(timeline.intersections, behrman!.id, hears.id)).toBe(true);
     expect(presentOn(timeline.intersections, doctor!.id, stays.id)).toBe(true);
+
+    expect(timeline.connections.length).toBe(timeline.events.length - 1);
+    for (let index = 0; index < timeline.connections.length; index += 1) {
+      expect(timeline.connections[index]).toEqual({
+        fromEventId: timeline.events[index]!.id,
+        toEventId: timeline.events[index + 1]!.id,
+      });
+    }
   });
 });
 

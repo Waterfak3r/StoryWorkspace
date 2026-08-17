@@ -6,8 +6,9 @@ import path from "node:path";
 import { DEFAULT_COMICS_STYLE_VISUAL, type StudioContextSnapshot, type StudioShot } from "../domain";
 import { assembleComicsBook } from "../comics/assemble-pages";
 import { compileComicsPagePrompt } from "../generate/compile-prompt";
+import { fakeImageAdapter, generateShot } from "../generate";
 import { createEntity, createProject, readScene, replaceSceneShots, updateScene } from "../fs";
-import { assignDialogueToShots, compilePageLettering, extractAttributedDialogue } from "./index";
+import { assembleProjectDialogue, assignDialogueToShots, compilePageLettering, extractAttributedDialogue } from "./index";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
@@ -125,6 +126,109 @@ describe("dialogue extract, assign, and lettering", () => {
       "I thought it would fall.",
     ]);
     expect(page!.lettering.some((balloon) => balloon.text === "Sue opens the curtain.")).toBe(false);
+  });
+
+  it("generateShot compiles attributed speech from the script, not shot action", async () => {
+    const project = createProject({ title: "Leaf Talk" });
+    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
+    const johnsy = createEntity(project.id, { kind: "character", name: "Johnsy" });
+    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      script: SCRIPT,
+      characters: [sue.id, johnsy.id],
+      expectedUpdatedAt: scene.updatedAt,
+    });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      {
+        id: "shot-01",
+        scene_id: "scene-01",
+        purpose: "Sue checks the vine",
+        action: "Sue looks at the wall.",
+        camera: "medium",
+        continuity_from: null,
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: "shot-02",
+        scene_id: "scene-01",
+        purpose: "Johnsy answers",
+        action: "Johnsy watches the leaf.",
+        camera: "close-up",
+        continuity_from: "shot-01",
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const result = await generateShot(
+      project.id,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      fakeImageAdapter,
+    );
+
+    expect(result.compiled.prompt).toContain("speech: Sue: The last leaf is still there.");
+    expect(result.compiled.prompt).toContain("speech: Johnsy: I thought it would fall.");
+    expect(result.compiled.prompt).not.toMatch(/speech: Sue looks at the wall/);
+    expect(result.compiled.prompt).not.toMatch(/speech: Johnsy watches the leaf/);
+
+    const book = assembleComicsBook(project.id);
+    expect(book.pages[0]?.lettering.map((balloon) => `${balloon.speaker}:${balloon.text}`)).toEqual([
+      "Sue:The last leaf is still there.",
+      "Johnsy:I thought it would fall.",
+    ]);
+  });
+
+  it("assembles attributed lines onto shots for the workflow dialogue stage", () => {
+    const project = createProject({ title: "Leaf Talk" });
+    const sue = createEntity(project.id, { kind: "character", name: "Sue" });
+    const johnsy = createEntity(project.id, { kind: "character", name: "Johnsy" });
+    const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
+      script: SCRIPT,
+      characters: [sue.id, johnsy.id],
+      expectedUpdatedAt: scene.updatedAt,
+    });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      {
+        id: "shot-01",
+        scene_id: "scene-01",
+        purpose: "Sue checks the vine",
+        action: "Sue looks at the wall.",
+        camera: "medium",
+        continuity_from: null,
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: "shot-02",
+        scene_id: "scene-01",
+        purpose: "Johnsy answers",
+        action: "Johnsy watches the leaf.",
+        camera: "close-up",
+        continuity_from: "shot-01",
+        status: "pending",
+        selected_image: null,
+        updatedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const dialogue = assembleProjectDialogue(project.id);
+    expect(dialogue.lineCount).toBe(2);
+    expect(dialogue.scenes[0]?.unassigned).toEqual([]);
+    expect(dialogue.scenes[0]?.shots[0]?.lines.map((line) => `${line.speaker}:${line.text}`)).toEqual([
+      "Sue:The last leaf is still there.",
+    ]);
+    expect(dialogue.scenes[0]?.shots[1]?.lines.map((line) => `${line.speaker}:${line.text}`)).toEqual([
+      "Johnsy:I thought it would fall.",
+    ]);
   });
 });
 

@@ -15,6 +15,7 @@ export {
   identityReferencePromptLines,
   MAX_ENTITY_REFERENCE_IMAGES,
 } from "./entity-references";
+export { completeEntityReference, compileEntityReferencePrompt } from "./complete-reference";
 export { fakeImageAdapter, FAKE_PNG_BYTES } from "./fake-image-adapter";
 export {
   generateShot,

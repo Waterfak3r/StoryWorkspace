@@ -21,7 +21,7 @@ test("generates a comic page on Story, locks it, and shows the lock on Workflow"
 
   await expect(page.getByRole("dialog")).toBeHidden();
   await expect(page.getByRole("heading", { name: PROJECT_TITLE })).toBeVisible();
-  await page.getByRole("button", { name: "Open" }).click();
+  await page.getByRole("article").filter({ hasText: PROJECT_TITLE }).getByRole("button", { name: "Open" }).click();
   await expect(page).toHaveURL(/\/projects\/storyboard-generate-lock(?:\?|$)/);
 
   await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story", exact: true }).click();
@@ -83,7 +83,9 @@ test("generates a comic page on Story, locks it, and shows the lock on Workflow"
   await expect(page.getByText("Locked", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Workflow", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Workflow nodes" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await page.locator("[data-pipeline-stage=comics]").click();
+  await expect(page.locator("[data-workflow-shots]")).toBeVisible();
   await expect(page.getByText("锁定", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Re-run" }).first()).toBeDisabled();
   await expect(page.getByRole("button", { name: "Unlock" }).first()).toBeVisible();

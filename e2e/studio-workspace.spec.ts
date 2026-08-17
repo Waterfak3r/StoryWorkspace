@@ -8,7 +8,7 @@ const CHARACTER_DESCRIPTION = "A night-shift lookout who keeps the harbor charts
 test.describe.configure({ mode: "serial" });
 
 async function waitForSaveState(page: Page, state: "saved" | "saving" | "conflict") {
-  await expect(page.locator("[data-save-state]")).toHaveAttribute("data-save-state", state);
+  await expect(page.locator("[data-save-state]").filter({ visible: true })).toHaveAttribute("data-save-state", state);
 }
 
 async function fillAndWaitForAutosave(
@@ -41,10 +41,10 @@ test("creates a JSON project, keeps a scene script, and keeps a character after 
 
   await expect(page.getByRole("dialog")).toBeHidden();
   await expect(page.getByRole("heading", { name: PROJECT_TITLE })).toBeVisible();
-  await page.getByRole("button", { name: "Open" }).click();
+  await page.getByRole("article").filter({ hasText: PROJECT_TITLE }).getByRole("button", { name: "Open" }).click();
   await expect(page).toHaveURL(/\/projects\/harbor-night(?:\?|$)/);
 
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story" }).click();
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story", exact: true }).click();
   await expect(page.getByRole("button", { name: "Untitled scene", exact: true })).toBeVisible();
   await expect(page.getByLabel("Script")).toBeVisible();
   await waitForSaveState(page, "saved");
@@ -100,7 +100,7 @@ test("confirms before deleting a scene and keeps the default scene after reload"
     .click();
   await expect(page).toHaveURL(/\/projects\/delete-scene-harbor(?:\?|$)/);
 
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story" }).click();
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story", exact: true }).click();
   await expect(page.getByRole("button", { name: "Untitled scene", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Add scene" }).click();
@@ -134,6 +134,6 @@ test("confirms before deleting a scene and keeps the default scene after reload"
   await expect(page.getByRole("button", { name: "Untitled scene", exact: true })).toHaveCount(1);
 
   await page.reload();
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story" }).click();
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story", exact: true }).click();
   await expect(page.getByRole("button", { name: "Untitled scene", exact: true })).toHaveCount(1);
 });

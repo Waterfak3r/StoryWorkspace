@@ -1,9 +1,11 @@
 import type {
+  ComicsStylePresetId,
   StudioContextSnapshot,
   StudioEntity,
   StudioEntityKind,
   StudioGenerateMode,
   StudioProject,
+  StudioProjectDialogue,
   StudioProjectSummary,
   StudioScene,
   StudioShot,
@@ -12,6 +14,7 @@ import type {
   StudioStoryOutline,
   StudioStoryTree,
   StudioStoryTreeVolume,
+  StudioStyle,
   StudioWorkflowNode,
 } from "@/studio/domain";
 import type { StudioParseRun } from "@/studio/parse/schemas";
@@ -235,6 +238,28 @@ export async function getStudioOutline(projectId: string): Promise<StudioStoryOu
   return data.outline;
 }
 
+export type StudioComicsStylePreset = {
+  id: ComicsStylePresetId;
+  label: string;
+  visual: string;
+};
+
+export type StudioStyleView = {
+  style: StudioStyle;
+  presets: StudioComicsStylePreset[];
+};
+
+export async function getStudioStyle(projectId: string) {
+  return studioRequest<StudioStyleView>(`/api/studio/projects/${projectId}/style`);
+}
+
+export async function saveStudioStyle(projectId: string, presetId: ComicsStylePresetId) {
+  return studioRequest<StudioStyleView>(`/api/studio/projects/${projectId}/style`, {
+    method: "PUT",
+    body: JSON.stringify({ presetId }),
+  });
+}
+
 export async function getStudioComics(projectId: string): Promise<StudioComicsBook> {
   const data = await studioRequest<{ book: StudioComicsBook }>(`/api/studio/projects/${projectId}/comics`);
   return data.book;
@@ -373,9 +398,11 @@ export function studioImageUrl(projectId: string, relativePath: string) {
 }
 
 export async function getStudioWorkflow(projectId: string) {
-  return studioRequest<{ pipeline: StudioPipelineGraph; nodes: StudioWorkflowNode[] }>(
-    `/api/studio/projects/${projectId}/workflow`,
-  );
+  return studioRequest<{
+    pipeline: StudioPipelineGraph;
+    nodes: StudioWorkflowNode[];
+    dialogue: StudioProjectDialogue;
+  }>(`/api/studio/projects/${projectId}/workflow`);
 }
 
 export async function rerunStudioWorkflowNode(projectId: string, shotId: string) {
@@ -417,6 +444,14 @@ export async function createStudioEntity(projectId: string, input: { kind: Studi
 
 export async function getStudioEntity(projectId: string, entityId: string) {
   const data = await studioRequest<{ entity: StudioEntity }>(`/api/studio/projects/${projectId}/entities/${entityId}`);
+  return data.entity;
+}
+
+export async function completeStudioEntityReference(projectId: string, entityId: string) {
+  const data = await studioRequest<{ entity: StudioEntity; relativePath: string }>(
+    `/api/studio/projects/${projectId}/entities/${entityId}/references/complete`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
   return data.entity;
 }
 

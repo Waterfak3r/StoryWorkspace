@@ -1,3 +1,4 @@
+import { assembleProjectDialogue } from "@/studio/dialogue";
 import { listWorkflowNodes } from "@/studio/generate";
 import { runStudioRoute, studioDataResponse } from "@/studio/http";
 import { assemblePipelineGraph } from "@/studio/workflow";
@@ -17,6 +18,7 @@ export async function GET(_request: Request, context: WorkflowRouteContext) {
     return studioDataResponse({
       pipeline: assemblePipelineGraph(projectId),
       nodes: listWorkflowNodes(projectId),
+      dialogue: assembleProjectDialogue(projectId),
     });
   });
 }

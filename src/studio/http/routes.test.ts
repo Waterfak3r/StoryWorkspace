@@ -9,6 +9,8 @@ import { GET as getProject } from "@/app/api/studio/projects/[projectId]/route";
 import { GET as getOutline } from "@/app/api/studio/projects/[projectId]/outline/route";
 import { GET as getComics } from "@/app/api/studio/projects/[projectId]/comics/route";
 import { POST as postEntityReference } from "@/app/api/studio/projects/[projectId]/entities/[entityId]/references/route";
+import { POST as postCompleteReference } from "@/app/api/studio/projects/[projectId]/entities/[entityId]/references/complete/route";
+import { GET as getStyle, PUT as putStyle } from "@/app/api/studio/projects/[projectId]/style/route";
 import { FAKE_PNG_BYTES } from "@/studio/generate/fake-image-adapter";
 import { GET as getTree } from "@/app/api/studio/projects/[projectId]/tree/route";
 import { POST as postVolume } from "@/app/api/studio/projects/[projectId]/volumes/route";
@@ -34,13 +36,19 @@ import { getWorkspaceRoot } from "@/studio/fs";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
+const previousUserConfig = process.env.STORY_USER_CONFIG;
+const previousImageApiKey = process.env.IMAGE_API_KEY;
+const previousAiApiKey = process.env.AI_API_KEY;
 
 let workspaceRoot = "";
 
 beforeEach(() => {
   workspaceRoot = mkdtempSync(path.join(tmpdir(), "studio-http-"));
   process.env.STORY_WORKSPACE_ROOT = workspaceRoot;
+  process.env.STORY_USER_CONFIG = path.join(workspaceRoot, "user-providers.json");
   delete process.env.STORY_WORKSPACE_DB_PATH;
+  delete process.env.IMAGE_API_KEY;
+  delete process.env.AI_API_KEY;
 });
 
 afterEach(() => {
@@ -56,6 +64,24 @@ afterEach(() => {
     delete process.env.STORY_WORKSPACE_DB_PATH;
   } else {
     process.env.STORY_WORKSPACE_DB_PATH = previousDbPath;
+  }
+
+  if (previousUserConfig === undefined) {
+    delete process.env.STORY_USER_CONFIG;
+  } else {
+    process.env.STORY_USER_CONFIG = previousUserConfig;
+  }
+
+  if (previousImageApiKey === undefined) {
+    delete process.env.IMAGE_API_KEY;
+  } else {
+    process.env.IMAGE_API_KEY = previousImageApiKey;
+  }
+
+  if (previousAiApiKey === undefined) {
+    delete process.env.AI_API_KEY;
+  } else {
+    process.env.AI_API_KEY = previousAiApiKey;
   }
 });
 
@@ -201,6 +227,56 @@ describe("studio HTTP routes", () => {
     expect(uploadedBody.data.entity.visual.references).toEqual([`assets/images/${entityId}/ref-01.png`]);
     expect(
       existsSync(path.join(getWorkspaceRoot(), "harbor-night", "assets", "images", entityId, "ref-01.png")),
+    ).toBe(true);
+  });
+
+  it("PUTs a comics style and GETs the persisted preset", async () => {
+    await postProject(jsonRequest("http://localhost/api/studio/projects", "POST", { title: "Harbor Night" }));
+    const updated = await putStyle(
+      jsonRequest("http://localhost/api/studio/projects/harbor-night/style", "PUT", { presetId: "noir-comics" }),
+      projectParams(),
+    );
+    const updatedBody = await updated.json();
+    expect(updated.status).toBe(200);
+    expect(updatedBody.data.style.presetId).toBe("noir-comics");
+    expect(updatedBody.data.style.visual).toContain("noir comics");
+    expect(updatedBody.data.presets.map((preset: { id: string }) => preset.id)).toContain("shonen-manga");
+
+    const loaded = await getStyle(
+      new Request("http://localhost/api/studio/projects/harbor-night/style"),
+      projectParams(),
+    );
+    const loadedBody = await loaded.json();
+    expect(loaded.status).toBe(200);
+    expect(loadedBody.data.style.presetId).toBe("noir-comics");
+    expect(loadedBody.data.style.visual).toBe(updatedBody.data.style.visual);
+  });
+
+  it("POSTs auto-complete to write a real entity reference image", async () => {
+    await postProject(jsonRequest("http://localhost/api/studio/projects", "POST", { title: "Harbor Night" }));
+    const created = await postEntity(
+      jsonRequest("http://localhost/api/studio/entities", "POST", { kind: "character", name: "Sue" }),
+      projectParams(),
+    );
+    const entityId = (await created.json()).data.entity.id as string;
+
+    const completed = await postCompleteReference(
+      new Request(`http://localhost/api/studio/projects/harbor-night/entities/${entityId}/references/complete`, {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ projectId: "harbor-night", entityId }) },
+    );
+    const completedBody = await completed.json();
+    expect(completed.status).toBe(201);
+    expect(completedBody.data.relativePath).toBe(`assets/images/${entityId}/ref-01.png`);
+    expect(completedBody.data.entity.visual.references).toEqual([`assets/images/${entityId}/ref-01.png`]);
+    expect(
+      existsSync(path.join(getWorkspaceRoot(), "harbor-night", "assets", "images", entityId, "ref-01.png")),
+    ).toBe(true);
+    expect(
+      readFileSync(path.join(getWorkspaceRoot(), "harbor-night", "assets", "images", entityId, "ref-01.png")).equals(
+        FAKE_PNG_BYTES,
+      ),
     ).toBe(true);
   });
 
