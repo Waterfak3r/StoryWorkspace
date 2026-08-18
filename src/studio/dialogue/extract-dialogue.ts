@@ -8,9 +8,6 @@ export type DialogueCharacterRef = {
 const ATTRIBUTION_VERBS =
   "said|says|asked|asks|whispered|whispers|cried|cries|shouted|shouts|replied|replies|answered|answers|muttered|mutters|yelled|yells|called|calls";
 
-const FEMALE_NAME_SUFFIX = /(a|ine|elle|ette|ie|y)$/i;
-const MALE_NAME_SUFFIX = /(man|son|bert|ton)$/i;
-
 const NARRATION_TEXT_MAX = 40;
 
 type FoundLine = {
@@ -38,7 +35,6 @@ export function extractAttributedDialogue(
   collectQuoteThenSaid(text, characters, found);
   collectQuoteThenNameVerb(text, characters, found);
   collectChineseSaid(text, characters, found);
-  collectPronounSaid(text, characters, found);
 
   found.sort((left, right) => left.start - right.start || right.end - left.end);
   const unique: FoundLine[] = [];
@@ -54,7 +50,7 @@ export function extractAttributedDialogue(
     if (kept.some((prior) => overlaps(prior, hit))) {
       continue;
     }
-    const body = normalizeCountSpeech(normalizeSpeechText(hit.body));
+    const body = normalizeSpeechText(hit.body);
     if (!body) {
       continue;
     }
@@ -86,8 +82,7 @@ export function extractAttributedDialogue(
     }
   }
 
-  return correctVocativeLines(
-    kept.flatMap((hit, index) => {
+  const extracted: StudioAttributedSpeechLine[] = kept.flatMap((hit, index): StudioAttributedSpeechLine[] => {
       if (hit.kind === "narration") {
         return [{
           id: `line-${String(index + 1).padStart(2, "0")}`,
@@ -114,9 +109,8 @@ export function extractAttributedDialogue(
     }).map((line, index) => ({
       ...line,
       id: `line-${String(index + 1).padStart(2, "0")}`,
-    })),
-    characters,
-  );
+    }));
+  return correctVocativeLines(extracted, characters);
 }
 
 export function correctVocativeLines(
@@ -146,23 +140,12 @@ export function correctVocativeLines(
         .map((item) => characters.find((character) => character.id === item.speakerId) ?? null)
         .find((character) => character && character.id !== lastSpeech.id);
     const next = rejectVocativeSpeaker(line.text, current, characters, lastSpeech, priorSpeech ?? null);
-    const possessed = possessionSpeaker(line.text, characters);
-    const chosen = possessed && possessed.id !== current.id ? possessed : next;
+    const chosen = next;
     if (!chosen || chosen.id === current.id) {
       return line;
     }
     return { ...line, speaker: chosen.name, speakerId: chosen.id };
   });
-}
-
-function possessionSpeaker(
-  text: string,
-  characters: readonly DialogueCharacterRef[],
-): DialogueCharacterRef | null {
-  if (/^i sold\b/i.test(text.trim())) {
-    return null;
-  }
-  return null;
 }
 
 export function normalizeSpeechText(value: string): string {
@@ -208,18 +191,7 @@ export function isScriptSubstring(text: string, script: string): boolean {
     return false;
   }
   const hay = normalizeForMatch(script);
-  if (hay.includes(needle)) {
-    return true;
-  }
-  let from = 0;
-  for (const word of needle.split(" ").filter((item) => item.length >= 3)) {
-    const index = hay.indexOf(word, from);
-    if (index < 0) {
-      return false;
-    }
-    from = index + word.length;
-  }
-  return from > 0;
+  return hay.includes(needle);
 }
 
 export function unicodeLength(value: string): number {
@@ -262,8 +234,7 @@ function collectColonLines(
 }
 
 const QUOTE_BODY = "([^「『“」』”\"]{1,400})";
-const COUNT_SPEECH = /^(twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one|leaves|\d+)[.!?]?$/i;
-const FILLER_BETWEEN = /^(then|later|after a while|a few moments later|she continued counting|he continued counting)[:.]?$/i;
+const FILLER_BETWEEN = /^(then|later|after a while|afterward|meanwhile)[:.]?$/i;
 
 function mergeSplitSpeech(found: FoundLine[], script: string): FoundLine[] {
   const merged: FoundLine[] = [];
@@ -290,7 +261,7 @@ function mergeSplitSpeech(found: FoundLine[], script: string): FoundLine[] {
 }
 
 const ATTRIBUTION_BETWEEN =
-  /^(?:,\s*)?(?:(?:she|he|i|[A-Z][A-Za-z.'-]+)\s+)?(?:said|says|asked|asks|cried|cries|whispered|whispers|replied|replies|answered|answers|muttered|mutters|shouted|shouts|yelled|yells|called|calls)?(?:\s*to\s+\w+)?[,.]?$/i;
+  /^(?:,\s*)?(?:(?:[A-Z][A-Za-z.'-]+)\s+)?(?:said|says|asked|asks|cried|cries|whispered|whispers|replied|replies|answered|answers|muttered|mutters|shouted|shouts|yelled|yells|called|calls)?(?:\s*to\s+\w+)?[,.]?$/i;
 
 const ATTRIBUTION_MARK =
   /said|says|asked|asks|cried|cries|whispered|whispers|replied|replies|answered|answers|muttered|mutters|shouted|shouts|yelled|yells|called|calls|\bto\s+\w+/i;
@@ -314,7 +285,6 @@ function collectQuotedSpeech(
   const quoteRe = new RegExp(`[「『“"]${QUOTE_BODY}[」』”"]`, "g");
   let lastSpeech: DialogueCharacterRef | null = null;
   let priorSpeech: DialogueCharacterRef | null = null;
-  let lastCountSpeaker: DialogueCharacterRef | null = null;
   let lastEnd = 0;
   for (const match of script.matchAll(quoteRe)) {
     const body = match[1] ?? "";
@@ -323,17 +293,14 @@ function collectQuotedSpeech(
     const rawBetween = script.slice(lastEnd, start);
     const attributed = speakerAroundQuote(script, start, end, characters);
     const between = stripAttributionResidue(rawBetween, characters);
-    const spoken = normalizeCountSpeech(normalizeSpeechText(body));
+    const spoken = normalizeSpeechText(body);
     const paragraphBreak = /\n\s*\n/.test(rawBetween);
-    const isCount = COUNT_SPEECH.test(spoken);
     if (isNameplateQuote(spoken) && !attributed) {
       lastEnd = end;
       continue;
     }
     let speaker = attributed;
-    if (!speaker && isCount) {
-      speaker = lastCountSpeaker ?? speakerFromProse(between, characters) ?? lastSpeech;
-    } else if (!speaker && lastSpeech && isAttributionBetween(rawBetween)) {
+    if (!speaker && lastSpeech && isAttributionBetween(rawBetween)) {
       speaker = lastSpeech;
     } else if (!speaker && lastSpeech && between && isFillerBetween(between)) {
       speaker = lastSpeech;
@@ -364,9 +331,6 @@ function collectQuotedSpeech(
       priorSpeech = lastSpeech;
     }
     lastSpeech = speaker;
-    if (isCount) {
-      lastCountSpeaker = speaker;
-    }
     lastEnd = end;
   }
 }
@@ -381,7 +345,7 @@ function speakerAroundQuote(
   const before = script.slice(Math.max(0, start - 96), start);
   const names = nameAlternation(characters);
   const afterNameVerb = after.match(
-    new RegExp(`^\\s*[,，:]?\\s*(?:(?:${ATTRIBUTION_VERBS})\\s+(${names})|(${names})\\s+(?:${ATTRIBUTION_VERBS})|(she|he)\\s+(?:${ATTRIBUTION_VERBS}))\\b`, "i"),
+    new RegExp(`^\\s*[,，:]?\\s*(?:(?:${ATTRIBUTION_VERBS})\\s+(${names})|(${names})\\s+(?:${ATTRIBUTION_VERBS}))\\b`, "i"),
   );
   if (afterNameVerb) {
     const named = (afterNameVerb[1] ?? afterNameVerb[2] ?? "").trim();
@@ -392,10 +356,6 @@ function speakerAroundQuote(
         return character;
       }
     }
-    const pronoun = (afterNameVerb[3] ?? "").trim();
-    if (pronoun) {
-      return resolvePronounSpeaker(pronoun, characters);
-    }
   }
   const beforeName = before.match(
     new RegExp(`\\b(${names})\\s+(?:${ATTRIBUTION_VERBS})[,，:]?\\s*$`, "i"),
@@ -403,10 +363,6 @@ function speakerAroundQuote(
   if (beforeName?.[1]) {
     const id = resolveSpeakerId(beforeName[1], characters);
     return characters.find((item) => item.id === id) ?? null;
-  }
-  const beforePronoun = before.match(new RegExp(`\\b(she|he)\\s+(?:${ATTRIBUTION_VERBS})[,，:]?\\s*$`, "i"));
-  if (beforePronoun?.[1]) {
-    return resolvePronounSpeaker(beforePronoun[1], characters);
   }
   return null;
 }
@@ -463,8 +419,8 @@ function stripAttributionResidue(raw: string, characters: readonly DialogueChara
   return raw
     .replace(/\s+/g, " ")
     .trim()
-    .replace(new RegExp(`^(?:${ATTRIBUTION_VERBS})\\s+(?:${names}|she|he)\\.?$`, "i"), "")
-    .replace(new RegExp(`^(?:${names}|she|he)\\s+(?:${ATTRIBUTION_VERBS})\\.?$`, "i"), "")
+    .replace(new RegExp(`^(?:${ATTRIBUTION_VERBS})\\s+(?:${names})\\.?$`, "i"), "")
+    .replace(new RegExp(`^(?:${names})\\s+(?:${ATTRIBUTION_VERBS})\\.?$`, "i"), "")
     .replace(/^[,\s]+/, "")
     .trim();
 }
@@ -507,11 +463,6 @@ function rejectVocativeSpeaker(
     return lastSpeech;
   }
   return turnTakingSpeaker(speaker, priorSpeech, characters) ?? speaker;
-}
-
-function normalizeCountSpeech(body: string): string {
-  const trimmed = body.replace(/[.!?]+$/g, "");
-  return COUNT_SPEECH.test(trimmed) ? trimmed : body;
 }
 
 function collectQuoteThenNameVerb(
@@ -574,23 +525,6 @@ function collectChineseSaid(
   pushNamedMatches(script, after, 2, 1, characters, found);
 }
 
-function collectPronounSaid(
-  script: string,
-  characters: readonly DialogueCharacterRef[],
-  found: FoundLine[],
-) {
-  const before = new RegExp(
-    `\\b(she|he)\\s+(?:${ATTRIBUTION_VERBS})[,，]?\\s*[「『“"]([^」』”"]{1,240})[」』”"]`,
-    "gi",
-  );
-  const after = new RegExp(
-    `[「『“"]([^」』”"]{1,240})[」』”"][,，]?\\s+(she|he)\\s+(?:${ATTRIBUTION_VERBS})\\b`,
-    "gi",
-  );
-  pushPronounMatches(script, before, 1, 2, characters, found);
-  pushPronounMatches(script, after, 2, 1, characters, found);
-}
-
 function pushNamedMatches(
   script: string,
   pattern: RegExp,
@@ -615,56 +549,6 @@ function pushNamedMatches(
       kind: "speech",
     });
   }
-}
-
-function pushPronounMatches(
-  script: string,
-  pattern: RegExp,
-  pronounIndex: number,
-  bodyIndex: number,
-  characters: readonly DialogueCharacterRef[],
-  found: FoundLine[],
-) {
-  for (const match of script.matchAll(pattern)) {
-    const pronoun = (match[pronounIndex] ?? "").trim();
-    const body = (match[bodyIndex] ?? "").trim();
-    const resolved = resolvePronounSpeaker(pronoun, characters);
-    if (!resolved || !body) {
-      continue;
-    }
-    const start = match.index ?? 0;
-    found.push({
-      start,
-      end: start + match[0].length,
-      speaker: resolved.name,
-      speakerId: resolved.id,
-      body,
-      kind: "speech",
-    });
-  }
-}
-
-function resolvePronounSpeaker(
-  pronoun: string,
-  characters: readonly DialogueCharacterRef[],
-): DialogueCharacterRef | null {
-  const want = /^she$/i.test(pronoun.trim()) ? "female" : "male";
-  const matches = characters.filter((character) => guessGender(character.name) === want);
-  return matches.length === 1 ? matches[0]! : null;
-}
-
-function guessGender(name: string): "female" | "male" | "unknown" {
-  const key = name.trim().toLowerCase().replace(/[^a-z\u4e00-\u9fff]+/g, "");
-  if (key.length < 2) {
-    return "unknown";
-  }
-  if (MALE_NAME_SUFFIX.test(key)) {
-    return "male";
-  }
-  if (key.length > 3 && FEMALE_NAME_SUFFIX.test(key)) {
-    return "female";
-  }
-  return "unknown";
 }
 
 function nameVariants(name: string): string[] {

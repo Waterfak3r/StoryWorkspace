@@ -14,10 +14,8 @@ import { completeJsonWithFetch } from "../parse/complete-json";
 import { isTextProviderConfigured } from "../settings";
 import { assignDialogueToShots, scoreLineAgainstShot, type DialogueShotRef } from "./assign-dialogue";
 import {
-  correctVocativeLines,
   extractAttributedDialogue,
   isScriptSubstring,
-  mergeExtractedDialogue,
   normalizeSpeechText,
   unicodeLength,
   type DialogueCharacterRef,
@@ -44,13 +42,15 @@ Return JSON only with key "lines".
 Each line needs kind, speakerId, speaker, text, shotId.
 kind is "speech" or "narration".
 speech speakerId must be one of the listed character ids. speaker is that character's name.
-The speaker is the person who UTTERS the line, not the person addressed. "Jim, darling" spoken by Della is Della. "Dell," said he is Jim.
-Do not extract nameplates, mailbox cards, titles, or signs as speech (for example "Mr. James Dillingham Young.").
-Keep a quoted sentence together. Do not split "If Jim doesn't kill me... chorus girl" into two speakers.
+The speaker is the person who utters the line, not the person addressed. A name at the start or end of a line may be a vocative; use attribution verbs and nearby evidence to identify the utterer.
+Do not extract nameplates, labels, titles, or signs as speech.
+Keep a quoted sentence together. Do not split one sentence into multiple speakers.
 narration speakerId must be null. speaker may be 旁白 or narrator. Narration is a short time/place/voice-over, at most 40 characters. Do not extract long description.
 text must be a verbatim substring of the script. Do not paraphrase or invent wording.
-shotId may be a listed shot id or null.
+shotId may be a listed shot id or null; preserve a valid shotId when the evidence supports it.
 No extra keys. No secrets.`;
+
+type DialogueCandidate = StudioAttributedSpeechLine & { shotId: string | null };
 
 export async function confirmSceneDialogue(
   projectId: string,
@@ -138,7 +138,7 @@ export function reassignSceneDialogue(
     scene.dialogue.lines.find((line) => line.eventId?.trim())?.eventId ??
     timelineEventId({ volumeId, chapterId, sceneId });
   const lines = assignConfirmedLines(
-    scene.dialogue.lines.map(toSpeechLine),
+    scene.dialogue.lines.map(toDialogueCandidate),
     scene.shots,
     eventId,
   );
@@ -155,14 +155,15 @@ export function reassignSceneDialogue(
 async function extractSceneDialogue(
   scene: StudioScene,
   characters: readonly DialogueCharacterRef[],
-): Promise<StudioAttributedSpeechLine[]> {
-  const quoted = extractAttributedDialogue(scene.script, characters);
+): Promise<DialogueCandidate[]> {
+  const quoted = extractAttributedDialogue(scene.script, characters).map((line) => ({ ...line, shotId: null }));
   if (!isTextProviderConfigured()) {
     return quoted;
   }
   try {
-    const llmLines = await extractDialogueWithLlm(scene, characters);
-    return correctVocativeLines(mergeExtractedDialogue(quoted, llmLines), characters);
+    // The provider is the semantic path. The deterministic extractor is only a
+    // conservative fallback when the provider is unavailable or fails.
+    return await extractDialogueWithLlm(scene, characters);
   } catch {
     return quoted;
   }
@@ -171,7 +172,7 @@ async function extractSceneDialogue(
 async function extractDialogueWithLlm(
   scene: StudioScene,
   characters: readonly DialogueCharacterRef[],
-): Promise<StudioAttributedSpeechLine[]> {
+): Promise<DialogueCandidate[]> {
   const raw = await completeJsonWithFetch(
     llmDialogueProposalSchema,
     [
@@ -196,8 +197,9 @@ async function extractDialogueWithLlm(
     return [];
   }
 
-  const accepted: StudioAttributedSpeechLine[] = [];
+  const accepted: DialogueCandidate[] = [];
   const knownIds = new Set(characters.map((character) => character.id));
+  const knownShotIds = new Set(scene.shots.map((shot) => shot.id));
   for (const line of parsed.data.lines) {
     const text = normalizeSpeechText(line.text);
     if (!text || !isScriptSubstring(text, scene.script)) {
@@ -214,6 +216,7 @@ async function extractDialogueWithLlm(
         text,
         kind: "narration",
         eventId: "",
+        shotId: line.shotId && knownShotIds.has(line.shotId) ? line.shotId : null,
       });
       continue;
     }
@@ -231,20 +234,23 @@ async function extractDialogueWithLlm(
       text,
       kind: "speech",
       eventId: "",
+      shotId: line.shotId && knownShotIds.has(line.shotId) ? line.shotId : null,
     });
   }
   return accepted;
 }
 
 function assignConfirmedLines(
-  extracted: readonly StudioAttributedSpeechLine[],
+  extracted: readonly DialogueCandidate[],
   shots: StudioScene["shots"],
   eventId: string,
 ): StudioSceneDialogueLine[] {
+  const validShotIds = new Set(shots.map((shot) => shot.id));
   const stamped = extracted.map((line) => ({
     ...line,
     kind: line.kind ?? "speech",
     eventId,
+    shotId: line.shotId && validShotIds.has(line.shotId) ? line.shotId : null,
   }));
 
   if (shots.length === 0) {
@@ -258,13 +264,14 @@ function assignConfirmedLines(
   }
 
   const kept: StudioSceneDialogueLine[] = [];
-  const overflow: StudioAttributedSpeechLine[] = [];
+  const overflow: DialogueCandidate[] = [];
 
   for (const assignment of assigned) {
     for (const line of assignment.lines) {
       const kind = line.kind ?? "speech";
-      const next: StudioAttributedSpeechLine = { ...line, kind, eventId };
-      if (tryPlaceLine(kept, used, next, eventId, assignment.shotId)) {
+      const next: DialogueCandidate = { ...line, kind, eventId, shotId: line.shotId ?? null };
+      const preferredShotId = next.shotId && validShotIds.has(next.shotId) ? next.shotId : assignment.shotId;
+      if (tryPlaceLine(kept, used, next, eventId, preferredShotId)) {
         continue;
       }
       overflow.push(next);
@@ -337,6 +344,10 @@ function toSpeechLine(line: StudioSceneDialogueLine): StudioAttributedSpeechLine
     kind: line.kind ?? "speech",
     eventId: line.eventId ?? "",
   };
+}
+
+function toDialogueCandidate(line: StudioSceneDialogueLine): DialogueCandidate {
+  return { ...toSpeechLine(line), shotId: line.shotId };
 }
 
 function loadSceneCharacters(projectId: string, ids: readonly string[]) {

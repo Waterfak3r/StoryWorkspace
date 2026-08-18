@@ -141,7 +141,7 @@ export function compileComicsPagePrompt(
     pageLayoutLine(snapshots.length, options.layout, options.compose),
     "Reading order: left to right, then top to bottom. Separate panels with clear ink gutters.",
     "Keep character likeness, costume, and comic style identical across every panel on this page.",
-    "If an entity lists a condition, that current state overrides the reference image for that aspect (hair length, injury, outfit wear).",
+    "If an entity lists a current state, that state overrides any identity fragment named in supersedes.",
     castNames.length > 0
       ? `Cast (draw only these people, no extras): ${castNames.join(", ")}.`
       : "Do not invent extra people.",
@@ -215,8 +215,9 @@ function formatEntityLines(entities: ReturnType<typeof entitiesForShot>): string
   return entities.map((entity) => {
     const kindLabel = entity.kind === "costume" ? "costume reference" : entity.kind;
     const references = entity.visual.references.filter((ref) => ref.trim().length > 0);
-    const description = suppressOverriddenAspects(entity.description, entity.state.condition);
-    const visualBase = suppressOverriddenAspects(entity.visual.base, entity.state.condition);
+    const supersedes = entity.state.supersedes ?? [];
+    const description = suppressOverriddenAspects(entity.description, supersedes);
+    const visualBase = suppressOverriddenAspects(entity.visual.base, supersedes);
     const identity = visualBase ? `identity lock ${entity.name}: ${visualBase}` : "";
     return [
       `${kindLabel} ${entity.name}: ${description}`.trim(),
@@ -225,31 +226,34 @@ function formatEntityLines(entities: ReturnType<typeof entitiesForShot>): string
       references.length > 0 ? `reference: ${references.join(", ")}` : "",
       entity.state.outfit ? `outfit: ${entity.state.outfit}` : "",
       entity.state.condition ? `condition: ${entity.state.condition}` : "",
+      entity.state.note ? `state note: ${entity.state.note}` : "",
     ]
       .filter(Boolean)
       .join("; ");
   });
 }
 
-const CONDITION_ASPECTS: { condition: RegExp; drop: RegExp }[] = [
-  { condition: /\bhair\b|\bcurl|\bshorn|\bshav/i, drop: /\bhair\b|\bcurl|\bshorn|\bshav/i },
-  { condition: /\bwound|\bscar|\bblood|\binjur/i, drop: /\bwound|\bscar|\bblood|\binjur/i },
-];
-
-export function suppressOverriddenAspects(text: string, condition: string): string {
+export function suppressOverriddenAspects(text: string, supersedes: readonly string[] | string): string {
   const source = text.trim();
-  if (!source || !condition.trim()) {
+  const fragments = (typeof supersedes === "string" ? [supersedes] : supersedes)
+    .map((fragment) => fragment.trim())
+    .filter(Boolean);
+  if (!source || fragments.length === 0) {
     return text;
   }
-  const aspects = CONDITION_ASPECTS.filter((item) => item.condition.test(condition));
-  if (aspects.length === 0) {
-    return text;
-  }
+  const foldedFragments = fragments.map((fragment) => normalizePromptText(fragment));
   const kept = source
     .split(/(?<=[,.;])\s+/)
     .map((part) => part.trim())
-    .filter((part) => part.length > 0 && !aspects.some((item) => item.drop.test(part)));
+    .filter((part) => {
+      const folded = normalizePromptText(part);
+      return part.length > 0 && !foldedFragments.some((fragment) => folded.includes(fragment));
+    });
   return kept.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
+function normalizePromptText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function pageLayoutLine(panelCount: number, layout?: PageLayout, compose?: ComposeMode): string {

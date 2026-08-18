@@ -8,7 +8,11 @@ export type DialogueShotRef = {
 
 export type ShotDialogueAssignment = {
   shotId: string;
-  lines: StudioAttributedSpeechLine[];
+  lines: DialogueAssignmentLine[];
+};
+
+export type DialogueAssignmentLine = StudioAttributedSpeechLine & {
+  shotId?: string | null;
 };
 
 const SOFT_FILL_PER_SHOT = 3;
@@ -47,14 +51,14 @@ const STOPWORDS = new Set([
 ]);
 
 export function assignDialogueToShots(
-  lines: readonly StudioAttributedSpeechLine[],
+  lines: readonly DialogueAssignmentLine[],
   shots: readonly DialogueShotRef[],
 ): ShotDialogueAssignment[] {
   if (shots.length === 0) {
     return [];
   }
 
-  const buckets = new Map<string, StudioAttributedSpeechLine[]>();
+  const buckets = new Map<string, DialogueAssignmentLine[]>();
   const counts = new Map<string, number>();
   for (const shot of shots) {
     buckets.set(shot.id, []);

@@ -491,6 +491,8 @@ export const contentStatePatchSchema = z.strictObject({
   outfit: z.string().optional(),
   condition: z.string().optional(),
   note: z.string().optional(),
+  /** Exact identity fragments that this scene state supersedes for rendering. */
+  supersedes: z.array(z.string().min(1)).optional(),
   truth: z.enum(["canon", "inferred"]),
 });
 
@@ -523,7 +525,12 @@ export const contextSnapshotEntitySchema = z.strictObject({
   name: z.string(),
   description: z.string(),
   visual: entityVisualSchema,
-  state: entityDefaultStateSchema,
+  state: z.strictObject({
+    outfit: z.string(),
+    condition: z.string(),
+    note: z.string().optional(),
+    supersedes: z.array(z.string()).optional(),
+  }),
 });
 
 export const contextSnapshotSchema = z.strictObject({

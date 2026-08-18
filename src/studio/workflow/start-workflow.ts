@@ -3,10 +3,9 @@ import "server-only";
 import { planScenePages } from "../comics/plan-pages";
 import { confirmSceneDialogue, reassignSceneDialogue, sceneHasUnassignedSpeech } from "../dialogue";
 import { directSceneAsync, type SceneDirector } from "../director";
-import { STUDIO_ENTITY_KINDS } from "../domain";
-import { listEntities, readScene, readStyle, readTree, replaceSceneShots, updateScene } from "../fs";
+import { readScene, readStyle, readTree, replaceSceneShots } from "../fs";
 import { listScenesInStoryOrder } from "../state/story-order";
-import { nameAppearsInText, scriptMostlyCoveredBy } from "../parse/preserve-scripts";
+import { scriptMostlyCoveredBy } from "../parse/preserve-scripts";
 import type { ImageAdapter } from "../generate/adapter";
 import { generateShot } from "../generate/generate-shot";
 import { comicsCurrentPagePath, isRenderableComicsFile } from "../generate/image-output";
@@ -32,33 +31,42 @@ export async function startWorkflow(
   const confirmed: string[] = [];
   const generated: string[] = [];
   const skipped: string[] = [];
-  const { writeInferredSceneStates } = await import("../state/infer-scene-state");
-  writeInferredSceneStates(projectId);
-  attachMentionedEntities(projectId);
+  const { writeInferredSceneStatesAsync } = await import("../state/infer-scene-state");
+  await writeInferredSceneStatesAsync(projectId);
 
   const layout = readStyle(projectId).layout;
   const storyScenes = listScenesInStoryOrder(projectId);
 
+  // Parse evidence first. The first pass may leave dialogue unassigned; shot
+  // references are attached only after a storyboard exists.
   for (const located of storyScenes) {
-        let scene = readScene(projectId, located.volumeId, located.chapterId, located.scene.id);
-        if (scene.shots.length === 0) {
-          if (scriptMostlyCoveredBy(scene.script, directedScripts(projectId))) {
-            skipped.push(scene.id);
-            continue;
-          }
-          scene = await directSceneAsync(projectId, located.volumeId, located.chapterId, scene.id, options.director);
-          directed.push(scene.id);
-        }
-        if (scene.shots.length > 0 && scene.dialogue.status !== "confirmed") {
-          scene = await confirmSceneDialogue(projectId, located.volumeId, located.chapterId, scene.id);
-          confirmed.push(scene.id);
-        } else if (scene.shots.length > 0 && scene.dialogue.status === "confirmed") {
-          const hadUnassigned = sceneHasUnassignedSpeech(scene);
-          scene = reassignSceneDialogue(projectId, located.volumeId, located.chapterId, scene.id);
-          if (hadUnassigned) {
-            confirmed.push(scene.id);
-          }
-        }
+    const scene = readScene(projectId, located.volumeId, located.chapterId, located.scene.id);
+    if (scene.dialogue.status !== "confirmed") {
+      await confirmSceneDialogue(projectId, located.volumeId, located.chapterId, scene.id);
+      confirmed.push(scene.id);
+    }
+  }
+
+  for (const located of storyScenes) {
+    let scene = readScene(projectId, located.volumeId, located.chapterId, located.scene.id);
+    if (scene.shots.length > 0) {
+      continue;
+    }
+    if (scriptMostlyCoveredBy(scene.script, directedScripts(projectId))) {
+      skipped.push(scene.id);
+      continue;
+    }
+    scene = await directSceneAsync(projectId, located.volumeId, located.chapterId, scene.id, options.director);
+    directed.push(scene.id);
+  }
+
+  for (const located of listScenesInStoryOrder(projectId)) {
+    const scene = readScene(projectId, located.volumeId, located.chapterId, located.scene.id);
+    if (scene.shots.length === 0 || scene.dialogue.status !== "confirmed" || !sceneHasUnassignedSpeech(scene)) {
+      continue;
+    }
+    reassignSceneDialogue(projectId, located.volumeId, located.chapterId, scene.id);
+    confirmed.push(scene.id);
   }
 
   for (const located of listScenesInStoryOrder(projectId)) {
@@ -127,79 +135,6 @@ function currentPageExists(projectId: string, pageId: string): boolean {
   } catch {
     return false;
   }
-}
-
-function attachMentionedEntities(projectId: string): void {
-  const catalog = STUDIO_ENTITY_KINDS.flatMap((kind) => listEntities(projectId, kind));
-  const tree = readTree(projectId);
-  for (const volume of tree.volumes) {
-    for (const chapter of volume.chapters) {
-      for (const sceneNode of chapter.scenes) {
-        const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
-        if (!scene.script.trim()) {
-          continue;
-        }
-        const characters = unionNamed(scene.characters, catalog, "character", scene.script);
-        const props = unionNamed(scene.props, catalog, "prop", scene.script);
-        const costumes = unionNamed(scene.costumes, catalog, "costume", scene.script);
-        const location =
-          scene.location ??
-          catalog.find((entity) => entity.kind === "location" && entityNamedInScript(scene.script, entity.name))?.id ??
-          null;
-        if (
-          characters.join("\0") === scene.characters.join("\0") &&
-          props.join("\0") === scene.props.join("\0") &&
-          costumes.join("\0") === scene.costumes.join("\0") &&
-          location === scene.location
-        ) {
-          continue;
-        }
-        updateScene(projectId, volume.id, chapter.id, scene.id, {
-          characters,
-          location,
-          props,
-          costumes,
-          expectedUpdatedAt: scene.updatedAt,
-        });
-      }
-    }
-  }
-}
-
-function entityNamedInScript(script: string, name: string): boolean {
-  const foldedName = name
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}']+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const hay = ` ${script.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, " ").replace(/\s+/g, " ")} `;
-  if (foldedName && hay.includes(` ${foldedName} `)) {
-    return true;
-  }
-  const tokens = foldedName.split(" ").filter((token) => token.length >= 4);
-  if (tokens.length === 0) {
-    return nameAppearsInText(script, name);
-  }
-  const noun = tokens[tokens.length - 1]!;
-  return hay.includes(` ${noun} `);
-}
-
-function unionNamed(
-  current: readonly string[],
-  catalog: readonly { id: string; kind: string; name: string }[],
-  kind: string,
-  script: string,
-): string[] {
-  const next = [...current];
-  const seen = new Set(current);
-  for (const entity of catalog) {
-    if (entity.kind !== kind || seen.has(entity.id) || !entityNamedInScript(script, entity.name)) {
-      continue;
-    }
-    seen.add(entity.id);
-    next.push(entity.id);
-  }
-  return next;
 }
 
 function directedScripts(projectId: string): string[] {

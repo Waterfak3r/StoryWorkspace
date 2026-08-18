@@ -43,6 +43,7 @@
 - 只借概念、已在 `src/studio` 重写：Context Resolver、Entity 身份 vs 场引用、可编辑 Storyboard、Compiler/Adapter、Lock/Retry、Workflow node。
 - 不搬进主路径：SQLite schema、章节/大纲/圣经/改编产品页、Phase 0–5C 路由、Fake Video 页。
 - 保存正文不阻塞 AI。LLM 输出先过 Zod。Canon 与推断可区分。
+- AI 理解契约：Parse、Story State、对白抽取/赋格、Director 都走通用 Prompt → 结构化 JSON → Zod 校验 → 文件落盘；生产代码不得出现测试剧本的人名、道具、台词或情节正则。无文本 Provider 时只能保守保留证据、按原文顺序映射或返回空推断，不得伪造剧情事实。
 
 ## 简历级定位
 
@@ -70,7 +71,7 @@
 | 漫画风格选择 | 项目可选漫画风格并持久化；编译页请求包含所选风格文本。页内文字、生图单位、版式随风格持久化 |
 | 实体参考图自动完善 | 无参考图的实体可自动生成真实落盘图片；后续整页生图把图片字节发给 Image adapter |
 | 全本摄入 | 粘贴长文后确认，得到可复用的环境 / 情节 / 实体，供分镜与生图直接引用 |
-| 艺术分镜 | Director 可接大模型；机位有景别与运动，服务情节 |
+| 艺术分镜 | Director 可接大模型；机位有景别与运动，服务已解析的事件、实体、时间与确认对白，不重新扫描原剧本 |
 | 漫画页 | 默认 Image API 直接生成一页多格连环画；`compose=panels` 时逐格再合成。版式可选固定 2/3/4、导演 2–4（`auto`）、或整页模式下的漫威不规则分格。Outputs 只汇编 `current/`，一页一图 |
 
 ## 当前限制（随用户决策补充）
@@ -110,8 +111,8 @@ Workflow 是演示核心：能看见节点状态，能重跑某个 Shot，能看
 文本 / 导入
   → AI Parse（Scene + Entity）→ 人工确认
   → Scene 编辑（剧本 + Intent + 挂实体）
-  → AI Director → Storyboard（可改）
-  → 对话处理：抽词并确认到场×人物×格（此后不再扫剧本）
+  → Story State / 对白处理（LLM JSON + Zod，确认到场×人物）
+  → AI Director（只消费已解析事件、实体、时间、对白）→ Storyboard（可改）
   → Context Resolver（实体 + 叠后状态 + 前情 + 确认对白）
   → Prompt Compiler（按 compose/layout）→ Image API（整页一次，或逐格再拼）
   → 当前页进 current/；旧稿进 archive/

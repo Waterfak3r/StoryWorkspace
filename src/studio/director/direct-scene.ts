@@ -3,7 +3,7 @@ import "server-only";
 import { planScenePages } from "../comics/plan-pages";
 import { isStudioSlug, nextNumberedId, type StudioScene, type StudioShot, type StudioShotStatus } from "../domain";
 import { StudioValidationError } from "../errors";
-import { readScene, readStyle, replaceSceneShots } from "../fs";
+import { readContentState, readEntity, readScene, readStyle, replaceSceneShots } from "../fs";
 
 export type DirectorShotDraft = {
   id?: string;
@@ -52,23 +52,26 @@ export function ensureArtisticCameras(drafts: readonly DirectorShotDraft[]): Dir
 }
 
 export function defaultDirector(scene: StudioScene): DirectorShotDraft[] {
-  const parts = splitSceneScript(scene.script);
-  return parts.map((action, index, all) => {
-    const first = index === 0;
-    const last = index === all.length - 1;
-    const preview = action.replace(/\s+/g, " ").slice(0, 56);
-    return {
-      id: numberedShotId(index + 1),
-      purpose: first
-        ? `Establish ${scene.title || "the scene"}`
-        : last
-          ? `Close ${scene.title || "the scene"}`
-          : `Advance the plot: ${preview}`,
-      action,
-      camera: ARTISTIC_CAMERAS[index % ARTISTIC_CAMERAS.length]!,
-      continuity_from: first ? null : numberedShotId(index),
-    };
-  });
+  const title = scene.title.trim() || "the scene";
+  const intent = scene.intent.trim() || `Establish ${title}`;
+  const dialogue = scene.dialogue.lines
+    .map((line) => line.text.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  const actions = [
+    `Establish ${title}: ${intent}`,
+    ...(dialogue.length > 0 ? dialogue.map((line) => `Frame the confirmed line: ${line}`) : [`Hold the scene's central beat.`]),
+  ].slice(0, MAX_DEFAULT_SHOTS);
+  if (actions.length < 2) {
+    actions.push(`Close ${title} while preserving the established intent.`);
+  }
+  return actions.map((action, index) => ({
+    id: numberedShotId(index + 1),
+    purpose: index === 0 ? `Establish ${title}` : index === actions.length - 1 ? `Close ${title}` : `Advance ${title}`,
+    action,
+    camera: ARTISTIC_CAMERAS[index % ARTISTIC_CAMERAS.length]!,
+    continuity_from: index === 0 ? null : numberedShotId(index),
+  }));
 }
 
 export function directScene(
@@ -103,8 +106,53 @@ export async function directSceneAsync(
   }
 
   const { llmDirector } = await import("./llm-director");
-  const drafts = await llmDirector(scene);
+  const drafts = await llmDirector(scene, directorEvidence(projectId, volumeId, chapterId, scene));
   return persistDirectorDrafts(projectId, volumeId, chapterId, sceneId, scene, drafts);
+}
+
+function directorEvidence(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  scene: StudioScene,
+): import("./llm-director").DirectorEvidence {
+  const ids = [
+    ...scene.characters,
+    ...(scene.location ? [scene.location] : []),
+    ...scene.props,
+    ...scene.costumes,
+  ];
+  const entities = ids.flatMap((id) => {
+    try {
+      const entity = readEntity(projectId, id);
+      return [
+        {
+          id: entity.id,
+          kind: entity.kind,
+          name: entity.name,
+          description: entity.description,
+          outfit: entity.states.default.outfit,
+          condition: entity.states.default.condition,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+  const state = readContentState(projectId, volumeId, chapterId, scene.id);
+  const stateSummary =
+    state?.patches
+      .map((patch) =>
+        [patch.entityId, patch.outfit, patch.condition, patch.note].filter((value) => Boolean(value)).join(" | "),
+      )
+      .filter(Boolean)
+      .join("; ") ?? "";
+  return {
+    entities,
+    stateSummary,
+    timeSummary: `${volumeId} / ${chapterId}`,
+    eventSummary: scene.intent,
+  };
 }
 
 function persistDirectorDrafts(
@@ -162,31 +210,3 @@ function numberedShotId(n: number): string {
 }
 
 const MAX_DEFAULT_SHOTS = 6;
-
-function splitSceneScript(script: string): string[] {
-  const trimmed = script.trim();
-  const paragraphs = trimmed.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
-  const sentences = trimmed.split(/(?<=[.!?。！？])\s+/).map((part) => part.trim()).filter(Boolean);
-  const parts = paragraphs.length >= 2 ? paragraphs : sentences.length >= 2 ? sentences : [];
-  if (parts.length >= 2) {
-    return chunkParts(parts, MAX_DEFAULT_SHOTS);
-  }
-
-  if (trimmed) {
-    return [trimmed, "The moment holds."];
-  }
-
-  return ["The scene opens.", "The scene closes."];
-}
-
-function chunkParts(parts: readonly string[], maxChunks: number): string[] {
-  if (parts.length <= maxChunks) {
-    return [...parts];
-  }
-  const chunkSize = Math.ceil(parts.length / maxChunks);
-  const chunks: string[] = [];
-  for (let index = 0; index < parts.length; index += chunkSize) {
-    chunks.push(parts.slice(index, index + chunkSize).join(" "));
-  }
-  return chunks;
-}

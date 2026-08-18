@@ -100,9 +100,11 @@ export function buildContextSnapshot(input: {
 function stackedEntityState(
   entity: StudioEntity,
   patches: readonly StudioContentStatePatch[],
-): { outfit: string; condition: string } {
+): { outfit: string; condition: string; note: string; supersedes: string[] } {
   let outfit = entity.states.default.outfit;
   let condition = entity.states.default.condition;
+  let note = "";
+  let supersedes: string[] = [];
   for (const patch of patches) {
     if (patch.entityId !== entity.id) {
       continue;
@@ -113,8 +115,14 @@ function stackedEntityState(
     if (patch.condition !== undefined) {
       condition = patch.condition;
     }
+    if (patch.note !== undefined) {
+      note = patch.note;
+    }
+    if (patch.supersedes && patch.supersedes.length > 0) {
+      supersedes = [...new Set([...supersedes, ...patch.supersedes])];
+    }
   }
-  return { outfit, condition };
+  return { outfit, condition, note, supersedes };
 }
 
 function priorStoryScenes(

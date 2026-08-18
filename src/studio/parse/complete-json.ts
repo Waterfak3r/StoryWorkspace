@@ -8,15 +8,15 @@ import type { CompleteJson } from "./schemas";
 
 const MAX_PROVIDER_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 300_000;
-const SYSTEM_PROMPT = `Split the story into volumes, chapters, and scenes, then list entities. Return JSON only. Do not include secrets or API keys.
-You must divide the whole story yourself: every scene needs volumeName and chapterName. Start a new chapter when the plot, place, or time shifts. If someone leaves home for a shop or street, that visit is its own scene. Do not jump from a decision beat to “when they reached home”. Do not put the entire story in one chapter if it has more than two beats.
+const SYSTEM_PROMPT = `Split the supplied source into volumes, chapters, and scenes, then list entities. Return JSON only. Do not include secrets or API keys.
+Divide the whole source yourself: every scene needs volumeName and chapterName. Start a new chapter when the plot, place, or time shifts. Preserve meaningful transitions between distinct locations or time periods. Do not collapse multiple beats into one scene.
 Each scene script must copy the original wording for that scene, including ALL dialogue and action lines.
 Do not summarize, paraphrase, or omit spoken lines. Keep the source language.
 title and intent may be short; script may not.
 Clothing and wearable items are kind "costume" entities: put them in proposedEntities and attach via costumeNames.
 Do not fold clothing only into a character description or outfit text.
-Entity description is first stable appearance only. Do not write later haircuts, injuries, deaths, or sold objects into identity.
-Treasured objects that matter later (a gold watch, a set of combs) are props even if sold later.
+Entity description is the first stable appearance only. Do not write later changes, injuries, deaths, or exchanged objects into the identity.
+Objects that matter later remain props even if their ownership changes.
 Location descriptions must include room layout: door, windows, furniture left/right.`;
 
 const CHAT_JSON_CONTRACT = `Return JSON only with exactly these top-level keys: proposedScenes, proposedEntities.
@@ -38,10 +38,7 @@ Rules:
 - Keep the source language
 - title and intent may be short; script may not
 - No extra keys
-- Return JSON only
-
-Example:
-{"proposedScenes":[{"key":"scene-a","title":"Harbor watch","script":"Jill: \\"Any ships?\\"\\nJill: \\"None yet.\\"","intent":"Night.","characterNames":["Jill"],"locationName":"Harbor","propNames":["Lantern"],"costumeNames":["Watch coat"],"volumeName":"Volume 1","chapterName":"Harbor night"}],"proposedEntities":[{"key":"ent-jill","kind":"character","name":"Jill","description":"Lookout"},{"key":"ent-lantern","kind":"prop","name":"Lantern","description":"Oil lamp"},{"key":"ent-coat","kind":"costume","name":"Watch coat","description":"Heavy navy coat"}]}`;
+- Return JSON only`;
 
 const CHAT_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CHAT_JSON_CONTRACT}`;
 

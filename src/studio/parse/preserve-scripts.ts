@@ -59,7 +59,6 @@ const STOPWORDS = new Set([
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
-
 function hasDialogueMark(text: string): boolean {
   for (const ch of text) {
     if (DIALOGUE_MARKS.has(ch)) {
@@ -449,108 +448,33 @@ export function preserveProposalScripts(
 ): LlmParseProposal {
   const scripts = proposal.proposedScenes.map((scene) => scene.script);
   if (scriptsCoverSource(sourceText, scripts)) {
-    return withSettingShiftScenes(proposal);
+    return proposal;
   }
 
   const scenes = proposal.proposedScenes;
   if (scenes.length >= 2) {
     const aligned = alignScenesToSource(sourceText, proposal);
     if (aligned && scriptsCoverSource(sourceText, aligned.map((scene) => scene.script))) {
-      return withSettingShiftScenes({
+      return {
         proposedEntities: proposal.proposedEntities,
         proposedScenes: aligned,
-      });
+      };
     }
 
     const chunks = splitSourceIntoChunks(sourceText, scenes.length);
     if (chunks && scriptsCoverSource(sourceText, chunks)) {
-      return withSettingShiftScenes({
+      return {
         proposedEntities: proposal.proposedEntities,
         proposedScenes: scenes.map((scene, index) =>
           rebindSceneToChunk(scene, chunks[index] ?? scene.script, proposal, sourceText),
         ),
-      });
+      };
     }
   }
 
-  return withSettingShiftScenes({
-    proposedEntities: proposal.proposedEntities,
-    proposedScenes: [collapseToSourceScene(sourceText, scenes)],
-  });
-}
-
-function withSettingShiftScenes(proposal: LlmParseProposal): LlmParseProposal {
   return {
     proposedEntities: proposal.proposedEntities,
-    proposedScenes: splitScenesOnSettingShifts(proposal.proposedScenes),
+    proposedScenes: [collapseToSourceScene(sourceText, scenes)],
   };
 }
 
-const SETTING_SHIFT_SPLITS = [
-  /\n(?=Where [^\n]{0,120}sign read)/i,
-  /\n(?=When [A-Z][\w'. -]{0,40} reached home\b)/,
-];
-
-function splitScenesOnSettingShifts(scenes: ProposedScene[]): ProposedScene[] {
-  const next: ProposedScene[] = [];
-  for (const scene of scenes) {
-    const parts = splitScriptOnSettingShifts(scene.script);
-    if (parts.length < 2) {
-      next.push(scene);
-      continue;
-    }
-    for (const [index, script] of parts.entries()) {
-      next.push({
-        ...scene,
-        key: index === 0 ? scene.key : slugSceneKey(`${scene.key}-shift-${index}`),
-        title: index === 0 ? scene.title : settingShiftTitle(script, scene.title, index),
-        script,
-        locationName: locationNameForShift(script, scene.locationName),
-      });
-    }
-  }
-  return next;
-}
-
-function splitScriptOnSettingShifts(script: string): string[] {
-  let parts = [script];
-  for (const pattern of SETTING_SHIFT_SPLITS) {
-    parts = parts.flatMap((chunk) => {
-      const pieces = chunk.split(pattern).map((item) => item.trim()).filter(Boolean);
-      if (pieces.length < 2 || pieces.some((item) => item.length < 120)) {
-        return [chunk];
-      }
-      return pieces;
-    });
-  }
-  return parts;
-}
-
-function settingShiftTitle(script: string, fallback: string, index: number): string {
-  const sign = script.match(/sign read:\s*[“"]([^”"]{2,60})[”"]/i);
-  if (sign?.[1]) {
-    return sign[1].split(".")[0]!.trim();
-  }
-  if (/reached home/i.test(script.slice(0, 80))) {
-    return `${fallback} — home`;
-  }
-  return `${fallback} ${index + 1}`;
-}
-
-function locationNameForShift(script: string, fallback: string | null): string | null {
-  const sign = script.match(/sign read:\s*[“"]([^”"]{2,60})[”"]/i);
-  if (sign?.[1]) {
-    return sign[1].split(".")[0]!.trim();
-  }
-  return fallback;
-}
-
-function slugSceneKey(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 63);
-  return slug || "scene-shift";
-}

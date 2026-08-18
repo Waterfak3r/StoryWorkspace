@@ -665,13 +665,15 @@ function harborProposal() {
         locationName: "Harbor",
         propNames: ["Lantern"],
         costumeNames: ["Watch coat"],
+        volumeName: "Volume 1",
+        chapterName: "Harbor night",
       },
     ],
     proposedEntities: [
-      { key: "ent-jill", kind: "character", name: "Jill", description: "A night lookout." },
-      { key: "ent-harbor", kind: "location", name: "Harbor", description: "Foggy quay." },
-      { key: "ent-lantern", kind: "prop", name: "Lantern", description: "Oil lamp." },
-      { key: "ent-coat", kind: "costume", name: "Watch coat", description: "Heavy navy coat." },
+      { key: "ent-jill", kind: "character" as const, name: "Jill", description: "A night lookout." },
+      { key: "ent-harbor", kind: "location" as const, name: "Harbor", description: "Foggy quay." },
+      { key: "ent-lantern", kind: "prop" as const, name: "Lantern", description: "Oil lamp." },
+      { key: "ent-coat", kind: "costume" as const, name: "Watch coat", description: "Heavy navy coat." },
     ],
   };
 }

@@ -19,15 +19,29 @@ const directorProposalSchema = z.strictObject({
     .min(2),
 });
 
-const DIRECTOR_SYSTEM = `You are a comic-book storyboard director. Split the scene into cinematic stills.
+const DIRECTOR_SYSTEM = `You are a comic-book storyboard director. Turn the supplied structured scene evidence into cinematic stills.
 Return JSON only with key "shots". Each shot needs purpose, action, camera.
 Cameras must vary and name a framing or move: wide, medium, close-up, low angle, high angle, over-the-shoulder, insert, push-in, or hold.
-Action must follow the scene plot wording, not invent a new story.
-If the script leaves one place for another (shop, street, stair), give the visit its own shots. Do not skip a place change.
-If the scene has many quoted speeches, give important exchanges their own shots so dialogue is not leftover.
+Action must follow the supplied intent, entities, state summary, event summary, and confirmed dialogue references; do not invent a new story.
+Give important confirmed dialogue exchanges their own shots when present.
 At least two shots. No secrets.`;
 
-export async function llmDirector(scene: StudioScene): Promise<DirectorShotDraft[]> {
+export type DirectorEvidence = {
+  entities?: readonly {
+    id: string;
+    kind: string;
+    name: string;
+    description: string;
+    outfit?: string;
+    condition?: string;
+    note?: string;
+  }[];
+  stateSummary?: string;
+  eventSummary?: string;
+  timeSummary?: string;
+};
+
+export async function llmDirector(scene: StudioScene, evidence: DirectorEvidence = {}): Promise<DirectorShotDraft[]> {
   if (!isTextProviderConfigured()) {
     return defaultDirector(scene);
   }
@@ -37,10 +51,23 @@ export async function llmDirector(scene: StudioScene): Promise<DirectorShotDraft
       directorProposalSchema,
       [
         `Scene title: ${scene.title}`,
-        `Intent: ${scene.intent}`,
-        `Quoted speeches in the script: ${countQuotedSpeeches(scene.script)}. Give at least ${minShotsForQuotes(scene.script)} shots so important lines are not leftover.`,
-        "Plot:",
-        scene.script || "The scene opens and then closes.",
+        `Intent: ${scene.intent || "(none)"}`,
+        "Attached entities:",
+        evidence.entities && evidence.entities.length > 0
+          ? evidence.entities
+              .map((entity) => {
+                const state = [entity.outfit, entity.condition, entity.note].filter(Boolean).join("; ");
+                return `- ${entity.id} | ${entity.kind} | ${entity.name} | ${entity.description}${state ? ` | state: ${state}` : ""}`;
+              })
+              .join("\n")
+          : "- none",
+        `State summary: ${evidence.stateSummary || "(none)"}`,
+        `Time summary: ${evidence.timeSummary || "(none)"}`,
+        `Event summary: ${evidence.eventSummary || scene.intent || "(none)"}`,
+        "Confirmed dialogue:",
+        scene.dialogue.lines.length > 0
+          ? scene.dialogue.lines.map((line) => `- ${line.id} | ${line.speakerId ?? "narration"} | ${line.shotId ?? "unassigned"} | ${line.text}`).join("\n")
+          : "- none",
       ].join("\n"),
       fetch,
       120_000,
@@ -58,12 +85,4 @@ export async function llmDirector(scene: StudioScene): Promise<DirectorShotDraft
 
 export function directorOrDefault(director?: SceneDirector): SceneDirector {
   return director ?? defaultDirector;
-}
-
-function countQuotedSpeeches(script: string): number {
-  return [...script.matchAll(/[「『“"]/g)].length;
-}
-
-function minShotsForQuotes(script: string): number {
-  return Math.min(6, Math.max(2, Math.ceil(countQuotedSpeeches(script) / 3)));
 }
