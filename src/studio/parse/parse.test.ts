@@ -429,19 +429,14 @@ describe("confirm parse target", () => {
     await confirmParseRun(project.id, run.id, { volumeId: "volume-02", chapterId: "chapter-02" });
 
     const projectDir = path.join(getWorkspaceRoot(), project.id);
-    const targetSceneFile = path.join(
-      projectDir,
-      "content",
-      "volumes",
-      "volume-02",
-      "chapters",
-      "chapter-02",
-      "scenes",
-      "scene-01.json",
-    );
-    expect(existsSync(targetSceneFile)).toBe(true);
+    const targetChapter = readTree(project.id).volumes
+      .find((volume) => volume.id === "volume-02")
+      ?.chapters.find((chapter) => chapter.id === "chapter-02");
+    expect(targetChapter?.scenes.length).toBeGreaterThan(0);
+    const createdId = targetChapter!.scenes[0]!.id;
+    expect(existsSync(path.join(projectDir, "content", "volumes", "volume-02", "chapters", "chapter-02", "scenes", `${createdId}.json`))).toBe(true);
 
-    const scene = readScene(project.id, "volume-02", "chapter-02", "scene-01");
+    const scene = readScene(project.id, "volume-02", "chapter-02", createdId);
     expect(scene.title).toBe(proposal.proposedScenes[0]!.title);
     expect(scene.script).toBe(proposal.proposedScenes[0]!.script);
 
@@ -547,7 +542,116 @@ describe("workspace", () => {
     expect(existsSync(path.join(getWorkspaceRoot(), `${project.id}.db`))).toBe(false);
     expect(listEntities(project.id, "character")).toHaveLength(1);
   });
+
+  it("adds newly found props onto a matched scene without rewriting its script", async () => {
+    const project = createProject({ title: "Harbor Night" });
+    const first = await parsePastedText(project.id, "Jill waits on the harbor.", fakeCompleteJson(harborProposal()));
+    await confirmParseRun(project.id, first.id);
+    const before = findSceneByTitle(project.id, "Harbor watch")!;
+    expect(before.props).toHaveLength(1);
+
+    const later: LlmParseProposal = {
+      ...harborProposal(),
+      proposedScenes: [
+        {
+          ...harborProposal().proposedScenes[0]!,
+          script: "Jill waits on the harbor.",
+          propNames: ["Lantern", "Gold watch"],
+        },
+      ],
+      proposedEntities: [
+        ...harborProposal().proposedEntities,
+        { key: "ent-watch", kind: "prop", name: "Gold watch", description: "Family gold watch." },
+      ],
+    };
+    const second = await parsePastedText(project.id, "Jill waits on the harbor.", fakeCompleteJson(later));
+    await confirmParseRun(project.id, second.id);
+    const after = findSceneByTitle(project.id, "Harbor watch")!;
+    expect(after.script).toBe(before.script);
+    const props = listEntities(project.id, "prop");
+    const watch = props.find((entity) => /watch/i.test(entity.name));
+    expect(watch).toBeTruthy();
+    expect(after.props).toContain(watch!.id);
+    expect(after.props).toEqual(expect.arrayContaining(before.props));
+  });
+
+  it("rematches a second parse by script coverage instead of duplicating leftover titles", async () => {
+    const opening =
+      "One dollar and eighty-seven cents. Della let her hair fall to its full length below her knee and looked in the glass.";
+    const home =
+      "When Della reached home her head was covered with tiny, close-lying curls. Please God, make him think I am still pretty.";
+    const shop =
+      "Where she stopped the sign read Mme. Sofronie. Will you buy my hair? asked Della. Down rippled the brown cascade. Twenty dollars, said Madame.";
+    const chain =
+      "She was ransacking the stores for Jim's present and found a platinum fob chain simple and chaste in design.";
+
+    const project = createProject({ title: "Magi Rematch" });
+    const first = await parsePastedText(
+      project.id,
+      `${opening}\n\n${home}`,
+      fakeCompleteJson({
+        proposedScenes: [
+          sceneProposal("scene-open", "Della counts", opening, "Chapter 1"),
+          sceneProposal("scene-wait", "Della waits", home, "Chapter 1"),
+        ],
+        proposedEntities: [{ key: "ent-della", kind: "character", name: "Della", description: "A young woman." }],
+      }),
+    );
+    await confirmParseRun(project.id, first.id);
+    expect(allSceneTitles(project.id).sort()).toEqual(["Della counts", "Della waits"].sort());
+
+    const second = await parsePastedText(
+      project.id,
+      `${opening}\n\n${shop}\n\n${chain}\n\n${home}`,
+      fakeCompleteJson({
+        proposedScenes: [
+          sceneProposal("scene-decision", "Della's Decision", opening, "Chapter 1: The Sacrifice"),
+          sceneProposal("scene-shop", "At Madame Sofronie's", shop, "Chapter 2: Buying the Gift"),
+          sceneProposal("scene-chain", "Finding the Chain", chain, "Chapter 2: Buying the Gift"),
+          sceneProposal("scene-gifts", "The Gifts of the Magi", home, "Chapter 3"),
+        ],
+        proposedEntities: [{ key: "ent-della", kind: "character", name: "Della", description: "A young woman." }],
+      }),
+    );
+    await confirmParseRun(project.id, second.id);
+
+    const titles = allSceneTitles(project.id);
+    expect(titles).toContain("Della counts");
+    expect(titles).toContain("Della waits");
+    expect(titles).toContain("At Madame Sofronie's");
+    expect(titles).toContain("Finding the Chain");
+    expect(titles).not.toContain("Della's Decision");
+    expect(titles).not.toContain("The Gifts of the Magi");
+    expect(titles).toHaveLength(4);
+  });
 });
+
+function sceneProposal(key: string, title: string, script: string, chapterName: string) {
+  return {
+    key,
+    title,
+    script,
+    intent: title,
+    characterNames: ["Della"],
+    locationName: null,
+    propNames: [],
+    costumeNames: [],
+    volumeName: "Volume 1",
+    chapterName,
+  };
+}
+
+function allSceneTitles(projectId: string): string[] {
+  const titles: string[] = [];
+  for (const volume of readTree(projectId).volumes) {
+    for (const chapter of volume.chapters) {
+      for (const item of chapter.scenes) {
+        titles.push(readScene(projectId, volume.id, chapter.id, item.id).title);
+      }
+    }
+  }
+  return titles;
+}
 
 function harborProposal() {
   return {

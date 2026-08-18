@@ -23,6 +23,8 @@ const DIRECTOR_SYSTEM = `You are a comic-book storyboard director. Split the sce
 Return JSON only with key "shots". Each shot needs purpose, action, camera.
 Cameras must vary and name a framing or move: wide, medium, close-up, low angle, high angle, over-the-shoulder, insert, push-in, or hold.
 Action must follow the scene plot wording, not invent a new story.
+If the script leaves one place for another (shop, street, stair), give the visit its own shots. Do not skip a place change.
+If the scene has many quoted speeches, give important exchanges their own shots so dialogue is not leftover.
 At least two shots. No secrets.`;
 
 export async function llmDirector(scene: StudioScene): Promise<DirectorShotDraft[]> {
@@ -36,6 +38,7 @@ export async function llmDirector(scene: StudioScene): Promise<DirectorShotDraft
       [
         `Scene title: ${scene.title}`,
         `Intent: ${scene.intent}`,
+        `Quoted speeches in the script: ${countQuotedSpeeches(scene.script)}. Give at least ${minShotsForQuotes(scene.script)} shots so important lines are not leftover.`,
         "Plot:",
         scene.script || "The scene opens and then closes.",
       ].join("\n"),
@@ -55,4 +58,12 @@ export async function llmDirector(scene: StudioScene): Promise<DirectorShotDraft
 
 export function directorOrDefault(director?: SceneDirector): SceneDirector {
   return director ?? defaultDirector;
+}
+
+function countQuotedSpeeches(script: string): number {
+  return [...script.matchAll(/[「『“"]/g)].length;
+}
+
+function minShotsForQuotes(script: string): number {
+  return Math.min(6, Math.max(2, Math.ceil(countQuotedSpeeches(script) / 3)));
 }

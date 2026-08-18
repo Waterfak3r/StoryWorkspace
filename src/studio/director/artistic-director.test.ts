@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { readTree } from "../fs";
 import { ingestFixtureStory } from "../test-support/fixture-stories";
-import { directScene, hasCameraLanguage } from "./direct-scene";
+import { defaultDirector, directScene, hasCameraLanguage } from "./direct-scene";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
@@ -51,9 +51,29 @@ describe("artistic director on fixture stories", () => {
       expect(shot.action.trim().length).toBeGreaterThan(0);
       expect(shot.camera.trim().length).toBeGreaterThan(0);
       expect(hasCameraLanguage(shot.camera)).toBe(true);
+      expect(shot.pageId).toMatch(/^page-[a-z0-9-]+-\d{2}$/);
     }
+    expect(directed.shots.some((shot) => shot.pageId.length === 0)).toBe(false);
     const cameras = new Set(directed.shots.map((shot) => shot.camera));
     expect(cameras.size).toBeGreaterThan(1);
+  });
+
+  it("caps a long prose scene at six default shots", () => {
+    const paragraphs = Array.from({ length: 20 }, (_, index) => `Paragraph ${index + 1} happens in the studio.`);
+    const drafts = defaultDirector({
+      id: "scene-01",
+      title: "A studio in Greenwich Village",
+      script: paragraphs.join("\n\n"),
+      intent: "Introduce the artists.",
+      characters: [],
+      location: null,
+      props: [],
+      costumes: [],
+      shots: [],
+      dialogue: { status: "unprocessed", lines: [] },
+    } as never);
+    expect(drafts.length).toBeGreaterThanOrEqual(2);
+    expect(drafts.length).toBeLessThanOrEqual(6);
   });
 });
 

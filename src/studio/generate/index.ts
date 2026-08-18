@@ -7,6 +7,7 @@ export {
   compileComicsPagePrompt,
   entitiesForShot,
   buildContinuityConstraints,
+  suppressOverriddenAspects,
   type CompiledImageRequest,
 } from "./compile-prompt";
 export {
@@ -16,7 +17,8 @@ export {
   MAX_ENTITY_REFERENCE_IMAGES,
 } from "./entity-references";
 export { completeEntityReference, compileEntityReferencePrompt } from "./complete-reference";
-export { fakeImageAdapter, FAKE_PNG_BYTES } from "./fake-image-adapter";
+export { fakeImageAdapter, FAKE_PNG_BYTES, STUB_PNG_BYTES } from "./fake-image-adapter";
+export { isRenderableComicsFile, isRenderableComicsPng } from "./image-output";
 export {
   generateShot,
   lockShot,

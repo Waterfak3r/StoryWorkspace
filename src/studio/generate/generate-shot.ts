@@ -1,9 +1,14 @@
 import "server-only";
 
-import { comicsPageGroup, comicsPageId } from "../comics/page-group";
+import fs from "node:fs";
+
+import { composeComicsPagePng } from "../comics/compose-page";
+import { planScenePages } from "../comics/plan-pages";
 import { resolveContext } from "../context";
 import { confirmedSpeechByShot } from "../dialogue";
 import type {
+  ComposeMode,
+  PageLayout,
   StudioContextSnapshot,
   StudioGenerateMode,
   StudioShot,
@@ -12,14 +17,24 @@ import type {
   StudioWorkflowRun,
 } from "../domain";
 import { StudioAiError, StudioConflictError, StudioNotFoundError } from "../errors";
-import { readScene, readTree, replaceSceneShots } from "../fs";
+import { readScene, readStyle, readTree, replaceSceneShots } from "../fs";
 import { assertStudioId } from "../fs/paths";
 import { isImageProviderConfigured } from "../settings";
 import type { ImageAdapter } from "./adapter";
 import { withImageAdapterRetry } from "./adapter";
+import { archivePageOutputs } from "./archive";
 import { buildContinuityConstraints, compileComicsPagePrompt, entitiesForShot, type CompiledImageRequest } from "./compile-prompt";
 import { identityReferencePromptLines, loadEntityReferenceImages } from "./entity-references";
 import { fakeImageAdapter } from "./fake-image-adapter";
+import {
+  comicsCurrentPagePath,
+  comicsPanelWorkPath,
+  comicsStagingPagePath,
+  discardStagingPageFile,
+  isRenderableComicsFile,
+  promoteStagingPageFile,
+  writeStagingPageFile,
+} from "./image-output";
 import { openaiCompatibleImageAdapter } from "./openai-image-adapter";
 import {
   allocateRunId,
@@ -68,15 +83,21 @@ export async function generateShot(
   adapter: ImageAdapter = defaultImageAdapter,
 ): Promise<GenerateShotResult> {
   const mode = options.mode ?? "generate";
-  const scene = readScene(projectId, volumeId, chapterId, sceneId);
+  let scene = readScene(projectId, volumeId, chapterId, sceneId);
   const current = requireShot(scene.shots, shotId);
   if (current.status === "locked") {
     throw new StudioConflictError("This shot is locked and cannot be regenerated.");
   }
 
-  const shotIndex = scene.shots.findIndex((shot) => shot.id === current.id);
-  const pageSize = options.pageSize && options.pageSize > 0 ? options.pageSize : undefined;
-  const pageShots = comicsPageGroup(scene.shots, shotIndex, pageSize);
+  const style = readStyle(projectId);
+  const compose: ComposeMode = style.compose ?? "page";
+  const layout = effectiveLayout(style.layout, options.pageSize);
+  scene = persistPlannedPageIds(projectId, volumeId, chapterId, sceneId, layout);
+  const planned = planScenePages(sceneId, scene.shots, layout);
+  const currentPlan = planned.find((item) => item.shotId === current.id);
+  const pageId = currentPlan?.pageId ?? "";
+  const pagePlans = planned.filter((item) => item.pageId === pageId).sort((left, right) => left.panelIndex - right.panelIndex);
+  const pageShots = pagePlans.map((item) => requireShot(scene.shots, item.shotId));
   if (pageShots.some((shot) => shot.status === "locked")) {
     throw new StudioConflictError("This comics page has a locked shot and cannot be regenerated.");
   }
@@ -90,58 +111,92 @@ export async function generateShot(
     projectId,
     uniqueEntities(snapshots.flatMap((item) => entitiesForShot(item))),
   );
+  const identityLines = identityReferencePromptLines(referenceImages);
+  const speech = confirmedSpeechByShot(scene);
   const compiled = compileComicsPagePrompt(
-    snapshots,
+    compose === "panels" ? [snapshot] : snapshots,
     mode === "regenerate" ? continuityConstraints : "",
-    identityReferencePromptLines(referenceImages),
-    confirmedSpeechByShot(scene),
+    identityLines,
+    speech,
+    style.lettering,
+    { layout: layoutAsPageLayout(layout), compose },
   );
-  if (options.image?.model) {
-    compiled.provider.model = options.image.model;
-  }
-  if (options.image?.size) {
-    compiled.provider.size = options.image.size;
-  }
-  if (options.image?.quality) {
-    compiled.provider.quality = options.image.quality;
-  }
+  applyImageOverrides(compiled, options);
   const storedConstraints = mode === "regenerate" ? continuityConstraints : "";
   const runId = allocateRunId(projectId);
   const previousNode = tryReadWorkflowNode(projectId, current.id);
-  const pageId = comicsPageId(sceneId, shotIndex, pageSize);
+  const currentPath = comicsCurrentPagePath(pageId);
 
   let relativePath = "";
   try {
-    const output = await adapter({
-      projectId,
-      sceneId,
-      shotId: current.id,
-      runId,
-      pageId,
-      prompt: compiled.prompt,
-      referenceImages,
-      provider: compiled.provider,
-    });
-    relativePath = output.relativePath.trim();
-    if (!relativePath) {
-      throw new Error("Image adapter returned an empty path.");
-    }
-
-    const written = resolveProjectRelativeFile(projectId, relativePath);
-    if (!projectFileExists(written)) {
-      throw new Error("Image adapter did not write an image file.");
-    }
-  } catch (error) {
-    const failed = persistShot(projectId, volumeId, chapterId, sceneId, current.id, { status: "failed" });
-    writeWorkflowNode(
-      projectId,
-      nodeFromShot({
+    if (compose === "panels") {
+      await generatePanelPage({
+        projectId,
         sceneId,
-        shot: failed,
-        continuityConstraints: storedConstraints,
-        previous: previousNode,
-      }),
-    );
+        pageId,
+        pageShots,
+        snapshots,
+        currentId: current.id,
+        mode,
+        runId,
+        layout,
+        compose,
+        identityLines,
+        speech,
+        lettering: style.lettering,
+        referenceImages,
+        adapter,
+        image: options.image,
+        storedConstraints,
+      });
+    } else {
+      const output = await adapter({
+        projectId,
+        sceneId,
+        shotId: current.id,
+        runId,
+        pageId,
+        prompt: compiled.prompt,
+        referenceImages,
+        provider: compiled.provider,
+      });
+      const writtenPath = output.relativePath.trim();
+      if (!writtenPath) {
+        throw new Error("Image adapter returned an empty path.");
+      }
+      const written = resolveProjectRelativeFile(projectId, writtenPath);
+      if (!projectFileExists(written)) {
+        throw new Error("Image adapter did not write an image file.");
+      }
+    }
+    const stagingAbs = resolveProjectRelativeFile(projectId, comicsStagingPagePath(pageId));
+    if (!projectFileExists(stagingAbs)) {
+      throw new Error("Staging page image is missing.");
+    }
+    if (!isRenderableComicsFile(stagingAbs)) {
+      throw new Error("Image adapter wrote an unusable stub page.");
+    }
+    archivePageOutputs(projectId, pageId);
+    promoteStagingPageFile(projectId, pageId);
+    relativePath = currentPath;
+  } catch (error) {
+    discardStagingPageFile(projectId, pageId);
+    let failed = current;
+    for (const member of pageShots) {
+      const next = persistShot(projectId, volumeId, chapterId, sceneId, member.id, { status: "failed", pageId });
+      writeWorkflowNode(
+        projectId,
+        nodeFromShot({
+          sceneId,
+          shot: next,
+          continuityConstraints: storedConstraints,
+          previous: tryReadWorkflowNode(projectId, member.id),
+        }),
+      );
+      if (member.id === current.id) {
+        failed = next;
+      }
+    }
     writeWorkflowRun(projectId, {
       id: runId,
       shotId: failed.id,
@@ -161,6 +216,7 @@ export async function generateShot(
     const next = persistShot(projectId, volumeId, chapterId, sceneId, member.id, {
       status: "success",
       selected_image: relativePath,
+      pageId,
     });
     writeWorkflowNode(
       projectId,
@@ -297,13 +353,139 @@ function setShotLock(
   return { shot, node };
 }
 
+function persistPlannedPageIds(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+  layout: PageLayout | number,
+) {
+  const scene = readScene(projectId, volumeId, chapterId, sceneId);
+  const planned = planScenePages(sceneId, scene.shots, layout);
+  const pageByShot = new Map(planned.map((item) => [item.shotId, item.pageId]));
+  let changed = false;
+  const shots = scene.shots.map((shot) => {
+    const pageId = pageByShot.get(shot.id) ?? "";
+    if (shot.pageId === pageId) {
+      return shot;
+    }
+    changed = true;
+    return { ...shot, pageId, updatedAt: nowIso(shot.updatedAt) };
+  });
+  if (!changed) {
+    return scene;
+  }
+  return replaceSceneShots(projectId, volumeId, chapterId, sceneId, shots);
+}
+
+function effectiveLayout(layout: PageLayout, pageSize?: number): PageLayout | number {
+  if (pageSize && pageSize > 0) {
+    return pageSize;
+  }
+  return layout ?? "auto";
+}
+
+function applyImageOverrides(compiled: CompiledImageRequest, options: GenerateShotOptions) {
+  if (options.image?.model) {
+    compiled.provider.model = options.image.model;
+  }
+  if (options.image?.size) {
+    compiled.provider.size = options.image.size;
+  }
+  if (options.image?.quality) {
+    compiled.provider.quality = options.image.quality;
+  }
+}
+
+async function generatePanelPage(input: {
+  projectId: string;
+  sceneId: string;
+  pageId: string;
+  pageShots: readonly StudioShot[];
+  snapshots: readonly StudioContextSnapshot[];
+  currentId: string;
+  mode: StudioGenerateMode;
+  runId: string;
+  layout: PageLayout | number;
+  compose: ComposeMode;
+  identityLines: readonly string[];
+  speech: ReturnType<typeof confirmedSpeechByShot>;
+  lettering: ReturnType<typeof readStyle>["lettering"];
+  referenceImages: ReturnType<typeof loadEntityReferenceImages>;
+  adapter: ImageAdapter;
+  image?: GenerateShotOptions["image"];
+  storedConstraints: string;
+}): Promise<string> {
+  const compileLayout: PageLayout = input.layout === "marvel" ? "auto" : layoutAsPageLayout(input.layout);
+  for (const member of input.pageShots) {
+    const snapshot = input.snapshots.find((item) => item.shot.id === member.id);
+    if (!snapshot) {
+      continue;
+    }
+    const workPath = comicsPanelWorkPath(input.pageId, member.id);
+    const workAbs = resolveProjectRelativeFile(input.projectId, workPath);
+    const redrawCurrent = input.mode === "regenerate" && member.id === input.currentId;
+    if (!redrawCurrent && projectFileExists(workAbs)) {
+      continue;
+    }
+    const compiled = compileComicsPagePrompt(
+      [snapshot],
+      redrawCurrent ? input.storedConstraints : "",
+      input.identityLines,
+      input.speech,
+      input.lettering,
+      { layout: compileLayout, compose: "panels" },
+    );
+    applyImageOverrides(compiled, { image: input.image });
+    const output = await input.adapter({
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      shotId: member.id,
+      runId: input.runId,
+      pageId: input.pageId,
+      panelShotId: member.id,
+      prompt: compiled.prompt,
+      referenceImages: input.referenceImages,
+      provider: compiled.provider,
+    });
+    const relativePath = output.relativePath.trim();
+    if (!relativePath) {
+      throw new Error("Image adapter returned an empty path.");
+    }
+    const written = resolveProjectRelativeFile(input.projectId, relativePath);
+    if (!projectFileExists(written)) {
+      throw new Error("Image adapter did not write an image file.");
+    }
+  }
+
+  const buffers: Buffer[] = [];
+  for (const member of input.pageShots) {
+    const workAbs = resolveProjectRelativeFile(input.projectId, comicsPanelWorkPath(input.pageId, member.id));
+    if (!projectFileExists(workAbs)) {
+      throw new Error("Panel work image is missing.");
+    }
+    buffers.push(fs.readFileSync(workAbs));
+  }
+  return writeStagingPageFile(input.projectId, input.pageId, composeComicsPagePng(buffers)).relativePath;
+}
+
+function layoutAsPageLayout(layout: PageLayout | number): PageLayout {
+  if (layout === 2 || layout === 3 || layout === 4) {
+    return String(layout) as PageLayout;
+  }
+  if (layout === "2" || layout === "3" || layout === "4" || layout === "auto" || layout === "marvel") {
+    return layout;
+  }
+  return "auto";
+}
+
 function persistShot(
   projectId: string,
   volumeId: string,
   chapterId: string,
   sceneId: string,
   shotId: string,
-  patch: Partial<Pick<StudioShot, "status" | "selected_image">>,
+  patch: Partial<Pick<StudioShot, "status" | "selected_image" | "pageId">>,
 ): StudioShot {
   const scene = readScene(projectId, volumeId, chapterId, sceneId);
   const index = scene.shots.findIndex((shot) => shot.id === shotId);

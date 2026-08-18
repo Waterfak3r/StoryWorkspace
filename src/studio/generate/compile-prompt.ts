@@ -1,8 +1,28 @@
 import "server-only";
 
 import { comicsPageLayoutLabel } from "../comics/page-group";
-import type { StudioAttributedSpeechLine, StudioContextSnapshot } from "../domain";
+import type {
+  ComposeMode,
+  LetteringMode,
+  PageLayout,
+  StudioAttributedSpeechLine,
+  StudioContextSnapshot,
+} from "../domain";
 import { resolveImageProvider } from "../settings";
+
+export type CompileComicsPageOptions = {
+  layout?: PageLayout;
+  compose?: ComposeMode;
+};
+
+const OVERLAY_LETTERING =
+  "Leave empty space in each panel for the listed speech balloons. Do not invent extra dialogue. Do not letter the words in the pixels; speech is applied as a lettering layer.";
+
+const MODEL_LETTERING =
+  "Letter ONLY the listed speech: and narration: lines, verbatim, in the matching panels. If a panel has no listed line, draw no balloon and no caption. Do not invent, complete, or paraphrase dialogue. Do not add extra narration boxes. Do not draw empty balloons.";
+
+const NO_LETTERING =
+  "Do not draw speech balloons, empty balloon outlines, captions, or any lettering on this page.";
 
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
@@ -23,6 +43,9 @@ export function buildContinuityConstraints(snapshot: StudioContextSnapshot): str
     `camera: ${snapshot.shot.camera}`,
   ].join("; ");
 
+  const spatial = spatialLockText([snapshot]);
+  const spatialSuffix = spatial ? ` Spatial lock: ${spatial}.` : "";
+
   if (snapshot.continuity.prior && snapshot.continuity.from) {
     const prior = snapshot.continuity.prior;
     return [
@@ -31,10 +54,10 @@ export function buildContinuityConstraints(snapshot: StudioContextSnapshot): str
       `prior action: ${prior.action}`,
       `prior camera: ${prior.camera}`,
       current,
-    ].join(". ");
+    ].join(". ") + spatialSuffix;
   }
 
-  return `No prior shot. Maintain the current shot identity. ${current}.`;
+  return `No prior shot. Maintain the current shot identity. ${current}.${spatialSuffix}`;
 }
 
 export function compileImagePrompt(
@@ -57,6 +80,7 @@ export function compileImagePrompt(
     "Illustrate only this shot's action. Do not draw other episodes from the scene.",
     "Only draw the named characters for this shot. Do not add extra people.",
     ...formattedEntities,
+    ...spatialLockLines([snapshot]),
     `Shot purpose: ${snapshot.shot.purpose}`,
     `Action: ${snapshot.shot.action}`,
     `Camera: ${snapshot.shot.camera}`,
@@ -74,6 +98,8 @@ export function compileComicsPagePrompt(
   continuityConstraints = "",
   identityLines: readonly string[] = [],
   speechByShotId: Readonly<Record<string, readonly StudioAttributedSpeechLine[]>> = {},
+  lettering: LetteringMode = "model",
+  options: CompileComicsPageOptions = {},
 ): CompiledImageRequest {
   if (snapshots.length === 0) {
     return withProvider("Sequential comic page.");
@@ -82,6 +108,15 @@ export function compileComicsPagePrompt(
   const first = snapshots[0]!;
   const pageEntities = uniqueById(snapshots.flatMap((snapshot) => entitiesForShot(snapshot)));
   const hasSpeech = snapshots.some((snapshot) => (speechByShotId[snapshot.shot.id] ?? []).length > 0);
+  const castNames = pageEntities
+    .filter((entity) => entity.kind === "character")
+    .map((entity) => entity.name)
+    .filter((name) => name.trim().length > 0);
+  const letteringRule = hasSpeech
+    ? lettering === "overlay"
+      ? OVERLAY_LETTERING
+      : MODEL_LETTERING
+    : NO_LETTERING;
   const panelBlocks = snapshots.map((snapshot, index) => {
     const names = entitiesForShot(snapshot)
       .filter((entity) => entity.kind === "character")
@@ -92,27 +127,30 @@ export function compileComicsPagePrompt(
       `Panel ${index + 1} (${slot}): ${snapshot.shot.action}`,
       `camera: ${snapshot.shot.camera}`,
       names.length > 0 ? `on-screen: ${names.join(", ")}` : "",
-      ...speech.map((line) => `speech: ${line.speaker}: ${line.text}`),
+      ...speech.map((line) => formatConfirmedLine(line)),
     ]
       .filter(Boolean)
       .join("\n");
   });
 
   const prompt = [
-    first.style.visual ? `Style: ${first.style.visual}` : "",
+    first.style.visual ? `Style: ${sanitizeStyleVisual(first.style.visual, hasSpeech, lettering)}` : "",
     "ONE sequential comic PAGE as a single image.",
     "Do not generate four separate pictures. Do not collage unrelated photographs.",
     "These panels are consecutive beats of one scene and must read as one connected page.",
-    `Layout: ${comicsPageLayoutLabel(snapshots.length)}.`,
+    pageLayoutLine(snapshots.length, options.layout, options.compose),
     "Reading order: left to right, then top to bottom. Separate panels with clear ink gutters.",
     "Keep character likeness, costume, and comic style identical across every panel on this page.",
-    hasSpeech
-      ? "Leave empty space in each panel for the listed speech balloons. Do not invent extra dialogue. Do not letter the words in the pixels; speech is applied as a lettering layer."
-      : "",
+    "If an entity lists a condition, that current state overrides the reference image for that aspect (hair length, injury, outfit wear).",
+    castNames.length > 0
+      ? `Cast (draw only these people, no extras): ${castNames.join(", ")}.`
+      : "Do not invent extra people.",
+    letteringRule,
     ...identityLines,
     first.scene.title ? `Scene: ${first.scene.title}` : "",
     ...priorStoryLines(first),
     ...formatEntityLines(pageEntities),
+    ...spatialLockLines(snapshots),
     ...panelBlocks,
     continuityConstraints ? `Continuity: ${continuityConstraints}` : "",
   ]
@@ -121,6 +159,20 @@ export function compileComicsPagePrompt(
     .join("\n");
 
   return withProvider(prompt);
+}
+
+function sanitizeStyleVisual(visual: string, hasSpeech: boolean, lettering: LetteringMode): string {
+  if (hasSpeech && lettering === "overlay") {
+    return visual;
+  }
+  return visual.replace(/;?\s*leave space for speech balloons\.?/gi, "").replace(/\s{2,}/g, " ").trim();
+}
+
+function formatConfirmedLine(line: StudioAttributedSpeechLine): string {
+  if ((line.kind ?? "speech") === "narration") {
+    return `narration: ${line.text}`;
+  }
+  return `speech: ${line.speaker}: ${line.text}`;
 }
 
 function withProvider(prompt: string): CompiledImageRequest {
@@ -163,11 +215,13 @@ function formatEntityLines(entities: ReturnType<typeof entitiesForShot>): string
   return entities.map((entity) => {
     const kindLabel = entity.kind === "costume" ? "costume reference" : entity.kind;
     const references = entity.visual.references.filter((ref) => ref.trim().length > 0);
-    const identity = entity.visual.base ? `identity lock ${entity.name}: ${entity.visual.base}` : "";
+    const description = suppressOverriddenAspects(entity.description, entity.state.condition);
+    const visualBase = suppressOverriddenAspects(entity.visual.base, entity.state.condition);
+    const identity = visualBase ? `identity lock ${entity.name}: ${visualBase}` : "";
     return [
-      `${kindLabel} ${entity.name}: ${entity.description}`.trim(),
+      `${kindLabel} ${entity.name}: ${description}`.trim(),
       identity,
-      entity.visual.base ? `visual: ${entity.visual.base}` : "",
+      visualBase ? `visual: ${visualBase}` : "",
       references.length > 0 ? `reference: ${references.join(", ")}` : "",
       entity.state.outfit ? `outfit: ${entity.state.outfit}` : "",
       entity.state.condition ? `condition: ${entity.state.condition}` : "",
@@ -175,6 +229,58 @@ function formatEntityLines(entities: ReturnType<typeof entitiesForShot>): string
       .filter(Boolean)
       .join("; ");
   });
+}
+
+const CONDITION_ASPECTS: { condition: RegExp; drop: RegExp }[] = [
+  { condition: /\bhair\b|\bcurl|\bshorn|\bshav/i, drop: /\bhair\b|\bcurl|\bshorn|\bshav/i },
+  { condition: /\bwound|\bscar|\bblood|\binjur/i, drop: /\bwound|\bscar|\bblood|\binjur/i },
+];
+
+export function suppressOverriddenAspects(text: string, condition: string): string {
+  const source = text.trim();
+  if (!source || !condition.trim()) {
+    return text;
+  }
+  const aspects = CONDITION_ASPECTS.filter((item) => item.condition.test(condition));
+  if (aspects.length === 0) {
+    return text;
+  }
+  const kept = source
+    .split(/(?<=[,.;])\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && !aspects.some((item) => item.drop.test(part)));
+  return kept.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
+function pageLayoutLine(panelCount: number, layout?: PageLayout, compose?: ComposeMode): string {
+  if (layout === "marvel" && (compose ?? "page") === "page") {
+    return "Layout: irregular Marvel-style comic panels of uneven sizes, arranged organically rather than as a regular grid.";
+  }
+  return `Layout: ${comicsPageLayoutLabel(panelCount)}.`;
+}
+
+function spatialLockLines(snapshots: readonly StudioContextSnapshot[]): string[] {
+  const spatial = spatialLockText(snapshots);
+  return spatial ? [`Spatial lock: ${spatial}`] : [];
+}
+
+function spatialLockText(snapshots: readonly StudioContextSnapshot[]): string {
+  const seen = new Set<string>();
+  const locks: string[] = [];
+  for (const snapshot of snapshots) {
+    for (const entity of snapshot.entities) {
+      if (entity.kind !== "location") {
+        continue;
+      }
+      const spatial = entity.visual.spatial?.trim() ?? "";
+      if (!spatial || seen.has(spatial)) {
+        continue;
+      }
+      seen.add(spatial);
+      locks.push(spatial);
+    }
+  }
+  return locks.join("; ");
 }
 
 function uniqueById<T extends { id: string }>(items: readonly T[]): T[] {

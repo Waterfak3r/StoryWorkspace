@@ -137,6 +137,23 @@ describe("assembleStoryOutline", () => {
     expect(sue?.appearanceEventIds.length).toBeGreaterThanOrEqual(1);
     expect(johnsy?.appearanceEventIds.length).toBeGreaterThanOrEqual(1);
     expect(outline.timeline.entities.some((entity) => entity.kind === "location")).toBe(true);
+
+    const volumeTimes = outline.timeline.times.filter((time) => time.kind === "volume");
+    const chapterTimes = outline.timeline.times.filter((time) => time.kind === "chapter");
+    expect(volumeTimes.length).toBeGreaterThanOrEqual(1);
+    expect(chapterTimes.length).toBeGreaterThanOrEqual(1);
+    expect(outline.volumes.map((volume) => volume.id).sort()).toEqual(
+      volumeTimes.map((time) => time.volumeId).sort(),
+    );
+    for (const event of outline.timeline.events) {
+      const edge = outline.timeline.containments.find((item) => item.toEventId === event.id);
+      expect(edge).toBeDefined();
+      const chapterTime = chapterTimes.find((time) => time.id === edge!.fromTimeId);
+      expect(chapterTime?.kind).toBe("chapter");
+      expect(chapterTime?.volumeId).toBe(event.volumeId);
+      expect(chapterTime?.chapterId).toBe(event.chapterId);
+    }
+
     expect(listBasenames(path.join(getWorkspaceRoot(), project.id))).not.toContain("outline.json");
   });
 

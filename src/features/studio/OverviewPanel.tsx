@@ -131,9 +131,9 @@ export function OverviewPanel({
               <Palette size={22} weight="duotone" />
             </div>
             <div>
-              <label htmlFor="comics-style" className="block text-base font-semibold text-ink">
+              <h2 className="text-base font-semibold text-ink">
                 {t("Comics style")}
-              </label>
+              </h2>
               <p className="text-xs text-ink-muted">{t("The drawing style used when generating comics pages.")}</p>
             </div>
           </div>
@@ -145,7 +145,11 @@ export function OverviewPanel({
           ) : null}
         </div>
 
-        <div className="mt-4">
+        {/* 1. Visual Drawing Style (Full width top) */}
+        <div className="mt-5">
+          <label htmlFor="comics-style" className="block text-sm font-semibold text-ink">
+            {t("Comics style preset")}
+          </label>
           <select
             id="comics-style"
             data-comics-style="true"
@@ -153,8 +157,16 @@ export function OverviewPanel({
             value={styleView?.style.presetId ?? "sequential-ink"}
             onChange={(event) => {
               const presetId = event.target.value as ComicsStylePresetId;
+              const currentLettering = styleView?.style.lettering ?? "model";
+              const currentCompose = styleView?.style.compose ?? "page";
+              const currentLayout = styleView?.style.layout ?? "auto";
               setStyleBusy(true);
-              void saveStudioStyle(project.id, presetId)
+              void saveStudioStyle(project.id, {
+                presetId,
+                lettering: currentLettering,
+                compose: currentCompose,
+                layout: currentLayout,
+              })
                 .then((next) => {
                   setStyleView(next);
                   setError("");
@@ -166,7 +178,7 @@ export function OverviewPanel({
                   setStyleBusy(false);
                 });
             }}
-            className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm font-medium text-ink outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/15"
+            className="mt-1.5 w-full rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/15"
           >
             {(styleView?.presets ?? []).map((preset) => (
               <option key={preset.id} value={preset.id}>
@@ -174,17 +186,151 @@ export function OverviewPanel({
               </option>
             ))}
           </select>
+          {currentPreset?.visual ? (
+            <div className="mt-2.5 flex items-start gap-2.5 rounded-xl border border-line/70 bg-surface px-3.5 py-2 text-xs text-ink-muted">
+              <PaintBrush size={15} weight="regular" className="mt-0.5 shrink-0 text-accent" />
+              <p className="leading-relaxed">
+                <span className="font-semibold text-ink">{t("Prompt directive")}: </span>
+                {currentPreset.visual}
+              </p>
+            </div>
+          ) : null}
         </div>
 
-        {currentPreset?.visual ? (
-          <div className="mt-3.5 flex items-start gap-2.5 rounded-xl border border-line/70 bg-surface px-3.5 py-2.5 text-xs text-ink-muted">
-            <PaintBrush size={16} weight="regular" className="mt-0.5 shrink-0 text-accent" />
-            <p className="leading-relaxed">
-              <span className="font-semibold text-ink">{t("Prompt directive")}: </span>
-              {currentPreset.visual}
+        {/* 2-Column Grid for compose, layout, and lettering */}
+        <div className="mt-5 border-t border-line/70 pt-5 grid gap-5 sm:grid-cols-2">
+          {/* Generation Unit / Compose Mode */}
+          <div>
+            <label htmlFor="compose-mode" className="block text-sm font-semibold text-ink">
+              {t("Generation method")}
+            </label>
+            <select
+              id="compose-mode"
+              data-compose-mode="true"
+              disabled={styleBusy || !styleView}
+              value={styleView?.style.compose ?? "page"}
+              onChange={(event) => {
+                const compose = event.target.value as "page" | "panels";
+                const currentPresetId = (styleView?.style.presetId ?? "sequential-ink") as ComicsStylePresetId;
+                const currentLettering = styleView?.style.lettering ?? "model";
+                const currentLayout = styleView?.style.layout ?? "auto";
+                setStyleBusy(true);
+                void saveStudioStyle(project.id, {
+                  presetId: currentPresetId,
+                  lettering: currentLettering,
+                  compose,
+                  layout: currentLayout,
+                })
+                  .then((next) => {
+                    setStyleView(next);
+                    setError("");
+                  })
+                  .catch((cause) => {
+                    setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+                  })
+                  .finally(() => {
+                    setStyleBusy(false);
+                  });
+              }}
+              className="mt-1.5 w-full rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/15"
+            >
+              <option value="page">{t("Full page at once")}</option>
+              <option value="panels">{t("Panel by panel compose")}</option>
+            </select>
+            <p className="mt-1.5 text-xs leading-normal text-ink-muted">
+              {t("Choose whether AI renders full pages at once or stitches individual panels.")}
             </p>
           </div>
-        ) : null}
+
+          {/* Page Layout */}
+          <div>
+            <label htmlFor="page-layout" className="block text-sm font-semibold text-ink">
+              {t("Page layout")}
+            </label>
+            <select
+              id="page-layout"
+              data-page-layout="true"
+              disabled={styleBusy || !styleView}
+              value={styleView?.style.layout ?? "auto"}
+              onChange={(event) => {
+                const layout = event.target.value as "2" | "3" | "4" | "auto" | "marvel";
+                const currentPresetId = (styleView?.style.presetId ?? "sequential-ink") as ComicsStylePresetId;
+                const currentLettering = styleView?.style.lettering ?? "model";
+                const currentCompose = styleView?.style.compose ?? "page";
+                setStyleBusy(true);
+                void saveStudioStyle(project.id, {
+                  presetId: currentPresetId,
+                  lettering: currentLettering,
+                  compose: currentCompose,
+                  layout,
+                })
+                  .then((next) => {
+                    setStyleView(next);
+                    setError("");
+                  })
+                  .catch((cause) => {
+                    setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+                  })
+                  .finally(() => {
+                    setStyleBusy(false);
+                  });
+              }}
+              className="mt-1.5 w-full rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/15"
+            >
+              <option value="auto">{t("Director decides")}</option>
+              <option value="2">{t("2 panels")}</option>
+              <option value="3">{t("3 panels")}</option>
+              <option value="4">{t("4 panels")}</option>
+              <option value="marvel">{t("Marvel irregular")}</option>
+            </select>
+            <p className="mt-1.5 text-xs leading-normal text-ink-muted">
+              {t("Set fixed panel count per page, director-driven pacing, or dynamic Marvel irregular framing.")}
+            </p>
+          </div>
+
+          {/* Lettering Mode Selection (Spans full width across columns) */}
+          <div className="sm:col-span-2">
+            <label htmlFor="lettering-mode" className="block text-sm font-semibold text-ink">
+              {t("Page lettering")}
+            </label>
+            <select
+              id="lettering-mode"
+              data-lettering-mode="true"
+              disabled={styleBusy || !styleView}
+              value={styleView?.style.lettering ?? "model"}
+              onChange={(event) => {
+                const lettering = event.target.value as "model" | "overlay";
+                const currentPresetId = (styleView?.style.presetId ?? "sequential-ink") as ComicsStylePresetId;
+                const currentCompose = styleView?.style.compose ?? "page";
+                const currentLayout = styleView?.style.layout ?? "auto";
+                setStyleBusy(true);
+                void saveStudioStyle(project.id, {
+                  presetId: currentPresetId,
+                  lettering,
+                  compose: currentCompose,
+                  layout: currentLayout,
+                })
+                  .then((next) => {
+                    setStyleView(next);
+                    setError("");
+                  })
+                  .catch((cause) => {
+                    setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
+                  })
+                  .finally(() => {
+                    setStyleBusy(false);
+                  });
+              }}
+              className="mt-1.5 w-full rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink outline-none transition-[border-color,box-shadow] focus:border-accent focus:ring-4 focus:ring-accent/15"
+            >
+              <option value="model">{t("AI model lettering (draw text in image)")}</option>
+              <option value="overlay">{t("Late lettering overlay (clean typography on top)")}</option>
+            </select>
+            <p className="mt-1.5 text-xs leading-normal text-ink-muted">
+              {t("Choose whether AI draws text directly into the panels or overlays typography cleanly.")}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Story statistics in clean thematic groupings */}

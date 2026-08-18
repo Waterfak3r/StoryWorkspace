@@ -146,7 +146,7 @@ describe("context snapshot evidence", () => {
     replaceSceneShots(project.id, "volume-01", "chapter-01", second.id, [
       pendingShot(second.id, "shot-01", "Jill stands on the dock"),
     ]);
-    writeContentState(project.id, "volume-01", "chapter-01", "scene-01", {
+    writeContentState(project.id, "volume-01", "chapter-01", second.id, {
       patches: [{ entityId: jill.id, condition: "injured", truth: "inferred" }],
     });
 
@@ -183,6 +183,7 @@ function pendingShot(sceneId: string, id: string, action: string) {
     continuity_from: null,
     status: "pending" as const,
     selected_image: null,
+    pageId: "",
     updatedAt: new Date().toISOString(),
   };
 }

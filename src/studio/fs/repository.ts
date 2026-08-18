@@ -22,6 +22,9 @@ import {
   slugifyTitle,
   DEFAULT_COMICS_STYLE_PRESET_ID,
   DEFAULT_COMICS_STYLE_VISUAL,
+  DEFAULT_COMPOSE_MODE,
+  DEFAULT_LETTERING_MODE,
+  DEFAULT_PAGE_LAYOUT,
   STUDIO_ENTITY_KINDS,
   STUDIO_SCHEMA_VERSION,
   styleRecordSchema,
@@ -203,6 +206,18 @@ export function readTree(projectId: string): StudioStoryTree {
   return { volumes: volumes.sort((left, right) => compareIds(left.id, right.id)) };
 }
 
+export function listProjectSceneIds(projectId: string): string[] {
+  const ids: string[] = [];
+  for (const volume of readTree(projectId).volumes) {
+    for (const chapter of volume.chapters) {
+      for (const scene of chapter.scenes) {
+        ids.push(scene.id);
+      }
+    }
+  }
+  return ids;
+}
+
 export function createVolume(projectId: string, input: CreateVolumeInput = {}): StudioVolume {
   const ctx = requireProject(projectId);
   const values = parseInput(createVolumeInputSchema, input);
@@ -306,9 +321,10 @@ export function createScene(
   const ctx = requireChapter(projectId, volumeId, chapterId);
   const values = parseInput(createSceneInputSchema, input);
   const scenesDir = path.join(ctx.chapterDir, "scenes");
-  const existing = listChildIds(scenesDir, { files: true });
-  const id = values.id ? assertStudioId(values.id, "id") : nextNumberedId("scene", existing);
-  assertIdAvailable(existing, id);
+  const existingInChapter = listChildIds(scenesDir, { files: true });
+  const existingInProject = listProjectSceneIds(projectId);
+  const id = values.id ? assertStudioId(values.id, "id") : nextNumberedId("scene", existingInProject);
+  assertIdAvailable([...new Set([...existingInChapter, ...existingInProject])], id);
 
   const scene = defaultScene(id, values.title ?? "Untitled scene", nowIso());
   writeJsonFile(path.join(scenesDir, `${id}.json`), scene);
@@ -456,7 +472,7 @@ export function createEntity(projectId: string, input: CreateEntityInput): Studi
     kind: values.kind,
     name: values.name,
     description: "",
-    visual: { base: "", references: [] },
+    visual: { base: "", references: [], spatial: "" },
     states: { default: { outfit: "", condition: "" } },
     updatedAt: nowIso(),
   };
@@ -483,7 +499,16 @@ export function readStyle(projectId: string): StudioStyle {
 
 export function updateStyle(
   projectId: string,
-  visualOrPatch: string | { visual?: string; label?: string; presetId?: StudioStyle["presetId"] },
+  visualOrPatch:
+    | string
+    | {
+        visual?: string;
+        label?: string;
+        presetId?: StudioStyle["presetId"];
+        lettering?: StudioStyle["lettering"];
+        compose?: StudioStyle["compose"];
+        layout?: StudioStyle["layout"];
+      },
 ): StudioStyle {
   const ctx = requireProject(projectId);
   const file = projectFile(ctx, "styles", "default.json");
@@ -493,6 +518,9 @@ export function updateStyle(
     ...current,
     visual: patch.visual !== undefined ? patch.visual.trim() : current.visual,
     label: patch.label !== undefined ? patch.label.trim() || current.label : current.label,
+    lettering: patch.lettering ?? current.lettering ?? DEFAULT_LETTERING_MODE,
+    compose: patch.compose ?? current.compose ?? DEFAULT_COMPOSE_MODE,
+    layout: patch.layout ?? current.layout ?? DEFAULT_PAGE_LAYOUT,
     updatedAt: nowIso(current.updatedAt),
   };
   if (patch.presetId) {
@@ -807,6 +835,9 @@ function writeDefaultProjectTree(projectDir: string, project: StudioProject, now
   writeJsonFile(path.join(projectDir, "styles", "default.json"), {
     id: "default",
     presetId: DEFAULT_COMICS_STYLE_PRESET_ID,
+    lettering: DEFAULT_LETTERING_MODE,
+    compose: DEFAULT_COMPOSE_MODE,
+    layout: DEFAULT_PAGE_LAYOUT,
     label: "Default",
     visual: DEFAULT_COMICS_STYLE_VISUAL,
     updatedAt: now,

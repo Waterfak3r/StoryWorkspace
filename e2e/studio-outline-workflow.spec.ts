@@ -42,13 +42,16 @@ test("story outline is a linked timeline and workflow is a connected stage graph
   await expect(page.getByRole("button", { name: "Remove from scene" })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: "Story outline", exact: true }).click();
-  await expect(page.locator("[data-outline-timeline]")).toBeVisible();
-  await expect(page.locator("[data-timeline-chain]")).toBeVisible();
-  await expect(page.locator("[data-timeline-event]")).toHaveCount(3);
-  await expect(page.locator("[data-timeline-link]")).toHaveCount(2);
+  await expect(page.locator("[data-outline-map]")).toBeVisible();
+  await expect(page.locator("[data-outline-time]")).toHaveCount(2);
+  await expect(page.locator("[data-outline-event]")).toHaveCount(3);
+  await expect(page.locator("[data-outline-edge][data-edge-kind=contains]").first()).toBeVisible();
+  await expect(page.locator("[data-outline-entity]").first()).toBeVisible();
+  await expect(page.locator("[data-outline-edge][data-edge-kind=participates]").first()).toBeVisible();
   await expect(page.locator("article[data-outline-scene]")).toHaveCount(0);
-  await expect(page.locator("[data-timeline-lane]")).toHaveCount(1);
-  await expect(page.locator("[data-timeline-cell][data-present=true]")).toHaveCount(1);
+  await expect(page.locator("[data-timeline-lane]")).toHaveCount(0);
+  await expect(page.locator("[data-timeline-cell]")).toHaveCount(0);
+  await expect(page.locator("[data-timeline-chain]")).toHaveCount(0);
   if (evidence) {
     await page.screenshot({ path: `${evidence}/outline.png`, fullPage: true });
   }

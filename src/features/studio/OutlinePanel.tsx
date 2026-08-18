@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  CaretDown,
+  CaretRight,
   CheckCircle,
+  Clock,
+  Compass,
+  Lightning,
   ListNumbers,
   MapPin,
   Package,
@@ -26,15 +31,15 @@ import { getStudioOutline } from "./api";
 function entityKindIcon(kind: StudioEntityKind, isSelected: boolean) {
   switch (kind) {
     case "character":
-      return <User size={14} weight={isSelected ? "bold" : "regular"} />;
+      return <User size={13} weight={isSelected ? "bold" : "regular"} />;
     case "location":
-      return <MapPin size={14} weight={isSelected ? "bold" : "regular"} />;
+      return <MapPin size={13} weight={isSelected ? "bold" : "regular"} />;
     case "prop":
-      return <Package size={14} weight={isSelected ? "bold" : "regular"} />;
+      return <Package size={13} weight={isSelected ? "bold" : "regular"} />;
     case "costume":
-      return <TShirt size={14} weight={isSelected ? "bold" : "regular"} />;
+      return <TShirt size={13} weight={isSelected ? "bold" : "regular"} />;
     default:
-      return <Sparkle size={14} weight={isSelected ? "bold" : "regular"} />;
+      return <Sparkle size={13} weight={isSelected ? "bold" : "regular"} />;
   }
 }
 
@@ -105,12 +110,14 @@ export function OutlinePanel({ projectId }: { projectId: string }) {
     return { event, scene: scene ?? null };
   }, [outline, selectedEventId, selectedEntity]);
 
+  const times = outline?.timeline.times ?? [];
+
   return (
-    <div className="mx-auto w-full max-w-[1200px] px-5 py-8 sm:px-8" data-story-outline="true">
+    <div className="mx-auto w-full max-w-[1240px] px-4 py-8 sm:px-8" data-story-outline="true">
       {/* Header section */}
       <div className="border-b border-line pb-6">
         <div className="flex items-center gap-2">
-          <span className="inline-flex h-2 w-2 rounded-full bg-accent" />
+          <span className="inline-flex h-2 w-2 rounded-full bg-accent animate-pulse" />
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">{t("Story outline")}</p>
         </div>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
@@ -119,11 +126,16 @@ export function OutlinePanel({ projectId }: { projectId: string }) {
               {outline?.title ?? t("Story outline")}
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-ink-muted">
-              {t("Connected narrative beat chain and character continuity matrix across scenes.")}
+              {t("Time-spined mindmap connecting narrative beats and living entities across chapters.")}
             </p>
           </div>
           {outline ? (
             <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-raised px-3 py-1.5 text-xs font-semibold text-ink shadow-2xs">
+                <Clock size={14} className="text-accent" />
+                <span>{times.length}</span>
+                <span className="font-normal text-ink-muted">{t("Time nodes")}</span>
+              </span>
               <span className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-raised px-3 py-1.5 text-xs font-semibold text-ink shadow-2xs">
                 <ListNumbers size={14} className="text-accent" />
                 <span>{outline.timeline.events.length}</span>
@@ -133,11 +145,6 @@ export function OutlinePanel({ projectId }: { projectId: string }) {
                 <TreeStructure size={14} className="text-accent" />
                 <span>{outline.timeline.entities.length}</span>
                 <span className="font-normal text-ink-muted">{t("Entities")}</span>
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-raised px-3 py-1.5 text-xs font-semibold text-ink shadow-2xs">
-                <Users size={14} className="text-accent" />
-                <span>{outline.timeline.characters.length}</span>
-                <span className="font-normal text-ink-muted">{t("Characters")}</span>
               </span>
             </div>
           ) : null}
@@ -152,13 +159,13 @@ export function OutlinePanel({ projectId }: { projectId: string }) {
 
       {!outline && !error ? (
         <div className="mt-8 space-y-4">
-          <div className="h-36 animate-pulse rounded-2xl border border-line bg-surface-muted" />
-          <div className="h-64 animate-pulse rounded-2xl border border-line bg-surface-muted" />
+          <div className="h-28 animate-pulse rounded-2xl border border-line bg-surface-muted" />
+          <div className="h-72 animate-pulse rounded-2xl border border-line bg-surface-muted" />
         </div>
       ) : null}
 
       {outline ? (
-        <OutlineTimeline
+        <OutlineMindmap
           outline={outline}
           selectedEventId={selectedEntity ? null : selected?.event.id ?? null}
           selectedEntityId={selectedEntity?.id ?? null}
@@ -248,7 +255,7 @@ export function OutlinePanel({ projectId }: { projectId: string }) {
   );
 }
 
-function OutlineTimeline({
+function OutlineMindmap({
   outline,
   selectedEventId,
   selectedEntityId,
@@ -259,364 +266,401 @@ function OutlineTimeline({
   selectedEventId: string | null;
   selectedEntityId: string | null;
   onSelectEvent: (eventId: string) => void;
-  onSelectEntity: (entityId: string) => void;
+  onSelectEntity: (entityId: string | null) => void;
 }) {
   const { t } = useI18n();
-  const { events, characters, intersections, connections, entities } = outline.timeline;
-  const [kindFilter, setKindFilter] = useState<string>("all");
+  const { times, events, entities, stateChanges } = outline.timeline;
 
-  const present = new Set(intersections.map((hit) => `${hit.characterId}:${hit.eventId}`));
-  const linked = new Set(connections.map((link) => `${link.fromEventId}->${link.toEventId}`));
+  const [collapsedChapters, setCollapsedChapters] = useState<Record<string, boolean>>({});
 
-  const kindsPresent = useMemo(() => {
-    const set = new Set<StudioEntityKind>();
-    for (const item of entities) {
-      set.add(item.kind);
-    }
-    return Array.from(set);
-  }, [entities]);
+  const toggleChapter = (chapterTimeId: string) => {
+    setCollapsedChapters((prev) => ({
+      ...prev,
+      [chapterTimeId]: !prev[chapterTimeId],
+    }));
+  };
 
-  const filteredEntities = useMemo(() => {
-    if (kindFilter === "all") {
-      return entities;
-    }
-    return entities.filter((item) => item.kind === kindFilter);
-  }, [entities, kindFilter]);
+  const volumeTimes = useMemo(() => times.filter((time) => time.kind === "volume"), [times]);
 
-  const selectedEntity = useMemo(() => {
-    if (!selectedEntityId) {
-      return null;
-    }
-    return entities.find((item) => item.id === selectedEntityId) ?? null;
+  const selectedEntityObj = useMemo(() => {
+    if (!selectedEntityId) return null;
+    return entities.find((e) => e.id === selectedEntityId) ?? null;
   }, [entities, selectedEntityId]);
 
   return (
     <div
-      className="mt-8 overflow-hidden rounded-2xl border border-line bg-surface-raised shadow-xs"
+      className="mt-8 rounded-2xl border border-line bg-surface-raised p-4 sm:p-8 shadow-xs overflow-x-auto"
+      data-outline-map="true"
       data-outline-timeline="true"
     >
+      {/* Top Map Toolbar / Legend */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/80 pb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/10 text-accent">
+            <Compass size={16} weight="bold" />
+          </div>
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-ink">{t("Story mindmap")}</h2>
+            <p className="text-[11px] text-ink-muted">
+              {selectedEntityId
+                ? t("Highlighting {name}", { name: selectedEntityObj?.name ?? selectedEntityId })
+                : t("Click an entity to highlight its trajectory across the story.")}
+            </p>
+          </div>
+        </div>
+
+        {/* Action Controls & Legend */}
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedEntityId ? (
+            <button
+              type="button"
+              onClick={() => onSelectEntity(null)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent transition-colors hover:bg-accent hover:text-on-accent"
+            >
+              <X size={12} weight="bold" />
+              <span>{t("Clear selection")}</span>
+            </button>
+          ) : null}
+
+          {/* Node Legend Pills */}
+          <div className="hidden lg:flex items-center gap-2 rounded-xl border border-line/60 bg-surface/60 px-3 py-1 text-[11px] text-ink-muted">
+            <span className="font-semibold text-ink-faint mr-1">{t("Legend")}:</span>
+            <span className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-semibold text-ink">
+              <Clock size={11} className="text-accent" />
+              {t("Time spine")}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-semibold text-ink">
+              <ListNumbers size={11} className="text-accent" />
+              {t("Plot events")}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-semibold text-ink">
+              <TreeStructure size={11} className="text-accent" />
+              {t("Living entities")}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-700 dark:text-amber-300">
+              <Lightning size={11} weight="fill" />
+              {t("State change")}
+            </span>
+          </div>
+        </div>
+      </div>
+
       {events.length === 0 ? (
-        <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
-          <ListNumbers size={32} className="text-ink-faint" />
+        <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+          <TreeStructure size={36} className="text-ink-faint" />
           <p className="mt-3 text-sm font-medium text-ink-muted">{t("No events on the timeline yet.")}</p>
         </div>
       ) : (
-        <div>
-          {/* Living Story Entity Index / Reusable Units Map */}
-          {entities.length > 0 ? (
-            <div className="border-b border-line bg-surface/40">
-              {/* Shelf Top Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/70 px-5 py-3.5">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-accent/10 text-accent">
-                    <TreeStructure size={14} />
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-ink">
-                      {t("Living story entities")}
-                    </h2>
-                    <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-bold text-ink-muted">
-                      {entities.length}
+        /* Mindmap Graph (Continuous Time Spine + Branching Event Pearls + Entity Twigs) */
+        <div className="mt-8 space-y-10">
+          {volumeTimes.map((volumeTime) => {
+            const chapterTimes = times.filter(
+              (time) => time.kind === "chapter" && time.parentTimeId === volumeTime.id,
+            );
+
+            return (
+              <div key={volumeTime.id} className="relative">
+                {/* 1. Volume Time Milestone (Major Spine Anchor) */}
+                <div className="flex items-center gap-3">
+                  <div
+                    data-outline-time={volumeTime.id}
+                    data-time-kind="volume"
+                    className="inline-flex items-center gap-2.5 rounded-2xl border-2 border-accent/40 bg-surface-raised px-4 py-2.5 text-xs font-bold text-ink shadow-xs ring-4 ring-accent/10"
+                  >
+                    <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent text-on-accent text-xs font-black shadow-2xs">
+                      V
+                    </span>
+                    <span className="text-sm font-extrabold tracking-wide">{volumeTime.title}</span>
+                    <span className="ml-1.5 rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-bold text-ink-muted">
+                      {chapterTimes.length} {t("Chapters")}
                     </span>
                   </div>
                 </div>
 
-                {/* Filter controls */}
-                {kindsPresent.length > 1 ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setKindFilter("all")}
-                      className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                        kindFilter === "all"
-                          ? "bg-ink text-canvas shadow-2xs"
-                          : "bg-surface text-ink-muted hover:bg-surface-muted hover:text-ink"
-                      }`}
-                    >
-                      {t("All kinds")} ({entities.length})
-                    </button>
-                    {kindsPresent.map((kind) => {
-                      const count = entities.filter((item) => item.kind === kind).length;
-                      return (
-                        <button
-                          key={kind}
-                          type="button"
-                          onClick={() => setKindFilter(kind)}
-                          className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                            kindFilter === kind
-                              ? "bg-ink text-canvas shadow-2xs"
-                              : "bg-surface text-ink-muted hover:bg-surface-muted hover:text-ink"
-                          }`}
+                {/* Continuous Vertical Axis Spine leading from Volume through Chapters */}
+                <div className="relative mt-2 pl-3 sm:pl-4 space-y-8">
+                  {chapterTimes.map((chapterTime) => {
+                    const isCollapsed = Boolean(collapsedChapters[chapterTime.id]);
+                    const chapterEvents = events.filter(
+                      (ev) => ev.volumeId === chapterTime.volumeId && ev.chapterId === chapterTime.chapterId,
+                    );
+
+                    const containsEdgeId = `${volumeTime.id}->${chapterTime.id}`;
+
+                    return (
+                      <div key={chapterTime.id} className="relative">
+                        {/* Continuous Vertical Axis Spine Connector (Volume -> Chapter) */}
+                        <div
+                          data-outline-edge={containsEdgeId}
+                          data-edge-kind="contains"
+                          className="flex items-center text-accent/60 mb-2"
+                          aria-hidden="true"
                         >
-                          {t(entityKindLabel(kind))} ({count})
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Entity Tokens Grid */}
-              <div className="flex flex-wrap gap-2.5 p-4 sm:p-5">
-                {filteredEntities.map((entity) => {
-                  const isSelected = selectedEntityId === entity.id;
-                  const appearanceCount = entity.appearanceEventIds.length;
-
-                  return (
-                    <button
-                      key={entity.id}
-                      type="button"
-                      data-outline-entity={entity.id}
-                      onClick={() => onSelectEntity(entity.id)}
-                      className={`group relative inline-flex items-center gap-3 rounded-xl border px-3.5 py-2 text-left transition-all duration-150 ${
-                        isSelected
-                          ? "border-accent bg-accent-soft/90 text-ink shadow-xs ring-2 ring-accent/30 scale-[1.01]"
-                          : "border-line bg-surface text-ink hover:border-accent/40 hover:bg-surface-muted/60 shadow-2xs"
-                      }`}
-                    >
-                      <div
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
-                          isSelected
-                            ? "bg-accent text-on-accent shadow-2xs"
-                            : "bg-surface-muted text-ink-muted group-hover:bg-accent-soft group-hover:text-accent"
-                        }`}
-                      >
-                        {entityKindIcon(entity.kind, isSelected)}
-                      </div>
-
-                      <div className="min-w-0 pr-1">
-                        <span className="block truncate text-xs font-bold text-ink">{entity.name}</span>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px]">
-                          <span className="font-semibold uppercase tracking-wider text-ink-faint">
-                            {t(entityKindLabel(entity.kind))}
-                          </span>
-                          <span className="text-ink-faint/50">·</span>
-                          <span
-                            className={`font-semibold ${
-                              isSelected ? "text-accent" : "text-ink-muted"
-                            }`}
-                          >
-                            {appearanceCount} {appearanceCount === 1 ? t("beat") : t("beats")}
-                          </span>
+                          <svg width="24" height="28" viewBox="0 0 24 28" fill="none" className="overflow-visible">
+                            <line
+                              x1="12"
+                              y1="0"
+                              x2="12"
+                              y2="24"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeDasharray="4 3"
+                            />
+                            <circle cx="12" cy="24" r="3.5" fill="currentColor" />
+                          </svg>
                         </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
 
-          {/* Narrative Beat Chain Track */}
-          <div className="border-b border-line bg-surface/20 p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-3.5">
-              <div className="flex items-center gap-2">
-                <span className="flex h-5 w-5 items-center justify-center rounded-md bg-accent/10 text-accent">
-                  <ListNumbers size={13} />
-                </span>
-                <span className="text-xs font-bold uppercase tracking-[0.14em] text-ink">
-                  {t("Narrative sequence")}
-                </span>
-                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent">
-                  {events.length} {t("Beats")}
-                </span>
-              </div>
-              <span className="hidden text-xs text-ink-faint sm:inline-block">
-                {t("Sequential beat progression from scene to scene.")}
-              </span>
-            </div>
+                        {/* 2. Chapter Time Anchor on the Spine */}
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => toggleChapter(chapterTime.id)}
+                            data-outline-time={chapterTime.id}
+                            data-time-kind="chapter"
+                            className="group inline-flex items-center gap-2.5 rounded-xl border border-line bg-surface px-4 py-2 text-xs font-bold text-ink shadow-2xs hover:border-accent hover:bg-surface-raised transition-all"
+                          >
+                            <span className="text-ink-muted group-hover:text-accent transition-colors">
+                              {isCollapsed ? <CaretRight size={14} weight="bold" /> : <CaretDown size={14} weight="bold" />}
+                            </span>
+                            <span className="font-bold text-sm tracking-tight text-ink">{chapterTime.title}</span>
+                            <span className="rounded-md bg-accent-soft px-2 py-0.5 text-[10px] font-extrabold text-accent">
+                              {chapterEvents.length} {t("Beats")}
+                            </span>
+                          </button>
+                        </div>
 
-            <ol
-              className="flex min-w-max items-center gap-0 overflow-x-auto pb-2 pt-1"
-              data-timeline-chain="true"
-            >
-              {events.map((event, index) => {
-                const next = events[index + 1];
-                const linkId = next ? `${event.id}->${next.id}` : "";
-                const connected = next ? linked.has(linkId) : false;
-                const isSelected = selectedEventId === event.id;
-                const participantCount = intersections.filter((hit) => hit.eventId === event.id).length;
-                const isEntityInEvent = selectedEntity
-                  ? selectedEntity.appearanceEventIds.includes(event.id)
-                  : false;
+                        {/* Branching Event Pearls & Entity Twigs */}
+                        {!isCollapsed ? (
+                          <div className="mt-4 space-y-4">
+                            {chapterEvents.length === 0 ? (
+                              <p className="py-2 pl-8 text-xs text-ink-faint italic">{t("No events in this chapter.")}</p>
+                            ) : (
+                              chapterEvents.map((event, eventIdx) => {
+                                const isEventSelected = selectedEventId === event.id;
+                                const isEntityParticipant = selectedEntityObj
+                                  ? selectedEntityObj.appearanceEventIds.includes(event.id)
+                                  : false;
+                                const isDimmed =
+                                  selectedEntityId && !isEntityParticipant && !isEventSelected;
 
-                return (
-                  <li key={event.id} className="flex min-w-48 items-center">
-                    <button
-                      type="button"
-                      data-timeline-event={event.id}
-                      data-timeline-sequence={event.sequence}
-                      onClick={() => onSelectEvent(event.id)}
-                      className={`group relative flex min-w-44 flex-col rounded-xl border p-3.5 text-left transition-all duration-150 ${
-                        isSelected
-                          ? "border-accent bg-accent-soft/90 shadow-xs ring-2 ring-accent/30 scale-[1.01]"
-                          : isEntityInEvent
-                            ? "border-accent/60 bg-accent-soft/30 shadow-2xs ring-1 ring-accent/25 hover:border-accent"
-                            : "border-line bg-surface-raised hover:border-accent/40 hover:bg-surface shadow-2xs"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1.5">
-                        <span
-                          className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                            isSelected
-                              ? "bg-accent text-on-accent"
-                              : "bg-surface-muted text-ink-muted"
-                          }`}
-                        >
-                          {t("Beat")} {event.sequence + 1}
-                        </span>
-                        {participantCount > 0 ? (
-                          <span className="flex items-center gap-1 text-[11px] font-semibold text-ink-muted">
-                            <User size={12} className={isSelected ? "text-accent" : "text-ink-faint"} />
-                            {participantCount}
-                          </span>
+                                const nextEvent = chapterEvents[eventIdx + 1];
+                                const eventEntities = entities.filter((entity) =>
+                                  entity.appearanceEventIds.includes(event.id),
+                                );
+                                const eventStateChanges = stateChanges.filter((sc) => sc.eventId === event.id);
+
+                                const chapterToEventEdgeId = `${chapterTime.id}->${event.id}`;
+                                const seqEdgeId = nextEvent ? `${event.id}->${nextEvent.id}` : "";
+
+                                return (
+                                  <div
+                                    key={event.id}
+                                    className={`relative transition-all duration-200 ${
+                                      isDimmed ? "opacity-35 grayscale-[25%]" : "opacity-100"
+                                    }`}
+                                  >
+                                    <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+                                      {/* Branching Containment Line from Chapter Spine to Event Pearl */}
+                                      <div
+                                        data-outline-edge={chapterToEventEdgeId}
+                                        data-edge-kind="contains"
+                                        className="shrink-0 hidden sm:flex items-center text-line"
+                                        aria-hidden="true"
+                                      >
+                                        <svg width="28" height="24" viewBox="0 0 28 24" fill="none" className="overflow-visible">
+                                          <path
+                                            d="M 4 0 C 4 12, 12 12, 24 12"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            fill="none"
+                                            strokeLinecap="round"
+                                          />
+                                          <circle cx="24" cy="12" r="3" fill="currentColor" />
+                                        </svg>
+                                      </div>
+
+                                      {/* 3. Event Pearl Card */}
+                                      <button
+                                        type="button"
+                                        data-outline-event={event.id}
+                                        data-timeline-event={event.id}
+                                        data-timeline-sequence={event.sequence}
+                                        onClick={() => onSelectEvent(event.id)}
+                                        className={`group relative flex w-full max-w-md flex-col rounded-2xl border p-4 text-left transition-all duration-150 shadow-2xs ${
+                                          isEventSelected
+                                            ? "border-accent bg-accent-soft/90 ring-2 ring-accent/40 shadow-xs scale-[1.01]"
+                                            : isEntityParticipant
+                                              ? "border-accent/80 bg-accent-soft/40 ring-2 ring-accent/30 hover:border-accent"
+                                              : "border-line bg-surface hover:border-accent/40 hover:bg-surface-raised"
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span
+                                            className={`inline-flex rounded-lg px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider ${
+                                              isEventSelected
+                                                ? "bg-accent text-on-accent"
+                                                : "bg-surface-muted text-ink-muted"
+                                            }`}
+                                          >
+                                            {t("Beat {n}", { n: event.sequence + 1 })}
+                                          </span>
+
+                                          {eventEntities.length > 0 ? (
+                                            <span className="flex items-center gap-1 text-[11px] font-semibold text-ink-muted">
+                                              <Users size={12} className={isEventSelected ? "text-accent" : "text-ink-faint"} />
+                                              <span>{eventEntities.length}</span>
+                                            </span>
+                                          ) : null}
+                                        </div>
+
+                                        <h3 className="mt-2 text-xs font-bold leading-snug text-ink">
+                                          {event.title}
+                                        </h3>
+
+                                        {event.summary ? (
+                                          <p className="mt-1.5 line-clamp-2 text-[11px] leading-relaxed text-ink-muted">
+                                            {event.summary}
+                                          </p>
+                                        ) : null}
+
+                                        {isEntityParticipant ? (
+                                          <div className="mt-2 flex items-center gap-1 text-[10px] font-bold text-accent">
+                                            <Sparkle size={11} weight="fill" />
+                                            <span>{t("Entity in beat")}</span>
+                                          </div>
+                                        ) : null}
+                                      </button>
+
+                                      {/* 4. Entity Leaves Sprouting Laterally from Event Pearl */}
+                                      {eventEntities.length > 0 ? (
+                                        <div className="flex flex-wrap items-center gap-2 pl-4 lg:pl-0">
+                                          {eventEntities.map((entity) => {
+                                            const isThisEntitySelected = selectedEntityId === entity.id;
+                                            const participatesEdgeId = `${event.id}->${entity.id}`;
+                                            const stateChange = eventStateChanges.find(
+                                              (sc) => sc.entityId === entity.id,
+                                            );
+
+                                            return (
+                                              <div key={entity.id} className="flex items-center gap-1.5">
+                                                {/* Real Branching Line for Entity (Participates) */}
+                                                <div
+                                                  data-outline-edge={participatesEdgeId}
+                                                  data-edge-kind="participates"
+                                                  className={`shrink-0 flex items-center transition-colors duration-150 ${
+                                                    isThisEntitySelected
+                                                      ? "text-accent"
+                                                      : isEventSelected
+                                                        ? "text-accent/80"
+                                                        : "text-line"
+                                                  }`}
+                                                  aria-hidden="true"
+                                                >
+                                                  <svg
+                                                    width="24"
+                                                    height="16"
+                                                    viewBox="0 0 24 16"
+                                                    fill="none"
+                                                    className="overflow-visible"
+                                                  >
+                                                    <path
+                                                      d="M 0 8 C 8 8, 12 8, 20 8"
+                                                      stroke="currentColor"
+                                                      strokeWidth={isThisEntitySelected ? "2.5" : "1.5"}
+                                                      strokeLinecap="round"
+                                                    />
+                                                    <circle
+                                                      cx="20"
+                                                      cy="8"
+                                                      r={isThisEntitySelected ? "3.5" : "2"}
+                                                      fill="currentColor"
+                                                    />
+                                                  </svg>
+                                                </div>
+
+                                                {/* Entity Node Leaf */}
+                                                <button
+                                                  type="button"
+                                                  data-outline-entity={entity.id}
+                                                  onClick={() => onSelectEntity(entity.id)}
+                                                  className={`group inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-left text-xs transition-all duration-150 shadow-2xs ${
+                                                    isThisEntitySelected
+                                                      ? "border-accent bg-accent text-on-accent ring-2 ring-accent/40 scale-105 shadow-xs"
+                                                      : "border-line bg-surface text-ink hover:border-accent/40 hover:bg-surface-muted"
+                                                  }`}
+                                                >
+                                                  <span
+                                                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors ${
+                                                      isThisEntitySelected
+                                                        ? "bg-on-accent/20 text-on-accent"
+                                                        : "bg-surface-muted text-ink-muted group-hover:text-accent"
+                                                    }`}
+                                                  >
+                                                    {entityKindIcon(entity.kind, isThisEntitySelected)}
+                                                  </span>
+                                                  <span className="font-bold truncate max-w-[130px] sm:max-w-[180px]">
+                                                    {entity.name}
+                                                  </span>
+                                                  <span
+                                                    className={`rounded-full px-1.5 py-0.2 text-[9px] font-extrabold uppercase tracking-wider ${
+                                                      isThisEntitySelected
+                                                        ? "bg-on-accent/20 text-on-accent"
+                                                        : "bg-surface-muted text-ink-faint"
+                                                    }`}
+                                                  >
+                                                    {t(entityKindLabel(entity.kind))}
+                                                  </span>
+                                                </button>
+
+                                                {/* Visible State Change Edge & Badge */}
+                                                {stateChange ? (
+                                                  <div
+                                                    data-outline-edge={`${event.id}->${entity.id}`}
+                                                    data-edge-kind="state"
+                                                    className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300 shadow-2xs"
+                                                    title={`${stateChange.condition || stateChange.outfit || "State change"} (${stateChange.truth})`}
+                                                  >
+                                                    <Lightning size={11} weight="fill" />
+                                                    <span className="max-w-[90px] truncate">
+                                                      {stateChange.condition || stateChange.outfit || t("State update")}
+                                                    </span>
+                                                    <span className="text-[8px] opacity-70">({stateChange.truth})</span>
+                                                  </div>
+                                                ) : null}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : null}
+                                    </div>
+
+                                    {/* 5. Sequence Flow Edge Leading to Next Beat */}
+                                    {nextEvent ? (
+                                      <div
+                                        data-outline-edge={seqEdgeId}
+                                        data-edge-kind="sequence"
+                                        className="my-1.5 flex items-center justify-start pl-8 text-accent/70"
+                                        aria-hidden="true"
+                                      >
+                                        <div className="flex flex-col items-center">
+                                          <div className="h-3.5 w-0.5 bg-accent/50" />
+                                          <span className="text-[9px] font-mono leading-none">▼</span>
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
                         ) : null}
                       </div>
-
-                      <span className="mt-2 line-clamp-2 text-xs font-bold leading-snug text-ink">
-                        {event.title}
-                      </span>
-
-                      {isEntityInEvent ? (
-                        <div className="mt-2 flex items-center gap-1 text-[10px] font-bold text-accent">
-                          <Sparkle size={10} weight="fill" />
-                          <span>{t("Entity in beat")}</span>
-                        </div>
-                      ) : null}
-                    </button>
-
-                    {next ? (
-                      <div className="flex items-center px-1.5">
-                        <span
-                          data-timeline-link={linkId}
-                          data-connected={connected ? "true" : "false"}
-                          className="h-0.5 min-w-8 flex-1 bg-accent/80 transition-colors relative after:content-[''] after:absolute after:right-0 after:top-1/2 after:-translate-y-1/2 after:w-1.5 after:h-1.5 after:rounded-full after:bg-accent"
-                          aria-hidden="true"
-                        />
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
-
-          {/* Character Presence Continuity Matrix */}
-          <div className="overflow-x-auto">
-            <div className="flex items-center justify-between border-b border-line bg-surface/50 px-5 py-3">
-              <div className="flex items-center gap-2">
-                <Users size={16} className="text-accent" />
-                <span className="text-xs font-bold uppercase tracking-[0.14em] text-ink">
-                  {t("Character presence")}
-                </span>
-              </div>
-              <span className="text-xs text-ink-faint">{t("Who is in which event, in story order.")}</span>
-            </div>
-
-            <table className="min-w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-line bg-surface">
-                  <th className="sticky left-0 z-10 min-w-48 border-r border-line bg-surface px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.12em] text-ink-muted shadow-xs">
-                    <div className="flex items-center gap-2">
-                      <Users size={15} className="text-accent" />
-                      <span>{t("Characters")}</span>
-                    </div>
-                  </th>
-                  {events.map((event) => {
-                    const isSelected = selectedEventId === event.id;
-                    return (
-                      <th
-                        key={event.id}
-                        className={`min-w-44 border-r border-line/70 px-3.5 py-3 text-left font-normal transition-colors ${
-                          isSelected ? "bg-accent-soft/30" : ""
-                        }`}
-                      >
-                        <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-ink-faint">
-                          {t("Beat")} {event.sequence + 1}
-                        </span>
-                        <span className="mt-1 block truncate text-xs font-bold text-ink">{event.title}</span>
-                      </th>
                     );
                   })}
-                </tr>
-              </thead>
-              <tbody>
-                {characters.length === 0 ? (
-                  <tr>
-                    <td className="px-4 py-8 text-center text-sm text-ink-faint" colSpan={events.length + 1}>
-                      {t("No characters to plot yet.")}
-                    </td>
-                  </tr>
-                ) : (
-                  characters.map((character, rowIndex) => {
-                    const characterBeatsCount = intersections.filter((hit) => hit.characterId === character.id).length;
-                    const isCharacterEntitySelected = selectedEntityId === character.id;
-
-                    return (
-                      <tr
-                        key={character.id}
-                        data-timeline-lane={character.id}
-                        className={`border-b border-line/60 transition-colors hover:bg-surface-muted/40 ${
-                          isCharacterEntitySelected
-                            ? "bg-accent-soft/20"
-                            : rowIndex % 2 === 0
-                              ? "bg-surface-raised"
-                              : "bg-surface/30"
-                        }`}
-                      >
-                        <th
-                          className={`sticky left-0 z-10 border-r border-line px-4 py-3.5 text-left font-semibold text-ink shadow-xs transition-colors ${
-                            isCharacterEntitySelected
-                              ? "bg-accent-soft/50 ring-2 ring-accent/30"
-                              : "bg-surface-raised"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2.5 truncate">
-                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-bold text-accent ring-1 ring-accent/20">
-                                {character.name.slice(0, 1).toUpperCase()}
-                              </div>
-                              <span className="truncate text-xs font-bold text-ink">{character.name}</span>
-                            </div>
-                            <span className="shrink-0 rounded-md bg-surface-muted px-2 py-0.5 text-[10px] font-bold text-ink-muted">
-                              {characterBeatsCount}
-                            </span>
-                          </div>
-                        </th>
-                        {events.map((event) => {
-                          const hit = present.has(`${character.id}:${event.id}`);
-                          const isSelected = selectedEventId === event.id;
-                          return (
-                            <td
-                              key={`${character.id}:${event.id}`}
-                              data-timeline-cell={`${character.id}:${event.id}`}
-                              data-present={hit ? "true" : "false"}
-                              className={`border-r border-line/50 px-3 py-3 text-center transition-colors ${
-                                isSelected ? "bg-accent-soft/20" : ""
-                              }`}
-                            >
-                              {hit ? (
-                                <button
-                                  type="button"
-                                  aria-label={`${character.name} · ${event.title}`}
-                                  onClick={() => onSelectEvent(event.id)}
-                                  className="group inline-flex h-7 w-7 items-center justify-center rounded-full bg-accent text-on-accent shadow-xs ring-4 ring-accent/15 transition-all hover:scale-110 active:scale-95"
-                                >
-                                  <User size={13} weight="bold" />
-                                </button>
-                              ) : (
-                                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-line/70" aria-hidden="true" />
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -724,7 +768,7 @@ function EntityInspector({
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span className="inline-flex shrink-0 items-center justify-center rounded-md bg-accent px-2 py-0.5 text-[10px] font-bold text-on-accent shadow-2xs">
-                      {t("Beat")} {event.sequence + 1}
+                      {t("Beat {n}", { n: event.sequence + 1 })}
                     </span>
                     <span className="truncate text-xs font-bold text-ink">{event.title}</span>
                   </div>
@@ -756,7 +800,7 @@ function EntityInspector({
                 >
                   {event ? (
                     <span className="rounded bg-surface-muted px-1.5 py-0.5 font-bold text-ink-muted">
-                      {t("Beat")} {event.sequence + 1}
+                      {t("Beat {n}", { n: event.sequence + 1 })}
                     </span>
                   ) : null}
                   <span className="font-semibold">{detail || t("State update")}</span>
@@ -801,7 +845,7 @@ function EventStateChanges({
             >
               <span className="font-bold text-ink">{entity?.name ?? change.entityId}</span>
               {detail ? <span className="text-ink-muted">· {detail}</span> : null}
-              <span className="rounded bg-surface-muted px-1.5 py-0.2 text-[10px] font-semibold text-ink-faint">
+              <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold text-ink-faint">
                 {change.truth}
               </span>
             </li>
@@ -818,4 +862,3 @@ export function eventParticipants(
 ): string[] {
   return event.participantIds.filter((id) => characterIds.includes(id));
 }
-

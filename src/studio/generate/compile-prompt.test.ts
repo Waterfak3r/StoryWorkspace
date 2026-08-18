@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { StudioContextSnapshot } from "../domain";
-import { compileComicsPagePrompt, compileImagePrompt, mentionsCharacterOnScreen } from "./compile-prompt";
+import {
+  buildContinuityConstraints,
+  compileComicsPagePrompt,
+  compileImagePrompt,
+  mentionsCharacterOnScreen,
+} from "./compile-prompt";
 
 describe("compileImagePrompt", () => {
   it("prefixes costume entities and includes visual base plus textual references", () => {
@@ -21,6 +26,7 @@ describe("compileImagePrompt", () => {
           visual: {
             base: "navy wool",
             references: ["assets/images/coat.png"],
+            spatial: "",
           },
           state: { outfit: "", condition: "" },
         },
@@ -69,7 +75,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Sue",
           description: "Young woman from Maine.",
-          visual: { base: "brown bob, paint-stained smock", references: [] },
+          visual: { base: "brown bob, paint-stained smock", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
       ],
@@ -113,7 +119,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Sue",
           description: "Young woman from Maine.",
-          visual: { base: "brown bob, paint-stained smock", references: [] },
+          visual: { base: "brown bob, paint-stained smock", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
         {
@@ -121,7 +127,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Johnsy",
           description: "Frail young woman.",
-          visual: { base: "pale face, dark hair on a white pillow", references: [] },
+          visual: { base: "pale face, dark hair on a white pillow", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
         {
@@ -129,7 +135,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Behrman",
           description: "Aged painter.",
-          visual: { base: "fierce whiskers, old blue shirt", references: [] },
+          visual: { base: "fierce whiskers, old blue shirt", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
         {
@@ -137,7 +143,7 @@ describe("compileImagePrompt", () => {
           kind: "location",
           name: "Ivy wall",
           description: "Brick wall with ivy.",
-          visual: { base: "wet brick, last leaf", references: [] },
+          visual: { base: "wet brick, last leaf", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
       ],
@@ -168,7 +174,7 @@ describe("compileImagePrompt", () => {
       kind: "character" as const,
       name: "Sue",
       description: "Young woman from Maine.",
-      visual: { base: "brown bob, paint-stained smock", references: [] },
+      visual: { base: "brown bob, paint-stained smock", references: [], spatial: "" },
       state: { outfit: "", condition: "" },
     };
     const johnsy = {
@@ -176,7 +182,7 @@ describe("compileImagePrompt", () => {
       kind: "character" as const,
       name: "Johnsy",
       description: "Frail young woman.",
-      visual: { base: "pale face, dark hair on a white pillow", references: [] },
+      visual: { base: "pale face, dark hair on a white pillow", references: [], spatial: "" },
       state: { outfit: "", condition: "" },
     };
     const scene = {
@@ -273,6 +279,79 @@ describe("compileImagePrompt", () => {
     expect(mentionsCharacterOnScreen("Behrman stands at the window.", "Behrman")).toBe(true);
   });
 
+  it("forks page prompts for model and overlay lettering without scanning the script", () => {
+    const snapshot: StudioContextSnapshot = {
+      scene: {
+        id: "scene-01",
+        title: "The last leaf",
+        script: "“I want to live,” she said. Sue hugged her.",
+        intent: "Hope returns.",
+      },
+      entities: [
+        {
+          id: "character-02",
+          kind: "character",
+          name: "Johnsy",
+          description: "Frail young woman.",
+          visual: { base: "pale face", references: [], spatial: "" },
+          state: { outfit: "", condition: "" },
+        },
+      ],
+      style: { id: "default", label: "Default", visual: "Sequential comic stills." },
+      intent: "Hope returns.",
+      shot: {
+        id: "shot-01",
+        purpose: "Johnsy chooses life",
+        action: "Johnsy watches the leaf",
+        camera: "medium",
+      },
+      continuity: { from: null, prior: null },
+      storyPosition: { events: [] },
+    };
+    const speech = {
+      "shot-01": [
+        {
+          id: "line-01",
+          speaker: "Johnsy",
+          speakerId: "character-02",
+          text: "I want to live,",
+          kind: "speech" as const,
+          eventId: "volume-01-chapter-01-scene-01",
+        },
+      ],
+    };
+
+    const modeled = compileComicsPagePrompt([snapshot], "", [], speech, "model");
+    expect(modeled.prompt).toContain("speech: Johnsy: I want to live,");
+    expect(modeled.prompt).toContain("Letter ONLY the listed speech:");
+    expect(modeled.prompt).not.toContain("Do not letter the words in the pixels");
+    expect(modeled.prompt).not.toContain(snapshot.scene.script);
+
+    const overlaid = compileComicsPagePrompt([snapshot], "", [], speech, "overlay");
+    expect(overlaid.prompt).toContain("speech: Johnsy: I want to live,");
+    expect(overlaid.prompt).toContain("Do not letter the words in the pixels");
+    expect(overlaid.prompt).not.toContain(snapshot.scene.script);
+    expect(modeled.prompt).toContain("Cast (draw only these people, no extras): Johnsy.");
+
+    const silent = compileComicsPagePrompt(
+      [
+        {
+          ...snapshot,
+          style: {
+            ...snapshot.style,
+            visual: "Sequential comic stills; leave space for speech balloons.",
+          },
+        },
+      ],
+      "",
+      [],
+      {},
+      "model",
+    );
+    expect(silent.prompt).toContain("Do not draw speech balloons, empty balloon outlines");
+    expect(silent.prompt).not.toContain("leave space for speech balloons");
+  });
+
   it("carries Sue from the prior shot onto a Johnsy-only action", () => {
     const snapshot: StudioContextSnapshot = {
       scene: {
@@ -287,7 +366,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Sue",
           description: "Young woman from Maine.",
-          visual: { base: "brown bob, paint-stained smock", references: [] },
+          visual: { base: "brown bob, paint-stained smock", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
         {
@@ -295,7 +374,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Johnsy",
           description: "Frail young woman.",
-          visual: { base: "pale face, dark hair on a white pillow", references: [] },
+          visual: { base: "pale face, dark hair on a white pillow", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
         {
@@ -303,7 +382,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Behrman",
           description: "Aged painter.",
-          visual: { base: "fierce whiskers, old blue shirt", references: [] },
+          visual: { base: "fierce whiskers, old blue shirt", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
         {
@@ -311,7 +390,7 @@ describe("compileImagePrompt", () => {
           kind: "location",
           name: "Ivy wall",
           description: "Brick wall with ivy.",
-          visual: { base: "wet brick, last leaf", references: [] },
+          visual: { base: "wet brick, last leaf", references: [], spatial: "" },
           state: { outfit: "", condition: "" },
         },
       ],
@@ -355,7 +434,7 @@ describe("compileImagePrompt", () => {
           kind: "character",
           name: "Jill",
           description: "A harbor lookout",
-          visual: { base: "wool coat", references: [] },
+          visual: { base: "wool coat", references: [], spatial: "" },
           state: { outfit: "navy coat", condition: "injured" },
         },
       ],
@@ -378,5 +457,129 @@ describe("compileImagePrompt", () => {
     expect(compiled.prompt).toContain("Harbor watch");
     expect(compiled.prompt).toContain("condition: injured");
     expect(compiled.prompt).not.toContain(snapshot.scene.script);
+  });
+
+  it("lets a stacked hair condition override identity hair length in the compile string", () => {
+    const snapshot: StudioContextSnapshot = {
+      scene: {
+        id: "scene-03",
+        title: "Jim returns home and the gifts are revealed",
+        script: "Jim stepped in. Della had sold her hair.",
+        intent: "Jim confronts the haircut.",
+      },
+      entities: [
+        {
+          id: "character-01",
+          kind: "character",
+          name: "Della",
+          description: "A slender young woman. Her pride is knee-length brown hair.",
+          visual: {
+            base: "young American woman about twenty, slender, knee-length brown hair, 1900s tenement blouse",
+            references: [],
+            spatial: "",
+          },
+          state: { outfit: "1900s tenement blouse", condition: "hair cut short into tiny close-lying curls" },
+        },
+      ],
+      style: { id: "default", label: "Default", visual: "Watercolor indie." },
+      intent: "Jim confronts the haircut.",
+      shot: {
+        id: "shot-01",
+        purpose: "Jim's entrance",
+        action: "Jim stops in the doorway and stares at Della",
+        camera: "push-in",
+      },
+      continuity: { from: null, prior: null },
+      storyPosition: { events: [] },
+    };
+
+    const compiled = compileComicsPagePrompt([snapshot]);
+    expect(compiled.prompt).toContain("condition: hair cut short into tiny close-lying curls");
+    expect(compiled.prompt).toContain("identity lock Della:");
+    expect(compiled.prompt).not.toMatch(/knee-length brown hair/i);
+    expect(compiled.prompt).toMatch(/tiny close-lying curls/i);
+  });
+
+  it("adds a Spatial lock line from location visual.spatial", () => {
+    const snapshot: StudioContextSnapshot = {
+      scene: {
+        id: "scene-01",
+        title: "The studio",
+        script: "Johnsy looks at the window.",
+        intent: "Lock the room.",
+      },
+      entities: [
+        {
+          id: "location-01",
+          kind: "location",
+          name: "Studio",
+          description: "A top-floor room.",
+          visual: { base: "brick and ivy", references: [], spatial: "bed on the left, window on the right" },
+          state: { outfit: "", condition: "" },
+        },
+      ],
+      style: { id: "default", label: "Default", visual: "Sequential comic stills." },
+      intent: "Lock the room.",
+      shot: {
+        id: "shot-01",
+        purpose: "Look",
+        action: "Johnsy looks at the window",
+        camera: "medium",
+      },
+      continuity: { from: null, prior: null },
+      storyPosition: { events: [] },
+    };
+
+    const page = compileComicsPagePrompt([snapshot]);
+    expect(page.prompt).toContain("Spatial lock: bed on the left, window on the right");
+    expect(buildContinuityConstraints(snapshot)).toContain("Spatial lock: bed on the left, window on the right");
+  });
+
+  it("uses an irregular Marvel-style sentence and omits regular grid phrases", () => {
+    const snapshot: StudioContextSnapshot = {
+      scene: {
+        id: "scene-01",
+        title: "The studio",
+        script: "Sue opens the curtain.",
+        intent: "Open.",
+      },
+      entities: [],
+      style: { id: "default", label: "Default", visual: "Sequential comic stills." },
+      intent: "Open.",
+      shot: {
+        id: "shot-01",
+        purpose: "Open",
+        action: "Sue opens the curtain",
+        camera: "wide",
+      },
+      continuity: { from: null, prior: null },
+      storyPosition: { events: [] },
+    };
+    const second = {
+      ...snapshot,
+      shot: { id: "shot-02", purpose: "Look", action: "Johnsy stares at the leaf", camera: "close-up" },
+    };
+
+    const marvel = compileComicsPagePrompt([snapshot, second], "", [], {}, "model", {
+      layout: "marvel",
+      compose: "page",
+    });
+    expect(marvel.prompt).toMatch(/irregular|Marvel-style/i);
+    expect(marvel.prompt).not.toContain("2x2 grid");
+    expect(marvel.prompt).not.toContain("two stacked panels");
+
+    const stacked = compileComicsPagePrompt([snapshot, second], "", [], {}, "model", {
+      layout: "2",
+      compose: "page",
+    });
+    expect(stacked.prompt).toContain("two stacked panels");
+
+    const panel = compileComicsPagePrompt([snapshot], "", [], {}, "model", {
+      layout: "marvel",
+      compose: "panels",
+    });
+    expect(panel.prompt).not.toMatch(/irregular|Marvel-style/i);
+    expect(panel.prompt).not.toContain("2x2 grid");
+    expect(panel.prompt).not.toContain("two stacked panels");
   });
 });

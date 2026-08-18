@@ -10,7 +10,8 @@ import {
   type StudioStyle,
 } from "../domain";
 import { StudioNotFoundError } from "../errors";
-import { readContentState, readEntity, readScene, readStyle, readTree } from "../fs";
+import { readContentState, readEntity, readScene, readStyle } from "../fs";
+import { listScenesInStoryOrder } from "../state/story-order";
 
 const STORY_POSITION_LIMIT = 8;
 const STORY_POSITION_SUMMARY_MAX = 240;
@@ -29,6 +30,8 @@ export function resolveContext(input: {
   const priorPatches = prior.flatMap(
     (item) => readContentState(input.projectId, item.volumeId, item.chapterId, item.sceneId)?.patches ?? [],
   );
+  const currentPatches =
+    readContentState(input.projectId, input.volumeId, input.chapterId, input.sceneId)?.patches ?? [];
   return buildContextSnapshot({
     scene,
     style,
@@ -40,7 +43,7 @@ export function resolveContext(input: {
         summary: truncateSummary(item.summary),
       })),
     },
-    priorPatches,
+    priorPatches: [...priorPatches, ...currentPatches],
   });
 }
 
@@ -70,7 +73,11 @@ export function buildContextSnapshot(input: {
       kind: entity.kind,
       name: entity.name,
       description: entity.description,
-      visual: { base: entity.visual.base, references: [...entity.visual.references] },
+      visual: {
+        base: entity.visual.base,
+        references: [...entity.visual.references],
+        spatial: entity.visual.spatial ?? "",
+      },
       state: stackedEntityState(entity, input.priorPatches ?? []),
     })),
     style: {
@@ -116,23 +123,13 @@ function priorStoryScenes(
   chapterId: string,
   sceneId: string,
 ): { volumeId: string; chapterId: string; sceneId: string; title: string; summary: string }[] {
-  const tree = readTree(projectId);
-  const ordered: { volumeId: string; chapterId: string; sceneId: string; title: string; summary: string }[] = [];
-
-  for (const volume of tree.volumes) {
-    for (const chapter of volume.chapters) {
-      for (const sceneNode of chapter.scenes) {
-        const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
-        ordered.push({
-          volumeId: volume.id,
-          chapterId: chapter.id,
-          sceneId: scene.id,
-          title: scene.title,
-          summary: scene.intent.trim() || scene.script.trim(),
-        });
-      }
-    }
-  }
+  const ordered = listScenesInStoryOrder(projectId).map((item) => ({
+    volumeId: item.volumeId,
+    chapterId: item.chapterId,
+    sceneId: item.scene.id,
+    title: item.scene.title,
+    summary: item.scene.intent.trim() || item.scene.script.trim(),
+  }));
 
   const currentIndex = ordered.findIndex(
     (item) => item.volumeId === volumeId && item.chapterId === chapterId && item.sceneId === sceneId,

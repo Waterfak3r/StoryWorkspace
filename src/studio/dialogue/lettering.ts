@@ -1,4 +1,4 @@
-import type { StudioAttributedSpeechLine, StudioLetteringBalloon } from "../domain";
+import type { LetteringAnchor, StudioAttributedSpeechLine, StudioLetteringBalloon } from "../domain";
 
 export type PanelLetteringInput = {
   shotId: string;
@@ -6,12 +6,20 @@ export type PanelLetteringInput = {
   lines: readonly StudioAttributedSpeechLine[];
 };
 
+const SPEECH_ANCHORS = ["tl", "tr"] as const satisfies readonly LetteringAnchor[];
+const NARRATION_ANCHORS = ["bl", "br"] as const satisfies readonly LetteringAnchor[];
+
 export function compilePageLettering(
   assignments: readonly PanelLetteringInput[],
 ): StudioLetteringBalloon[] {
   const balloons: StudioLetteringBalloon[] = [];
   for (const assignment of assignments) {
+    let speechIndex = 0;
+    let narrationIndex = 0;
     for (const line of assignment.lines) {
+      const kind = line.kind ?? "speech";
+      const anchors = kind === "narration" ? NARRATION_ANCHORS : SPEECH_ANCHORS;
+      const index = kind === "narration" ? narrationIndex++ : speechIndex++;
       balloons.push({
         id: line.id,
         speaker: line.speaker,
@@ -19,7 +27,8 @@ export function compilePageLettering(
         text: line.text,
         panelIndex: assignment.panelIndex,
         shotId: assignment.shotId,
-        kind: "speech",
+        kind,
+        anchor: anchors[Math.min(index, anchors.length - 1)]!,
       });
     }
   }

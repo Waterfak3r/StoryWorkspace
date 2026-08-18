@@ -1,8 +1,9 @@
 import "server-only";
 
+import { planScenePages } from "../comics/plan-pages";
 import { isStudioSlug, nextNumberedId, type StudioScene, type StudioShot, type StudioShotStatus } from "../domain";
 import { StudioValidationError } from "../errors";
-import { readScene, replaceSceneShots } from "../fs";
+import { readScene, readStyle, replaceSceneShots } from "../fs";
 
 export type DirectorShotDraft = {
   id?: string;
@@ -135,8 +136,15 @@ function persistDirectorDrafts(
       continuity_from: draft.continuity_from !== undefined ? draft.continuity_from : index === 0 ? null : shots[index - 1]!.id,
       status: draft.status ?? "pending",
       selected_image: draft.selected_image ?? null,
+      pageId: "",
       updatedAt: now,
     });
+  }
+
+  const planned = planScenePages(scene.id, shots, readStyle(projectId).layout);
+  const pageByShot = new Map(planned.map((item) => [item.shotId, item.pageId]));
+  for (const shot of shots) {
+    shot.pageId = pageByShot.get(shot.id) ?? "";
   }
 
   return replaceSceneShots(projectId, volumeId, chapterId, sceneId, shots);
@@ -153,16 +161,15 @@ function numberedShotId(n: number): string {
   return `shot-${String(n).padStart(2, "0")}`;
 }
 
+const MAX_DEFAULT_SHOTS = 6;
+
 function splitSceneScript(script: string): string[] {
   const trimmed = script.trim();
   const paragraphs = trimmed.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
-  if (paragraphs.length >= 2) {
-    return paragraphs;
-  }
-
   const sentences = trimmed.split(/(?<=[.!?。！？])\s+/).map((part) => part.trim()).filter(Boolean);
-  if (sentences.length >= 2) {
-    return sentences;
+  const parts = paragraphs.length >= 2 ? paragraphs : sentences.length >= 2 ? sentences : [];
+  if (parts.length >= 2) {
+    return chunkParts(parts, MAX_DEFAULT_SHOTS);
   }
 
   if (trimmed) {
@@ -170,4 +177,16 @@ function splitSceneScript(script: string): string[] {
   }
 
   return ["The scene opens.", "The scene closes."];
+}
+
+function chunkParts(parts: readonly string[], maxChunks: number): string[] {
+  if (parts.length <= maxChunks) {
+    return [...parts];
+  }
+  const chunkSize = Math.ceil(parts.length / maxChunks);
+  const chunks: string[] = [];
+  for (let index = 0; index < parts.length; index += chunkSize) {
+    chunks.push(parts.slice(index, index + chunkSize).join(" "));
+  }
+  return chunks;
 }

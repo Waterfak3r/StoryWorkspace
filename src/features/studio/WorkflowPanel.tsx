@@ -3,10 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ArrowsClockwise,
+  BookOpen,
+  ChatCircleDots,
   Check,
   FilmSlate,
   Lock,
   LockOpen,
+  Play,
+  Sparkle,
+  User,
 } from "@phosphor-icons/react";
 import type {
   StudioPipelineGraph,
@@ -22,7 +27,6 @@ import {
   confirmStudioProjectDialogue,
   directStudioScene,
   findScenePathInTree,
-  generateStudioShot,
   getStudioScene,
   getStudioTree,
   getStudioWorkflow,
@@ -31,6 +35,7 @@ import {
   lockStudioShot,
   parseStudioText,
   rerunStudioWorkflowNode,
+  startStudioWorkflow,
   studioImageUrl,
 } from "./api";
 
@@ -62,6 +67,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   const [busyAction, setBusyAction] = useState<"import-parse" | "import" | "storyboard" | "dialogue" | "comics" | null>(
     null,
   );
+  const [workflowRunning, setWorkflowRunning] = useState(false);
   const [importText, setImportText] = useState("");
   const [parseRuns, setParseRuns] = useState<StudioParseRun[]>([]);
 
@@ -114,7 +120,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
 
   async function parseImport() {
     const source = importText.trim();
-    if (!source || busyAction) {
+    if (!source || busyAction || workflowRunning) {
       return;
     }
     setBusyAction("import-parse");
@@ -130,7 +136,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
 
   async function confirmImport() {
     const pending = parseRuns.find((run) => run.status === "pending");
-    if (!pending || busyAction) {
+    if (!pending || busyAction || workflowRunning) {
       if (!pending) {
         setError(t("No pending import to confirm. Parse pasted text first."));
       }
@@ -148,7 +154,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   }
 
   async function runDirector() {
-    if (busyAction) {
+    if (busyAction || workflowRunning) {
       return;
     }
     setBusyAction("storyboard");
@@ -169,7 +175,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   }
 
   async function confirmDialogue() {
-    if (busyAction) {
+    if (busyAction || workflowRunning) {
       return;
     }
     setBusyAction("dialogue");
@@ -183,31 +189,38 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
     }
   }
 
-  async function generateComics() {
-    if (busyAction) {
+  function getActiveWorkflowPhaseLabel(): string {
+    if (!pipeline) {
+      return t("Starting");
+    }
+    const storyboardStage = pipeline.stages.find((s) => s.id === "storyboard");
+    if (storyboardStage && storyboardStage.status !== "success") {
+      return t("Directing");
+    }
+    const dialogueStage = pipeline.stages.find((s) => s.id === "dialogue");
+    if (dialogueStage && dialogueStage.status !== "success") {
+      return t("Confirming dialogue");
+    }
+    return t("Generating comic pages");
+  }
+
+  async function runStartWorkflow() {
+    if (workflowRunning || busyAction !== null) {
       return;
     }
-    setBusyAction("comics");
+    setWorkflowRunning(true);
     try {
-      const paths = await loadScenePaths();
-      for (const path of paths) {
-        const scene = await getStudioScene(projectId, path);
-        const needsPage = scene.shots.length > 0 && scene.shots.every((shot) => !(shot.selected_image ?? "").trim());
-        const first = scene.shots[0];
-        if (needsPage && first) {
-          await generateStudioShot(projectId, path, first.id);
-        }
-      }
+      await startStudioWorkflow(projectId);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("The request could not be completed."));
     } finally {
-      setBusyAction(null);
+      setWorkflowRunning(false);
     }
   }
 
   async function rerunImage(node: StudioWorkflowNode) {
-    if (node.locked) {
+    if (node.locked || workflowRunning) {
       return;
     }
     setRunningImageId(node.shotId);
@@ -226,16 +239,40 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="mx-auto w-full max-w-[1020px] px-5 py-8 sm:px-8">
-      {/* Header section */}
-      <div className="border-b border-line pb-6">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-2 w-2 rounded-full bg-accent" />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">{t("Workflow")}</p>
+      {/* Header section with One-Click Start action */}
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-6">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-2 w-2 rounded-full bg-accent" />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">{t("Workflow")}</p>
+          </div>
+          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Pipeline")}</h1>
+          <p className="mt-2 text-sm text-ink-muted">
+            {t("The full chain from story text to a finished comics page.")}
+          </p>
         </div>
-        <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{t("Pipeline")}</h1>
-        <p className="mt-2 text-sm text-ink-muted">
-          {t("The full chain from story text to a finished comics page.")}
-        </p>
+
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            type="button"
+            data-workflow-start="true"
+            onClick={() => void runStartWorkflow()}
+            disabled={workflowRunning || busyAction !== null}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-on-accent shadow-xs transition-[background-color,transform,box-shadow] hover:bg-accent-strong active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {workflowRunning ? (
+              <>
+                <Sparkle size={16} className="animate-spin" />
+                <span>{getActiveWorkflowPhaseLabel()}</span>
+              </>
+            ) : (
+              <>
+                <Play size={16} weight="bold" />
+                <span>{t("Start")}</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -356,16 +393,26 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
           {selected.id === "comics" ? (
             <div className="mt-4">
               <p className="mb-3 text-xs text-ink-faint">
-                {t("Generate the first unfinished comics page from existing shots.")}
+                {t("Generate missing comic pages across directed scenes.")}
               </p>
               <button
                 type="button"
                 data-workflow-action="comics"
-                onClick={() => void generateComics()}
-                disabled={busyAction !== null}
+                onClick={() => void runStartWorkflow()}
+                disabled={workflowRunning || busyAction !== null}
                 className={stageActionClass}
               >
-                {busyAction === "comics" ? t("Generating comic page") : t("Generate comic page")}
+                {workflowRunning ? (
+                  <>
+                    <Sparkle size={14} className="animate-spin text-accent" />
+                    <span>{getActiveWorkflowPhaseLabel()}</span>
+                  </>
+                ) : (
+                  <>
+                    <Play size={14} weight="bold" className="text-accent" />
+                    <span>{t("Generate comic pages")}</span>
+                  </>
+                )}
               </button>
             </div>
           ) : null}
@@ -558,41 +605,162 @@ function DialogueStageList({ dialogue }: { dialogue: StudioProjectDialogue | nul
       <div className="mt-8 rounded-2xl border border-dashed border-line bg-surface/50 px-5 py-8" data-dialogue-list="true">
         <p className="text-sm font-medium text-ink-muted">{t("No attributed dialogue yet.")}</p>
         <p className="mt-2 text-sm text-ink-faint">
-          {t('Write lines like Sue: "The last leaf is still there." in the Story script. They show up here, then as balloons on the comics page.')}
+          {t("Confirm dialogue after storyboard. Lines are extracted from the original scene script and matched to characters, events, and panels.")}
         </p>
       </div>
     );
   }
 
   return (
-    <div className="mt-8 space-y-4" data-dialogue-list="true">
-      <p className="text-xs font-bold uppercase tracking-wider text-ink-faint">
-        {t("{n} attributed lines", { n: dialogue.lineCount })}
-      </p>
-      {visible.map((scene) => (
-        <section key={scene.sceneId} className="rounded-2xl border border-line bg-surface-raised px-4 py-4">
-          <h3 className="text-sm font-semibold text-ink">{scene.title}</h3>
-          {scene.unassigned.map((line) => (
-            <p key={line.id} data-dialogue-line={line.id} className="mt-3 text-sm text-ink">
-              <span className="font-semibold">{line.speaker}</span>
-              {` · ${line.text}`}
-            </p>
-          ))}
-          {scene.shots
-            .filter((shot) => shot.lines.length > 0)
-            .map((shot) => (
-              <div key={shot.shotId} className="mt-3 border-t border-line pt-3">
-                <p className="font-mono text-xs text-ink-faint">{shot.shotId}</p>
-                {shot.lines.map((line) => (
-                  <p key={line.id} data-dialogue-line={line.id} className="mt-2 text-sm text-ink">
-                    <span className="font-semibold">{line.speaker}</span>
-                    {` · ${line.text}`}
-                  </p>
-                ))}
+    <div className="mt-8 space-y-6" data-dialogue-list="true">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wider text-ink-faint">
+          {t("{n} attributed lines", { n: dialogue.lineCount })}
+        </p>
+      </div>
+      {visible.map((scene) => {
+        const eventIdentifier = scene.eventId || scene.title;
+        const totalAssigned = scene.shots.reduce((acc, shot) => acc + shot.lines.length, 0);
+
+        return (
+          <section
+            key={scene.sceneId}
+            className="rounded-2xl border border-line bg-surface-raised p-5 shadow-xs sm:p-6"
+          >
+            {/* Scene & Event Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/70 pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <span className="font-bold text-sm text-ink">{scene.title}</span>
+                <span className="rounded-full bg-surface-muted px-2.5 py-0.5 font-mono text-[11px] text-ink-muted">
+                  {scene.sceneId}
+                </span>
               </div>
-            ))}
-        </section>
-      ))}
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg border border-accent/20 bg-accent-soft px-2.5 py-0.5 text-xs font-semibold text-accent">
+                  {totalAssigned} {t("assigned")}
+                </span>
+              </div>
+            </div>
+
+            {/* Shots and assigned lines grid */}
+            <div className="mt-4 space-y-4">
+              {scene.shots.filter((shot) => shot.lines.length > 0).length === 0 && scene.shots.length > 0 ? (
+                <p className="text-xs text-ink-muted">
+                  {t("Silent shot")} · {scene.shots.length}
+                </p>
+              ) : null}
+              {scene.shots.filter((shot) => shot.lines.length > 0).map((shot) => (
+                  <div key={shot.shotId} className="rounded-xl border border-line/70 bg-surface/40 p-4">
+                    <div className="flex items-center justify-between gap-2 border-b border-line/50 pb-2">
+                      <div className="flex items-center gap-2">
+                        <FilmSlate size={14} className="text-accent" />
+                        <span className="font-mono text-xs font-bold text-ink">{shot.shotId}</span>
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider ${
+                            shot.lines.length > 0
+                              ? "border border-accent/30 bg-accent-soft text-accent"
+                              : "border border-line bg-surface-muted text-ink-muted"
+                          }`}
+                        >
+                          {shot.lines.length > 0 ? t("Lettered shot") : t("Silent shot")}
+                        </span>
+                        {shot.action ? (
+                          <span className="text-xs text-ink-muted truncate max-w-[320px]">
+                            {shot.action}
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="text-[10px] font-semibold text-ink-faint">
+                        {shot.lines.length} {t("lines")}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+                      {shot.lines.map((line) => {
+                        const lineKind = line.kind ?? "speech";
+                        const isNarration = lineKind === "narration";
+                        const lineEvent = line.eventId || eventIdentifier;
+
+                        return (
+                          <div
+                            key={line.id}
+                            data-dialogue-line={line.id}
+                            data-line-kind={lineKind}
+                            data-line-event={lineEvent}
+                            data-line-shot={shot.shotId}
+                            className="group relative flex flex-col justify-between rounded-xl border border-line/80 bg-surface-raised p-3.5 shadow-2xs transition-all hover:border-accent/40 hover:shadow-xs"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                {isNarration ? (
+                                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                                    <BookOpen size={11} weight="bold" />
+                                    {t("Narration")}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-md border border-accent/30 bg-accent-soft px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-accent">
+                                    <ChatCircleDots size={11} weight="bold" />
+                                    {t("Speech")}
+                                  </span>
+                                )}
+                                <span className="font-bold text-xs text-ink flex items-center gap-1 truncate max-w-[140px]">
+                                  {!isNarration ? <User size={12} className="text-accent shrink-0" /> : null}
+                                  <span>{isNarration ? t("Narrator") : line.speaker}</span>
+                                </span>
+                              </div>
+                              <span className="font-mono text-[10px] font-semibold text-ink-faint">
+                                {shot.shotId}
+                              </span>
+                            </div>
+
+                            <p className="mt-2.5 text-xs font-medium leading-relaxed text-ink">
+                              “{line.text}”
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+
+              {/* Unassigned lines if any */}
+              {scene.unassigned.length > 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-line bg-surface/30 p-3.5">
+                  <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-ink-faint mb-2.5">
+                    <span>{t("Unassigned lines")} ({scene.unassigned.length})</span>
+                    <span className="text-[10px] font-normal lowercase text-ink-faint">
+                      {t("Kept in scene pool, not assigned to a panel")}
+                    </span>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {scene.unassigned.map((line) => {
+                      const lineKind = line.kind ?? "speech";
+                      const lineEvent = line.eventId || eventIdentifier;
+                      return (
+                        <div
+                          key={line.id}
+                          data-dialogue-line={line.id}
+                          data-line-kind={lineKind}
+                          data-line-event={lineEvent}
+                          data-line-shot=""
+                          className="rounded-lg border border-line/60 bg-surface p-2.5 text-xs text-ink opacity-80"
+                        >
+                          <div className="flex items-center gap-1.5 mb-1 text-[10px]">
+                            <span className="rounded bg-surface-muted px-1.5 py-0.2 font-bold text-ink-muted">
+                              {lineKind === "narration" ? t("Narration") : line.speaker}
+                            </span>
+                          </div>
+                          <p className="italic">“{line.text}”</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

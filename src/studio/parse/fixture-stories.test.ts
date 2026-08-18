@@ -94,6 +94,22 @@ describe("fixture story parse and confirm", () => {
     expect(chapterTitles.length).toBeGreaterThanOrEqual(2);
     expect(chapterTitles).toEqual(expect.arrayContaining(["The vulture eye", "The eighth night", "The beating heart"]));
   });
+
+  it("ingests The Gift of the Magi with the shop visit and the gold watch", async () => {
+    const { confirmed, sourceText } = await ingestFixtureStory("The Gift of the Magi", "magi");
+    const scripts = confirmed.scenes.map((scene) => scene.script);
+    expect(scriptsCoverSource(sourceText, scripts)).toBe(true);
+    expect(scripts.join(" ")).toMatch(/Sofronie/i);
+    expect(scripts.join(" ")).toMatch(/buy my hair/i);
+    expect(confirmed.scenes.some((scene) => /Sofronie|buy my hair/i.test(scene.script))).toBe(true);
+
+    const names = confirmed.entities.map((entity) => entity.name);
+    expect(names).toEqual(expect.arrayContaining(["Della", "Jim"]));
+    const watch = confirmed.entities.find((entity) => /watch/i.test(entity.name));
+    expect(watch?.kind).toBe("prop");
+    expect(watch?.visual.base).toMatch(/gold|father|grandfather/i);
+    expect(confirmed.scenes.some((scene) => scene.props.includes(watch!.id))).toBe(true);
+  });
 });
 
 function scriptMentionsName(script: string, name: string): boolean {

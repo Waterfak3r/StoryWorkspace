@@ -20,25 +20,25 @@ export const COMICS_STYLE_PRESETS: readonly ComicsStylePreset[] = [
     id: "shonen-manga",
     label: "Shonen manga",
     visual:
-      "Black-and-white shonen manga; crisp ink contours; screentone shadows; speed lines; expressive eyes; consistent character sheets reused across panels; no photorealism; leave space for speech balloons.",
+      "Black-and-white shonen manga; crisp ink contours; screentone shadows; speed lines; expressive eyes; consistent character sheets reused across panels; no photorealism.",
   },
   {
     id: "ligne-claire",
     label: "Ligne claire",
     visual:
-      "Franco-Belgian ligne claire comics; even ink weights; flat colors; clear silhouettes; uncluttered backgrounds; no photorealism; leave space for speech balloons.",
+      "Franco-Belgian ligne claire comics; even ink weights; flat colors; clear silhouettes; uncluttered backgrounds; no photorealism.",
   },
   {
     id: "watercolor-indie",
     label: "Watercolor indie",
     visual:
-      "Indie watercolor comics; soft pigment washes; visible paper grain; muted palette; inked outlines; consistent faces; leave space for speech balloons.",
+      "Indie watercolor comics; soft pigment washes; visible paper grain; muted palette; inked outlines; consistent faces.",
   },
   {
     id: "noir-comics",
     label: "Noir comics",
     visual:
-      "High-contrast noir comics; heavy blacks; rain-slick streets; cinematic framing; limited color; inked faces reused across panels; leave space for speech balloons.",
+      "High-contrast noir comics; heavy blacks; rain-slick streets; cinematic framing; limited color; inked faces reused across panels.",
   },
 ];
 

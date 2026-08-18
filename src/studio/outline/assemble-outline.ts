@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  STUDIO_ENTITY_KINDS,
   storyOutlineSchema,
   type StudioEntity,
   type StudioScene,
@@ -60,7 +61,21 @@ export function assembleStoryOutline(projectId: string): StudioStoryOutline {
         }),
       })),
     })),
-    timeline: buildStoryTimeline({ characters, events }),
+    timeline: buildStoryTimeline({
+      characters,
+      events,
+      volumes: tree.volumes.map((volume) => ({
+        id: volume.id,
+        title: volume.title,
+        chapters: volume.chapters.map((chapter) => ({
+          id: chapter.id,
+          title: chapter.title,
+        })),
+      })),
+      reservedIds: STUDIO_ENTITY_KINDS.flatMap((kind) =>
+        listEntities(projectId, kind).map((entity) => entity.id),
+      ),
+    }),
   };
 
   const timeline = outline.timeline;

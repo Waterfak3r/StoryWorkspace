@@ -69,6 +69,16 @@ function hasDialogueMark(text: string): boolean {
   return false;
 }
 
+export function scriptMostlyCoveredBy(script: string, sources: readonly string[]): boolean {
+  const spans = distinctiveSpans(script);
+  if (spans.length === 0) {
+    return scriptsCoverSource(script, [...sources]);
+  }
+  const combinedFold = foldForMatch(sources.join(" "));
+  const covered = spans.filter((span) => spanLooksCovered(span, combinedFold)).length;
+  return covered / spans.length >= 0.7;
+}
+
 export function scriptsCoverSource(source: string, scripts: string[]): boolean {
   const normalizedSource = normalizeWhitespace(source);
   if (normalizedSource.length === 0) {
@@ -84,7 +94,47 @@ export function scriptsCoverSource(source: string, scripts: string[]): boolean {
     return false;
   }
 
+  const combinedFold = foldForMatch(combined);
+  const missing = distinctiveSpans(source).filter((span) => !spanLooksCovered(span, combinedFold));
+  const longMissing = missing.filter((span) => foldForMatch(span).length >= 80);
+  if (longMissing.length > 0) {
+    return false;
+  }
+  if (missing.length > 0 && missing.length / Math.max(1, distinctiveSpans(source).length) > 0.15) {
+    return false;
+  }
+
   return true;
+}
+
+export function distinctiveSpans(source: string): string[] {
+  const paragraphs = source
+    .split(/\n\s*\n/)
+    .map((part) => normalizeWhitespace(part))
+    .filter((part) => foldForMatch(part).length >= 40);
+  if (paragraphs.length >= 3) {
+    return paragraphs;
+  }
+  return source
+    .split(/(?<=[.!?。！？])\s+/)
+    .map((part) => normalizeWhitespace(part))
+    .filter((part) => foldForMatch(part).length >= 40);
+}
+
+function spanLooksCovered(span: string, combinedFold: string): boolean {
+  const needle = foldForMatch(span);
+  if (!needle) {
+    return true;
+  }
+  if (combinedFold.includes(needle)) {
+    return true;
+  }
+  const tokens = needle.split(" ").filter((token) => token.length >= 4 && !STOPWORDS.has(token));
+  if (tokens.length < 3) {
+    return combinedFold.includes(needle.slice(0, Math.min(24, needle.length)));
+  }
+  const hit = tokens.filter((token) => combinedFold.includes(token)).length;
+  return hit / tokens.length >= 0.7;
 }
 
 function foldForMatch(text: string): string {
@@ -399,32 +449,108 @@ export function preserveProposalScripts(
 ): LlmParseProposal {
   const scripts = proposal.proposedScenes.map((scene) => scene.script);
   if (scriptsCoverSource(sourceText, scripts)) {
-    return proposal;
+    return withSettingShiftScenes(proposal);
   }
 
   const scenes = proposal.proposedScenes;
   if (scenes.length >= 2) {
     const aligned = alignScenesToSource(sourceText, proposal);
     if (aligned && scriptsCoverSource(sourceText, aligned.map((scene) => scene.script))) {
-      return {
+      return withSettingShiftScenes({
         proposedEntities: proposal.proposedEntities,
         proposedScenes: aligned,
-      };
+      });
     }
 
     const chunks = splitSourceIntoChunks(sourceText, scenes.length);
     if (chunks && scriptsCoverSource(sourceText, chunks)) {
-      return {
+      return withSettingShiftScenes({
         proposedEntities: proposal.proposedEntities,
         proposedScenes: scenes.map((scene, index) =>
           rebindSceneToChunk(scene, chunks[index] ?? scene.script, proposal, sourceText),
         ),
-      };
+      });
     }
   }
 
-  return {
+  return withSettingShiftScenes({
     proposedEntities: proposal.proposedEntities,
     proposedScenes: [collapseToSourceScene(sourceText, scenes)],
+  });
+}
+
+function withSettingShiftScenes(proposal: LlmParseProposal): LlmParseProposal {
+  return {
+    proposedEntities: proposal.proposedEntities,
+    proposedScenes: splitScenesOnSettingShifts(proposal.proposedScenes),
   };
+}
+
+const SETTING_SHIFT_SPLITS = [
+  /\n(?=Where [^\n]{0,120}sign read)/i,
+  /\n(?=When [A-Z][\w'. -]{0,40} reached home\b)/,
+];
+
+function splitScenesOnSettingShifts(scenes: ProposedScene[]): ProposedScene[] {
+  const next: ProposedScene[] = [];
+  for (const scene of scenes) {
+    const parts = splitScriptOnSettingShifts(scene.script);
+    if (parts.length < 2) {
+      next.push(scene);
+      continue;
+    }
+    for (const [index, script] of parts.entries()) {
+      next.push({
+        ...scene,
+        key: index === 0 ? scene.key : slugSceneKey(`${scene.key}-shift-${index}`),
+        title: index === 0 ? scene.title : settingShiftTitle(script, scene.title, index),
+        script,
+        locationName: locationNameForShift(script, scene.locationName),
+      });
+    }
+  }
+  return next;
+}
+
+function splitScriptOnSettingShifts(script: string): string[] {
+  let parts = [script];
+  for (const pattern of SETTING_SHIFT_SPLITS) {
+    parts = parts.flatMap((chunk) => {
+      const pieces = chunk.split(pattern).map((item) => item.trim()).filter(Boolean);
+      if (pieces.length < 2 || pieces.some((item) => item.length < 120)) {
+        return [chunk];
+      }
+      return pieces;
+    });
+  }
+  return parts;
+}
+
+function settingShiftTitle(script: string, fallback: string, index: number): string {
+  const sign = script.match(/sign read:\s*[“"]([^”"]{2,60})[”"]/i);
+  if (sign?.[1]) {
+    return sign[1].split(".")[0]!.trim();
+  }
+  if (/reached home/i.test(script.slice(0, 80))) {
+    return `${fallback} — home`;
+  }
+  return `${fallback} ${index + 1}`;
+}
+
+function locationNameForShift(script: string, fallback: string | null): string | null {
+  const sign = script.match(/sign read:\s*[“"]([^”"]{2,60})[”"]/i);
+  if (sign?.[1]) {
+    return sign[1].split(".")[0]!.trim();
+  }
+  return fallback;
+}
+
+function slugSceneKey(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 63);
+  return slug || "scene-shift";
 }

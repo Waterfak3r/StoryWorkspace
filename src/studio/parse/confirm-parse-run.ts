@@ -20,6 +20,7 @@ import {
 import { StudioConflictError, StudioNotFoundError } from "../errors";
 import type { StudioEntity, StudioParseProvenance, StudioScene } from "../domain";
 import { nowIso, readParseRun, writeParseRun } from "./runs";
+import { scriptMostlyCoveredBy } from "./preserve-scripts";
 import { confirmParseInputSchema, type ConfirmParseInput, type ProposedEntity, type ProposedScene, type StudioParseRun } from "./schemas";
 
 const DEFAULT_VOLUME_ID = "volume-01";
@@ -89,6 +90,8 @@ export async function confirmParseRun(
   }
 
   removeEmptyUntitledScenes(projectId);
+  const { writeInferredSceneStates } = await import("../state/infer-scene-state");
+  writeInferredSceneStates(projectId);
 
   const confirmed: StudioParseRun = {
     ...run,
@@ -119,7 +122,11 @@ function applyProposedEntity(
     const written = updateEntity(projectId, created.id, {
       description: proposed.description,
       visual: proposed.description.trim()
-        ? { base: proposed.description.trim(), references: [] }
+        ? {
+            base: proposed.description.trim(),
+            references: [],
+            spatial: proposed.kind === "location" ? proposed.description.trim() : "",
+          }
         : created.visual,
       expectedUpdatedAt: created.updatedAt,
       provenance,
@@ -163,13 +170,19 @@ function applyProposedScene(
   provenance: StudioParseProvenance,
   target: { volumeId: string; chapterId: string },
 ): StudioScene {
-  const matched = existingScenes.find((entry) => namesEqual(entry.scene.title, proposed.title));
+  const matched = matchExistingScene(proposed, existingScenes);
   const characters = resolveEntityIds("character", proposed.characterNames, entitiesByName);
   const location = resolveLocationId(proposed.locationName, entitiesByName);
   const props = resolveEntityIds("prop", proposed.propNames, entitiesByName);
   const costumes = resolveEntityIds("costume", proposed.costumeNames, entitiesByName);
 
   if (!matched) {
+    if (isCoveredLeftover(proposed, existingScenes)) {
+      const overlap = existingScenes.find((entry) =>
+        scriptMostlyCoveredBy(entry.scene.script, [proposed.script]),
+      );
+      return (overlap ?? existingScenes[0]!).scene;
+    }
     const { volumeId, chapterId } = target;
     const created = createScene(projectId, volumeId, chapterId, { title: proposed.title });
     const written = updateScene(projectId, volumeId, chapterId, created.id, {
@@ -192,6 +205,10 @@ function applyProposedScene(
     title?: string;
     script?: string;
     intent?: string;
+    characters?: string[];
+    location?: string | null;
+    props?: string[];
+    costumes?: string[];
   } = {};
   if (mayWrite(proposed.key, "title", matched.scene, overwriteCanon) && proposed.title !== matched.scene.title) {
     patch.title = proposed.title;
@@ -201,6 +218,21 @@ function applyProposedScene(
   }
   if (mayWrite(proposed.key, "intent", matched.scene, overwriteCanon) && proposed.intent !== matched.scene.intent) {
     patch.intent = proposed.intent;
+  }
+  const nextCharacters = unionIds(matched.scene.characters, characters);
+  if (nextCharacters.join("\0") !== matched.scene.characters.join("\0")) {
+    patch.characters = nextCharacters;
+  }
+  if (!matched.scene.location && location) {
+    patch.location = location;
+  }
+  const nextProps = unionIds(matched.scene.props, props);
+  if (nextProps.join("\0") !== matched.scene.props.join("\0")) {
+    patch.props = nextProps;
+  }
+  const nextCostumes = unionIds(matched.scene.costumes, costumes);
+  if (nextCostumes.join("\0") !== matched.scene.costumes.join("\0")) {
+    patch.costumes = nextCostumes;
   }
 
   if (Object.keys(patch).length === 0) {
@@ -215,6 +247,19 @@ function applyProposedScene(
   });
   matched.scene = written;
   return written;
+}
+
+function unionIds(current: readonly string[], extra: readonly string[]): string[] {
+  const seen = new Set(current);
+  const next = [...current];
+  for (const id of extra) {
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    next.push(id);
+  }
+  return next;
 }
 
 function mayWrite(
@@ -234,6 +279,36 @@ function mayWrite(
 
 function mergeCanonFields(current: string[] | undefined, fields: readonly string[]): string[] {
   return [...new Set([...(current ?? []), ...fields])];
+}
+
+function matchExistingScene(
+  proposed: ProposedScene,
+  existingScenes: readonly LocatedScene[],
+): LocatedScene | undefined {
+  const byTitle = existingScenes.find((entry) => namesEqual(entry.scene.title, proposed.title));
+  if (byTitle) {
+    return byTitle;
+  }
+  return existingScenes.find((entry) => isMutualScriptMatch(proposed.script, entry.scene.script));
+}
+
+function isMutualScriptMatch(left: string, right: string): boolean {
+  const shorter = Math.min(left.trim().length, right.trim().length);
+  const longer = Math.max(left.trim().length, right.trim().length);
+  if (shorter < 80 || longer === 0 || shorter / longer < 0.5) {
+    return false;
+  }
+  return scriptMostlyCoveredBy(left, [right]) && scriptMostlyCoveredBy(right, [left]);
+}
+
+function isCoveredLeftover(proposed: ProposedScene, existingScenes: readonly LocatedScene[]): boolean {
+  if (proposed.script.trim().length < 400) {
+    return false;
+  }
+  return scriptMostlyCoveredBy(
+    proposed.script,
+    existingScenes.map((entry) => entry.scene.script),
+  );
 }
 
 function namesEqual(left: string, right: string): boolean {

@@ -84,7 +84,7 @@ describe("Workflow stage primary actions", () => {
     expect(source).toContain("listStudioParseRuns");
     expect(source).toContain("directStudioScene");
     expect(source).toContain("confirmStudioProjectDialogue");
-    expect(source).toContain("generateStudioShot");
+    expect(source).toContain("startStudioWorkflow");
   });
 
   it("runs the official chain through the same client helpers Workflow clicks use", async () => {

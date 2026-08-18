@@ -111,6 +111,7 @@ describe("entity reference images", () => {
         continuity_from: null,
         status: "pending",
         selected_image: null,
+        pageId: "",
         updatedAt: new Date().toISOString(),
       },
     ]);

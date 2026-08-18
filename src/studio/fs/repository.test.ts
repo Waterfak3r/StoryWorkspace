@@ -449,6 +449,16 @@ describe("story hard delete", () => {
     expect(existsSync(nodePath)).toBe(false);
   });
 
+  it("allocates scene ids that are unique across chapters", () => {
+    const project = createProject({ title: "Harbor Night" });
+    const chapterB = createChapter(project.id, "volume-01", { title: "Chapter B" });
+    const first = readScene(project.id, "volume-01", "chapter-01", "scene-01");
+    expect(first.id).toBe("scene-01");
+    const second = createScene(project.id, "volume-01", chapterB.id, { title: "Later" });
+    expect(second.id).toBe("scene-02");
+    expect(second.id).not.toBe(first.id);
+  });
+
   it("cascades chapter delete to scenes and artifacts while keeping sibling chapters", () => {
     const project = createProject({ title: "Harbor Night" });
     const chapterB = createChapter(project.id, "volume-01", { title: "Chapter B" });

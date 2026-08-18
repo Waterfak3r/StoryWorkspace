@@ -7,4 +7,6 @@ export {
   confirmSceneDialogue,
   confirmedSpeechByShot,
   confirmedUnassignedLines,
+  reassignSceneDialogue,
+  sceneHasUnassignedSpeech,
 } from "./confirm-dialogue";

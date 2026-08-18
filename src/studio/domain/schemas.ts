@@ -54,8 +54,11 @@ export const shotRecordSchema = z.strictObject({
   continuity_from: z.string().nullable(),
   status: shotStatusSchema,
   selected_image: z.string().nullable(),
+  pageId: z.string().default(""),
   updatedAt: studioTimestampSchema,
 });
+
+export const dialogueLineKindSchema = z.enum(["speech", "narration"]);
 
 export const sceneDialogueLineSchema = z.strictObject({
   id: z.string().min(1),
@@ -63,6 +66,8 @@ export const sceneDialogueLineSchema = z.strictObject({
   speakerId: studioIdSchema.nullable(),
   text: z.string().min(1),
   shotId: studioIdSchema.nullable(),
+  kind: dialogueLineKindSchema.default("speech"),
+  eventId: z.string().default(""),
 });
 
 export const sceneDialogueStatusSchema = z.enum(["unprocessed", "confirmed"]);
@@ -103,6 +108,7 @@ export const ENTITY_KIND_DIRS: Record<(typeof STUDIO_ENTITY_KINDS)[number], stri
 export const entityVisualSchema = z.strictObject({
   base: z.string(),
   references: z.array(z.string()),
+  spatial: z.string().default(""),
 });
 
 export const entityDefaultStateSchema = z.strictObject({
@@ -136,22 +142,51 @@ export const COMICS_STYLE_PRESET_IDS = [
 
 export const comicsStylePresetIdSchema = z.enum(COMICS_STYLE_PRESET_IDS);
 
+export const letteringModeSchema = z.enum(["model", "overlay"]);
+
+export const composeModeSchema = z.enum(["page", "panels"]);
+
+export const pageLayoutSchema = z.enum(["2", "3", "4", "auto", "marvel"]);
+
 export const styleRecordSchema = z.strictObject({
   id: z.literal("default"),
   presetId: comicsStylePresetIdSchema.optional(),
+  lettering: letteringModeSchema.default("model"),
+  compose: composeModeSchema.default("page"),
+  layout: pageLayoutSchema.default("auto"),
   label: z.string(),
   visual: z.string(),
   updatedAt: studioTimestampSchema,
 });
 
-export const updateStyleInputSchema = z.strictObject({
-  presetId: comicsStylePresetIdSchema,
-});
+export const updateStyleInputSchema = z
+  .strictObject({
+    presetId: comicsStylePresetIdSchema.optional(),
+    lettering: letteringModeSchema.optional(),
+    compose: composeModeSchema.optional(),
+    layout: pageLayoutSchema.optional(),
+  })
+  .refine(
+    (value) =>
+      value.presetId !== undefined ||
+      value.lettering !== undefined ||
+      value.compose !== undefined ||
+      value.layout !== undefined,
+    {
+      message: "presetId, lettering, compose, or layout is required",
+    },
+  );
 
 export const DEFAULT_COMICS_STYLE_PRESET_ID = "sequential-ink" as const;
 
+export const DEFAULT_LETTERING_MODE = "model" as const;
+
+export const DEFAULT_COMPOSE_MODE = "page" as const;
+
+export const DEFAULT_PAGE_LAYOUT = "auto" as const;
+
 export const DEFAULT_COMICS_STYLE_VISUAL =
-  "Sequential comic stills; consistent inked character designs reused across shots; muted watercolor palette; cinematic comic framing; no photorealism; leave space for speech balloons.";
+  "Sequential comic stills; consistent inked character designs reused across shots; muted watercolor palette; cinematic comic framing; no photorealism.";
 
 export const storyOutlineEntityRefSchema = z.strictObject({
   id: studioIdSchema,
@@ -231,6 +266,25 @@ export const storyTimelineStateChangeSchema = z.strictObject({
   truth: z.enum(["canon", "inferred"]),
 });
 
+export const storyTimelineTimeSchema = z.strictObject({
+  id: studioIdSchema,
+  kind: z.enum(["volume", "chapter"]),
+  title: z.string(),
+  volumeId: studioIdSchema,
+  chapterId: studioIdSchema.nullable(),
+  parentTimeId: studioIdSchema.nullable(),
+});
+
+export const storyTimelineContainmentSchema = z
+  .strictObject({
+    fromTimeId: studioIdSchema,
+    toTimeId: studioIdSchema.optional(),
+    toEventId: studioIdSchema.optional(),
+  })
+  .refine((value) => (value.toTimeId === undefined) !== (value.toEventId === undefined), {
+    message: "containment requires exactly one of toTimeId or toEventId",
+  });
+
 export const storyTimelineSchema = z.strictObject({
   axis: z.literal("sequence"),
   events: z.array(storyTimelineEventSchema),
@@ -239,6 +293,8 @@ export const storyTimelineSchema = z.strictObject({
   connections: z.array(storyTimelineConnectionSchema),
   entities: z.array(storyTimelineEntitySchema).default([]),
   stateChanges: z.array(storyTimelineStateChangeSchema).default([]),
+  times: z.array(storyTimelineTimeSchema).default([]),
+  containments: z.array(storyTimelineContainmentSchema).default([]),
 });
 
 export const storyOutlineSchema = z.strictObject({
@@ -255,7 +311,11 @@ export const attributedSpeechLineSchema = z.strictObject({
   speaker: z.string().min(1),
   speakerId: studioIdSchema.nullable(),
   text: z.string().min(1),
+  kind: dialogueLineKindSchema.default("speech"),
+  eventId: z.string().default(""),
 });
+
+export const letteringAnchorSchema = z.enum(["tl", "tr", "bl", "br"]);
 
 export const letteringBalloonSchema = z.strictObject({
   id: z.string().min(1),
@@ -264,7 +324,8 @@ export const letteringBalloonSchema = z.strictObject({
   text: z.string().min(1),
   panelIndex: z.number().int().min(0).max(COMICS_PANELS_PER_PAGE - 1),
   shotId: studioIdSchema,
-  kind: z.literal("speech"),
+  kind: dialogueLineKindSchema.default("speech"),
+  anchor: letteringAnchorSchema.default("tl"),
 });
 
 export const projectDialogueShotSchema = z.strictObject({
@@ -279,6 +340,7 @@ export const projectDialogueSceneSchema = z.strictObject({
   chapterId: studioIdSchema,
   sceneId: studioIdSchema,
   title: z.string(),
+  eventId: z.string(),
   unassigned: z.array(attributedSpeechLineSchema),
   shots: z.array(projectDialogueShotSchema),
 });
@@ -581,6 +643,11 @@ export type StudioEntity = z.infer<typeof entityRecordSchema>;
 export type StudioEntityKind = z.infer<typeof entityKindSchema>;
 export type StudioStyle = z.infer<typeof styleRecordSchema>;
 export type ComicsStylePresetId = z.infer<typeof comicsStylePresetIdSchema>;
+export type LetteringMode = z.infer<typeof letteringModeSchema>;
+export type ComposeMode = z.infer<typeof composeModeSchema>;
+export type PageLayout = z.infer<typeof pageLayoutSchema>;
+export type DialogueLineKind = z.infer<typeof dialogueLineKindSchema>;
+export type LetteringAnchor = z.infer<typeof letteringAnchorSchema>;
 export type UpdateStyleInput = z.input<typeof updateStyleInputSchema>;
 export type StudioStoryTimelineConnection = z.infer<typeof storyTimelineConnectionSchema>;
 export type StudioStoryOutline = z.infer<typeof storyOutlineSchema>;
@@ -595,6 +662,8 @@ export type StudioStoryTimelineEvent = z.infer<typeof storyTimelineEventSchema>;
 export type StudioStoryTimelineIntersection = z.infer<typeof storyTimelineIntersectionSchema>;
 export type StudioStoryTimelineEntity = z.infer<typeof storyTimelineEntitySchema>;
 export type StudioStoryTimelineStateChange = z.infer<typeof storyTimelineStateChangeSchema>;
+export type StudioStoryTimelineTime = z.infer<typeof storyTimelineTimeSchema>;
+export type StudioStoryTimelineContainment = z.infer<typeof storyTimelineContainmentSchema>;
 export type StudioAttributedSpeechLine = z.infer<typeof attributedSpeechLineSchema>;
 export type StudioLetteringBalloon = z.infer<typeof letteringBalloonSchema>;
 export type StudioProjectDialogue = z.infer<typeof projectDialogueSchema>;

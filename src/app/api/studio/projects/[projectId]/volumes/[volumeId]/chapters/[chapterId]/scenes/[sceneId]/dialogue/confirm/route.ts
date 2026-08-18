@@ -21,7 +21,7 @@ export async function POST(request: Request, context: SceneDialogueConfirmRouteC
   return runStudioRoute(async () => {
     const { projectId, volumeId, chapterId, sceneId } = await context.params;
     await parseStudioBody(request, confirmSceneDialogueBodySchema);
-    const scene = confirmSceneDialogue(projectId, volumeId, chapterId, sceneId);
+    const scene = await confirmSceneDialogue(projectId, volumeId, chapterId, sceneId);
     return studioDataResponse({ scene });
   });
 }

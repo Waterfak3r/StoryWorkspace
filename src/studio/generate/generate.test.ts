@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -8,10 +8,11 @@ import { POST as postGenerate } from "@/app/api/studio/projects/[projectId]/volu
 import { GET as getWorkflow } from "@/app/api/studio/projects/[projectId]/workflow/route";
 import { directScene } from "../director";
 import { StudioConflictError } from "../errors";
-import { createEntity, createProject, getWorkspaceRoot, readScene, replaceSceneShots, updateScene } from "../fs";
+import { createEntity, createProject, getWorkspaceRoot, readScene, replaceSceneShots, updateScene, updateStyle } from "../fs";
 import type { ImageAdapterInput } from "./adapter";
 import { addEntityReferenceImage } from "./entity-references";
-import { fakeImageAdapter, FAKE_PNG_BYTES, generateShot, listWorkflowNodes, lockShot, rerunUnlockedShot } from "./index";
+import { fakeImageAdapter, FAKE_PNG_BYTES, generateShot, listWorkflowNodes, lockShot, rerunUnlockedShot, STUB_PNG_BYTES } from "./index";
+import { writeShotImageFile } from "./image-output";
 
 const previousWorkspaceRoot = process.env.STORY_WORKSPACE_ROOT;
 const previousDbPath = process.env.STORY_WORKSPACE_DB_PATH;
@@ -97,7 +98,7 @@ describe("generate, lock, and workflow", () => {
 
     expect(result.shot.status).toBe("success");
     expect(result.shot.selected_image).toBeTruthy();
-    expect(result.shot.selected_image).toMatch(/^outputs\/comics\/pages\/page-01-01\/run-\d+\.png$/);
+    expect(result.shot.selected_image).toBe("outputs/comics/current/page-01-01.png");
     expect(result.compiled.prompt).toContain("ONE sequential comic PAGE as a single image");
     const pageShots = readScene(fixture.projectId, "volume-01", "chapter-01", "scene-01").shots;
     expect(pageShots[0]?.selected_image).toBe(result.shot.selected_image);
@@ -115,6 +116,24 @@ describe("generate, lock, and workflow", () => {
     expect(diskShot?.status).toBe("success");
     expect(diskShot?.selected_image).toBe(result.shot.selected_image);
     expect(result.node.statusLabel).toBe("成功");
+  });
+
+  it("rejects a 1x1 stub page as a failed generation", async () => {
+    const fixture = seedDirectedScene();
+    await expect(
+      generateShot(
+        fixture.projectId,
+        "volume-01",
+        "chapter-01",
+        "scene-01",
+        "shot-01",
+        { mode: "generate" },
+        (input) => writeShotImageFile(input, STUB_PNG_BYTES),
+      ),
+    ).rejects.toThrow(/unusable stub/i);
+    const scene = readScene(fixture.projectId, "volume-01", "chapter-01", "scene-01");
+    expect(scene.shots.every((shot) => shot.status === "failed")).toBe(true);
+    expect(scene.shots[0]?.selected_image).toBeFalsy();
   });
 
   it("passes on-disk entity reference bytes into the image adapter", async () => {
@@ -136,6 +155,7 @@ describe("generate, lock, and workflow", () => {
         continuity_from: null,
         status: "pending",
         selected_image: null,
+        pageId: "",
         updatedAt: new Date().toISOString(),
       },
       {
@@ -147,6 +167,7 @@ describe("generate, lock, and workflow", () => {
         continuity_from: "shot-01",
         status: "pending",
         selected_image: null,
+        pageId: "",
         updatedAt: new Date().toISOString(),
       },
     ]);
@@ -192,6 +213,135 @@ describe("generate, lock, and workflow", () => {
       size: "1024x1024",
       quality: "low",
     });
+  });
+
+  it("writes compose=page as one adapter call to current/", async () => {
+    const fixture = seedDirectedScene();
+    const seen: ImageAdapterInput[] = [];
+    const result = await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      async (input) => {
+        seen.push(input);
+        return fakeImageAdapter(input);
+      },
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.panelShotId).toBeUndefined();
+    expect(result.shot.selected_image).toBe("outputs/comics/current/page-01-01.png");
+    expect(
+      existsSync(path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "current", "page-01-01.png")),
+    ).toBe(true);
+  });
+
+  it("writes compose=panels as one adapter per missing panel then a current composite", async () => {
+    const fixture = seedDirectedScene();
+    updateStyle(fixture.projectId, { compose: "panels", layout: "2" });
+    const seen: ImageAdapterInput[] = [];
+    const result = await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      async (input) => {
+        seen.push(input);
+        return fakeImageAdapter(input);
+      },
+    );
+    expect(seen).toHaveLength(2);
+    expect(seen.map((item) => item.panelShotId)).toEqual(["shot-01", "shot-02"]);
+    expect(result.shot.selected_image).toBe("outputs/comics/current/page-01-01.png");
+    expect(
+      existsSync(path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "panels", "page-01-01", "shot-01.png")),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "panels", "page-01-01", "shot-02.png")),
+    ).toBe(true);
+    const current = path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "current", "page-01-01.png");
+    expect(existsSync(current)).toBe(true);
+    expect(readFileSync(current).equals(FAKE_PNG_BYTES)).toBe(false);
+  });
+
+  it("archives the old current page on rerun and leaves only the new current file", async () => {
+    const fixture = seedDirectedScene();
+    const first = await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      fakeImageAdapter,
+    );
+    const firstBytes = readFileSync(path.join(getWorkspaceRoot(), fixture.projectId, ...first.shot.selected_image!.split("/")));
+
+    const second = await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "regenerate" },
+      fakeImageAdapter,
+    );
+    expect(second.shot.selected_image).toBe("outputs/comics/current/page-01-01.png");
+    const currentDir = path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "current");
+    expect(readdirSync(currentDir)).toEqual(["page-01-01.png"]);
+    const archiveRoot = path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "archive");
+    const batches = readdirSync(archiveRoot);
+    expect(batches.length).toBe(1);
+    const archived = path.join(archiveRoot, batches[0]!, "page-01-01.png");
+    expect(existsSync(archived)).toBe(true);
+    expect(readFileSync(archived).equals(firstBytes)).toBe(true);
+  });
+
+  it("keeps the current page when a rerun adapter fails", async () => {
+    const fixture = seedDirectedScene();
+    const first = await generateShot(
+      fixture.projectId,
+      "volume-01",
+      "chapter-01",
+      "scene-01",
+      "shot-01",
+      { mode: "generate" },
+      fakeImageAdapter,
+    );
+    const selectedImage = first.shot.selected_image;
+    const currentAbs = path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "current", "page-01-01.png");
+    const firstBytes = readFileSync(currentAbs);
+    expect(existsSync(currentAbs)).toBe(true);
+
+    await expect(
+      generateShot(
+        fixture.projectId,
+        "volume-01",
+        "chapter-01",
+        "scene-01",
+        "shot-01",
+        { mode: "regenerate" },
+        async () => {
+          throw new Error("adapter boom");
+        },
+      ),
+    ).rejects.toThrow(/adapter boom|GENERATION_FAILED|Image generation failed/);
+
+    expect(existsSync(currentAbs)).toBe(true);
+    expect(readFileSync(currentAbs).equals(firstBytes)).toBe(true);
+    const after = readScene(fixture.projectId, "volume-01", "chapter-01", "scene-01").shots.find(
+      (shot) => shot.id === "shot-01",
+    );
+    expect(after?.selected_image).toBe(selectedImage);
+    const archiveRoot = path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "archive");
+    expect(existsSync(archiveRoot) ? readdirSync(archiveRoot) : []).toEqual([]);
+    expect(
+      existsSync(path.join(getWorkspaceRoot(), fixture.projectId, "outputs", "comics", "staging", "page-01-01.png")),
+    ).toBe(false);
   });
 
   it("can compile a two-panel page when pageSize is 2", async () => {

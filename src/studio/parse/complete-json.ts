@@ -9,12 +9,15 @@ import type { CompleteJson } from "./schemas";
 const MAX_PROVIDER_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 300_000;
 const SYSTEM_PROMPT = `Split the story into volumes, chapters, and scenes, then list entities. Return JSON only. Do not include secrets or API keys.
-You must divide the whole story yourself: every scene needs volumeName and chapterName. Start a new chapter when the plot, place, or time shifts. Do not put the entire story in one chapter if it has more than two beats.
+You must divide the whole story yourself: every scene needs volumeName and chapterName. Start a new chapter when the plot, place, or time shifts. If someone leaves home for a shop or street, that visit is its own scene. Do not jump from a decision beat to “when they reached home”. Do not put the entire story in one chapter if it has more than two beats.
 Each scene script must copy the original wording for that scene, including ALL dialogue and action lines.
 Do not summarize, paraphrase, or omit spoken lines. Keep the source language.
 title and intent may be short; script may not.
 Clothing and wearable items are kind "costume" entities: put them in proposedEntities and attach via costumeNames.
-Do not fold clothing only into a character description or outfit text.`;
+Do not fold clothing only into a character description or outfit text.
+Entity description is first stable appearance only. Do not write later haircuts, injuries, deaths, or sold objects into identity.
+Treasured objects that matter later (a gold watch, a set of combs) are props even if sold later.
+Location descriptions must include room layout: door, windows, furniture left/right.`;
 
 const CHAT_JSON_CONTRACT = `Return JSON only with exactly these top-level keys: proposedScenes, proposedEntities.
 No extra keys.

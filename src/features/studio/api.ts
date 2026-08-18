@@ -238,6 +238,9 @@ export async function getStudioOutline(projectId: string): Promise<StudioStoryOu
   return data.outline;
 }
 
+export type ComicsComposeMode = "page" | "panels";
+export type ComicsPageLayout = "2" | "3" | "4" | "auto" | "marvel";
+
 export type StudioComicsStylePreset = {
   id: ComicsStylePresetId;
   label: string;
@@ -245,7 +248,10 @@ export type StudioComicsStylePreset = {
 };
 
 export type StudioStyleView = {
-  style: StudioStyle;
+  style: StudioStyle & {
+    compose?: ComicsComposeMode;
+    layout?: ComicsPageLayout;
+  };
   presets: StudioComicsStylePreset[];
 };
 
@@ -253,10 +259,23 @@ export async function getStudioStyle(projectId: string) {
   return studioRequest<StudioStyleView>(`/api/studio/projects/${projectId}/style`);
 }
 
-export async function saveStudioStyle(projectId: string, presetId: ComicsStylePresetId) {
+export type SaveStudioStyleInput =
+  | ComicsStylePresetId
+  | {
+      presetId?: ComicsStylePresetId;
+      lettering?: "model" | "overlay";
+      compose?: ComicsComposeMode;
+      layout?: ComicsPageLayout;
+    };
+
+export async function saveStudioStyle(
+  projectId: string,
+  input: SaveStudioStyleInput,
+) {
+  const body = typeof input === "string" ? { presetId: input } : input;
   return studioRequest<StudioStyleView>(`/api/studio/projects/${projectId}/style`, {
     method: "PUT",
-    body: JSON.stringify({ presetId }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -427,6 +446,24 @@ export async function rerunStudioWorkflowNode(projectId: string, shotId: string)
     { method: "POST", body: JSON.stringify({}) },
   );
   return data;
+}
+
+export type StudioWorkflowStartResult = {
+  directed: string[];
+  confirmed: string[];
+  generated: string[];
+  skipped: string[];
+};
+
+export async function startStudioWorkflow(projectId: string): Promise<StudioWorkflowStartResult> {
+  const data = await studioRequest<{ data?: StudioWorkflowStartResult } | StudioWorkflowStartResult>(
+    `/api/studio/projects/${projectId}/workflow/start`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+  if ("data" in data && data.data) {
+    return data.data;
+  }
+  return data as StudioWorkflowStartResult;
 }
 
 export type ShotDraft = {

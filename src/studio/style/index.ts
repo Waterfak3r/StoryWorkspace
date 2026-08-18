@@ -7,4 +7,4 @@ export {
   requireComicsStylePreset,
   type ComicsStylePreset,
 } from "./catalog";
-export { readProjectStyle, selectComicsStyle } from "./select-style";
+export { applyComicsStylePatch, readProjectStyle, selectComicsLettering, selectComicsStyle } from "./select-style";

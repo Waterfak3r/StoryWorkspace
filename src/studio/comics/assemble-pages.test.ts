@@ -94,6 +94,21 @@ describe("assembleComicsBook", () => {
     ]);
   });
 
+  it("assembles current page paths and omits archive stills", () => {
+    const project = createProject({ title: "Current Book" });
+    replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
+      stillShot("scene-01", "shot-01", "Sue opens the curtain.", "outputs/comics/current/page-01-01.png"),
+      stillShot("scene-01", "shot-02", "Johnsy stares at the leaf.", "outputs/comics/current/page-01-01.png"),
+      stillShot("scene-01", "shot-03", "Old draft.", "outputs/archive/batch-01/page-01-01.png"),
+    ]);
+
+    const book = assembleComicsBook(project.id);
+    expect(book.pages).toHaveLength(1);
+    expect(book.pages[0]?.pageImage).toBe("outputs/comics/current/page-01-01.png");
+    expect(book.pages[0]?.panels.map((panel) => panel.shotId)).toEqual(["shot-01", "shot-02"]);
+    expect(book.pages.flatMap((page) => page.panels).some((panel) => panel.stillPath.includes("archive"))).toBe(false);
+  });
+
   it("keeps one book page per generated comics PNG shared by sibling shots", () => {
     const project = createProject({ title: "Shared Page" });
     replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
@@ -188,7 +203,9 @@ describe("assembleComicsBook", () => {
     );
   });
 
-  it.skipIf(!existsSync(path.resolve(__dirname, "../../../.data/projects/the-last-leaf/project.json")))(
+  it.skipIf(
+    !existsSync(path.resolve(__dirname, "../../../.data/projects/the-last-leaf/content/volumes/volume-01/chapters/chapter-01/scenes/scene-06.json")),
+  )(
     "reads on-disk the-last-leaf stills into one three-panel page when present",
     () => {
     const repoWorkspace = path.resolve(__dirname, "../../../.data/projects");
@@ -258,6 +275,7 @@ function stillShot(sceneId: string, id: string, action: string, still: string | 
     continuity_from: null,
     status: still ? "success" : "pending",
     selected_image: still,
+    pageId: "",
     updatedAt: new Date().toISOString(),
   };
 }

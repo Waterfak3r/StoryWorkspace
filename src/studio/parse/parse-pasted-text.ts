@@ -14,7 +14,7 @@ import {
 } from "./schemas";
 
 const EXTRACT_INSTRUCTIONS =
-  "Extract proposed scenes and reusable entities from this complete story. Split the whole story into volumes, chapters, and scenes yourself — do not leave chapter division to the user. Give every scene a volumeName and a chapterName; group related beats in the same chapter and start a new chapter when the plot, place, or time shifts. Copy each scene's original wording into script, including all dialogue; do not write a synopsis. Locations are kind location (environment). Clothing is kind costume. Put appearance and setting look in entity descriptions so later shots can reuse them.";
+  "Extract proposed scenes and reusable entities from this complete story. Split the whole story into volumes, chapters, and scenes yourself — do not leave chapter division to the user. Give every scene a volumeName and a chapterName; group related beats in the same chapter and start a new chapter when the plot, place, or time shifts. If a character leaves the room for a shop, street, or other place, that visit is its own scene — do not jump from the decision to 'when they reached home'. Copy each scene's original wording into script, including all dialogue; do not write a synopsis. Locations are kind location (environment). Clothing is kind costume. Entity description and look must be the FIRST stable appearance only — do not put later haircuts, injuries, deaths, or sold objects into the identity. Name the story's treasured objects as props even if they are sold later (for example a gold watch). Put room layout into the location description (what is left/right/opposite the door).";
 
 export async function parsePastedText(
   projectId: string,

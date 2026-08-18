@@ -60,7 +60,7 @@ export function collectComicsStillFrames(projectId: string): ComicsStillFrame[] 
         const scene = readScene(projectId, volume.id, chapter.id, sceneNode.id);
         for (const shot of scene.shots) {
           const stillPath = shot.selected_image?.trim() ?? "";
-          if (!stillPath) {
+          if (!stillPath || stillPath.startsWith("outputs/archive/")) {
             continue;
           }
           frames.push({
@@ -116,7 +116,10 @@ function paginateGeneratedAndLegacyPages(frames: readonly ComicsStillFrame[]): S
       end += 1;
     }
     const run = frames.slice(index, end);
-    const generatedPage = current.stillPath.startsWith("outputs/comics/pages/") || run.length > 1;
+    const generatedPage =
+      current.stillPath.startsWith("outputs/comics/current/") ||
+      current.stillPath.startsWith("outputs/comics/pages/") ||
+      run.length > 1;
     if (generatedPage) {
       flushLeftover();
       pages.push({

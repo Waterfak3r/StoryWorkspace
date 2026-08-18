@@ -17,6 +17,7 @@ function shot(partial: Partial<StudioShot> & Pick<StudioShot, "id">): StudioShot
     continuity_from: null,
     status: "pending",
     selected_image: null,
+    pageId: "",
     updatedAt: "2026-08-17T00:00:00.000Z",
     ...partial,
   };
@@ -45,7 +46,7 @@ describe("Story and Workflow generate/lock wiring", () => {
     expect(workflowSource).toContain('t("Unlock")');
     expect(workflowSource).toContain("disabled={node.locked || imageBusy || lockBusy}");
     expect(workflowSource).toContain("!node.locked");
-    expect(workflowSource).toContain("generateStudioShot");
+    expect(workflowSource).toContain("startStudioWorkflow");
     expect(workflowSource).toContain("directStudioScene");
     expect(workflowSource).toContain('data-workflow-action="comics"');
   });

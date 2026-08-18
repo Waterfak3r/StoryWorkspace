@@ -8,9 +8,10 @@ import type { CompleteJson, LlmParseProposal } from "../parse/schemas";
 
 export const FIXTURE_LAST_LEAF = path.resolve(process.cwd(), "test/resource/test_The Last Leaf.txt");
 export const FIXTURE_TELL_TALE = path.resolve(process.cwd(), "test/resource/test_The Tell-Tale Heart.txt");
+export const FIXTURE_MAGI = path.resolve(process.cwd(), "test/resource/test_The Gift of the Magi.txt");
 
-export function readFixtureStory(which: "last-leaf" | "tell-tale"): string {
-  const file = which === "last-leaf" ? FIXTURE_LAST_LEAF : FIXTURE_TELL_TALE;
+export function readFixtureStory(which: "last-leaf" | "tell-tale" | "magi"): string {
+  const file = which === "last-leaf" ? FIXTURE_LAST_LEAF : which === "tell-tale" ? FIXTURE_TELL_TALE : FIXTURE_MAGI;
   return readFileSync(file, "utf8");
 }
 
@@ -18,7 +19,7 @@ export function fixtureCompleteJson(sourceText: string): CompleteJson {
   return async () => proposalForSource(sourceText);
 }
 
-export async function ingestFixtureStory(title: string, which: "last-leaf" | "tell-tale") {
+export async function ingestFixtureStory(title: string, which: "last-leaf" | "tell-tale" | "magi") {
   const sourceText = readFixtureStory(which);
   const project = createProject({ title });
   const run = await parsePastedText(project.id, sourceText, fixtureCompleteJson(sourceText));
@@ -33,7 +34,139 @@ export function proposalForSource(sourceText: string): LlmParseProposal {
   if (sourceText.includes("TRUE!") && sourceText.includes("vulture")) {
     return tellTaleProposal();
   }
+  if (sourceText.includes("Sofronie") && sourceText.includes("Della")) {
+    return magiProposal();
+  }
   throw new Error("Unknown fixture story text.");
+}
+
+function magiProposal(): LlmParseProposal {
+  return {
+    proposedScenes: [
+      {
+        key: "scene-count",
+        title: "Della counts her savings and reflects in the glass",
+        script: "Della counts one dollar and eighty-seven cents.",
+        intent: "Poverty and pride.",
+        characterNames: ["Della"],
+        locationName: "The Dillingham Flat",
+        propNames: ["Della's pennies", "Jim's gold watch"],
+        costumeNames: ["Old brown jacket"],
+        volumeName: "The Gift of the Magi",
+        chapterName: "The flat",
+      },
+      {
+        key: "scene-shop",
+        title: "Mme. Sofronie buys Della's hair",
+        script: "Della sells her hair.",
+        intent: "The sacrifice.",
+        characterNames: ["Della", "Madame Sofronie"],
+        locationName: "Mme. Sofronie",
+        propNames: ["Fob chain"],
+        costumeNames: ["Old brown jacket"],
+        volumeName: "The Gift of the Magi",
+        chapterName: "The shop",
+      },
+      {
+        key: "scene-wait",
+        title: "Della curls her hair and awaits Jim's arrival",
+        script: "Della curls her hair and waits.",
+        intent: "Anxiety.",
+        characterNames: ["Della"],
+        locationName: "The Dillingham Flat",
+        propNames: ["Fob chain", "Curling irons"],
+        costumeNames: [],
+        volumeName: "The Gift of the Magi",
+        chapterName: "Waiting",
+      },
+      {
+        key: "scene-gifts",
+        title: "Jim returns home and the gifts are revealed",
+        script: "Jim comes home with the combs.",
+        intent: "The exchange.",
+        characterNames: ["Della", "Jim"],
+        locationName: "The Dillingham Flat",
+        propNames: ["Fob chain", "Gift package of combs", "Jim's gold watch"],
+        costumeNames: ["Jim's worn overcoat"],
+        volumeName: "The Gift of the Magi",
+        chapterName: "The gifts",
+      },
+    ],
+    proposedEntities: [
+      {
+        key: "ent-della",
+        kind: "character",
+        name: "Della",
+        description: "Young American woman about twenty, slender, knee-length brown hair.",
+      },
+      {
+        key: "ent-jim",
+        kind: "character",
+        name: "Jim",
+        description: "Thin serious American man twenty-two, short dark hair, worn overcoat.",
+      },
+      {
+        key: "ent-sofronie",
+        kind: "character",
+        name: "Madame Sofronie",
+        description: "Large, too-white, chilly owner of a hair-goods shop.",
+      },
+      {
+        key: "ent-flat",
+        kind: "location",
+        name: "The Dillingham Flat",
+        description: "Shabby $8 furnished flat; couch opposite the door; pier glass between two windows.",
+      },
+      {
+        key: "ent-shop",
+        kind: "location",
+        name: "Mme. Sofronie",
+        description: "One flight up; hair goods shop; sign on the street.",
+      },
+      {
+        key: "ent-watch",
+        kind: "prop",
+        name: "Jim's gold watch",
+        description: "Gold watch that had been his father's and his grandfather's.",
+      },
+      {
+        key: "ent-chain",
+        kind: "prop",
+        name: "Fob chain",
+        description: "Simple platinum watch fob chain.",
+      },
+      {
+        key: "ent-combs",
+        kind: "prop",
+        name: "Gift package of combs",
+        description: "Tortoise-shell combs with jewelled rims.",
+      },
+      {
+        key: "ent-irons",
+        kind: "prop",
+        name: "Curling irons",
+        description: "Metal irons heated on the gas.",
+      },
+      {
+        key: "ent-pennies",
+        kind: "prop",
+        name: "Della's pennies",
+        description: "One dollar and eighty-seven cents in change.",
+      },
+      {
+        key: "ent-jacket",
+        kind: "costume",
+        name: "Old brown jacket",
+        description: "Della's old brown jacket and hat.",
+      },
+      {
+        key: "ent-coat",
+        kind: "costume",
+        name: "Jim's worn overcoat",
+        description: "Thin worn overcoat, no gloves.",
+      },
+    ],
+  };
 }
 
 function lastLeafProposal(): LlmParseProposal {

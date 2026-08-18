@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { preserveProposalScripts } from "./preserve-scripts";
+import { preserveProposalScripts, scriptMostlyCoveredBy, scriptsCoverSource } from "./preserve-scripts";
 import type { LlmParseProposal } from "./schemas";
 
 describe("preserveProposalScripts alignment", () => {
@@ -84,5 +84,91 @@ describe("preserveProposalScripts alignment", () => {
     expect(recovery).toBeDefined();
     expect(recovery!.characterNames).toEqual(expect.arrayContaining(["Johnsy"]));
     expect(recovery!.script).toMatch(/Johnsy/i);
+  });
+
+  it("fails coverage when a long source span is omitted even if length still matches", () => {
+    const source = [
+      "Della counted one dollar and eighty-seven cents on Christmas Eve.",
+      "She let her hair fall to its full length. Jim's gold watch was their other pride.",
+      "Where she stopped the sign read: “Mme. Sofronie. Hair Goods of All Kinds.” Will you buy my hair? Twenty dollars, said Madame.",
+      "When Della reached home she curled the ravages made by generosity.",
+      "Jim stepped in. You’ve cut off your hair? I sold the watch to buy your combs.",
+    ].join("\n\n");
+    const scripts = [
+      "Della counted one dollar and eighty-seven cents on Christmas Eve. She let her hair fall to its full length. Jim's gold watch was their other pride.",
+      "When Della reached home she curled the ravages made by generosity. Jim stepped in. You’ve cut off your hair? I sold the watch to buy your combs.",
+    ];
+    expect(scripts.join(" ").length).toBeGreaterThan(source.length * 0.6);
+    expect(scriptsCoverSource(source, scripts)).toBe(false);
+  });
+
+  it("puts the omitted shop visit back into a scene when the model jumped home", () => {
+    const source = [
+      "Della counted one dollar and eighty-seven cents on Christmas Eve.",
+      "She let her hair fall to its full length. Jim's gold watch was their other pride.",
+      "Where she stopped the sign read: “Mme. Sofronie. Hair Goods of All Kinds.” Will you buy my hair? Twenty dollars, said Madame.",
+      "When Della reached home she curled the ravages made by generosity.",
+      "Jim stepped in. You’ve cut off your hair? I sold the watch to buy your combs.",
+    ].join("\n\n");
+    const proposal: LlmParseProposal = {
+      proposedScenes: [
+        {
+          key: "scene-count",
+          title: "Della counts",
+          script: "Della counts her money.",
+          intent: "Poverty.",
+          characterNames: ["Della"],
+          locationName: "The flat",
+          propNames: [],
+          costumeNames: [],
+          volumeName: "The Gift of the Magi",
+          chapterName: "The flat",
+        },
+        {
+          key: "scene-wait",
+          title: "Della waits",
+          script: "Della curls her hair.",
+          intent: "Wait.",
+          characterNames: ["Della"],
+          locationName: "The flat",
+          propNames: [],
+          costumeNames: [],
+          volumeName: "The Gift of the Magi",
+          chapterName: "Waiting",
+        },
+        {
+          key: "scene-gifts",
+          title: "The gifts",
+          script: "Jim comes home.",
+          intent: "Exchange.",
+          characterNames: ["Della", "Jim"],
+          locationName: "The flat",
+          propNames: [],
+          costumeNames: [],
+          volumeName: "The Gift of the Magi",
+          chapterName: "The gifts",
+        },
+      ],
+      proposedEntities: [
+        { key: "ent-della", kind: "character", name: "Della", description: "Young wife." },
+        { key: "ent-jim", kind: "character", name: "Jim", description: "Young husband." },
+      ],
+    };
+
+    const preserved = preserveProposalScripts(source, proposal);
+    expect(preserved.proposedScenes.some((scene) => /Sofronie|buy my hair/i.test(scene.script))).toBe(true);
+    expect(scriptsCoverSource(source, preserved.proposedScenes.map((scene) => scene.script))).toBe(true);
+  });
+
+  it("treats a duplicate dump as already covered by earlier directed scripts", () => {
+    const directed = [
+      "Della counted one dollar and eighty-seven cents on Christmas Eve. She let her hair fall to its full length.",
+      "When Della reached home she curled the ravages. Jim stepped in. I sold the watch.",
+    ];
+    const dump = `${directed[0]}\n\n${directed[1]}`;
+    expect(scriptMostlyCoveredBy(dump, directed)).toBe(true);
+    expect(scriptMostlyCoveredBy("Where she stopped the sign read: “Mme. Sofronie. Hair Goods of All Kinds.” Will you buy my hair?", directed)).toBe(
+      false,
+    );
   });
 });

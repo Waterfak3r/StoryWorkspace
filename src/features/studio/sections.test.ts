@@ -27,21 +27,28 @@ describe("readSectionFromLocation", () => {
 });
 
 describe("Outline and Workflow surfaces", () => {
-  it("renders a timeline and a connected pipeline, not the old lists", () => {
+  it("renders a mindmap and a connected pipeline, not the old lists", () => {
     const outline = readFileSync(path.join(__dirname, "OutlinePanel.tsx"), "utf8");
-    expect(outline).toContain("data-outline-timeline");
-    expect(outline).toContain("data-timeline-event");
-    expect(outline).toContain("data-timeline-lane");
-    expect(outline).toContain("data-timeline-cell");
-    expect(outline).toContain("data-timeline-link");
-    expect(outline).toContain("data-timeline-chain");
+    expect(outline).toContain("data-outline-map");
+    expect(outline).toContain("data-outline-time");
+    expect(outline).toContain("data-time-kind");
+    expect(outline).toContain("data-outline-event");
+    expect(outline).toContain("data-outline-entity");
+    expect(outline).toContain("data-outline-edge");
+    expect(outline).toContain("data-edge-kind");
     expect(outline).toContain("event.sceneId");
     expect(outline).toContain("event.volumeId");
     expect(outline).toContain("event.chapterId");
+    expect(outline).not.toContain("data-timeline-lane");
+    expect(outline).not.toContain("data-timeline-cell");
+    expect(outline).not.toContain("data-timeline-chain");
     expect(outline).not.toContain("OutlineSceneCard");
 
     const overview = readFileSync(path.join(__dirname, "OverviewPanel.tsx"), "utf8");
     expect(overview).toContain("data-comics-style");
+    expect(overview).toContain("data-lettering-mode");
+    expect(overview).toContain("data-compose-mode");
+    expect(overview).toContain("data-page-layout");
     expect(overview).toContain("saveStudioStyle");
 
     const entities = readFileSync(path.join(__dirname, "EntitiesPanel.tsx"), "utf8");
@@ -49,9 +56,13 @@ describe("Outline and Workflow surfaces", () => {
     expect(entities).toContain("completeStudioEntityReference");
 
     const workflow = readFileSync(path.join(__dirname, "WorkflowPanel.tsx"), "utf8");
+    expect(workflow).toContain("data-workflow-start");
     expect(workflow).toContain("data-workflow-pipeline");
     expect(workflow).toContain("data-dialogue-list");
     expect(workflow).toContain("data-dialogue-line");
+    expect(workflow).toContain("data-line-kind");
+    expect(workflow).toContain("data-line-event");
+    expect(workflow).toContain("data-line-shot");
     expect(workflow).toContain("data-pipeline-stage");
     expect(workflow).toContain("data-pipeline-edge");
     expect(workflow).toContain("data-pipeline-label");
@@ -67,6 +78,7 @@ describe("Outputs comics presentation", () => {
     expect(source).not.toContain("grid-cols-2");
     expect(source).not.toContain("panel.caption");
     expect(source).toContain("page.lettering");
+    expect(source).toContain("isOverlayMode");
     expect(source).toContain('data-testid="speech-balloon"');
     expect(source).toContain('data-testid="comics-page"');
     expect(source).toContain("if (!active)");

@@ -9,6 +9,7 @@ export type ImageAdapterInput = {
   runId: string;
   prompt: string;
   pageId?: string;
+  panelShotId?: string;
   referenceImages?: readonly ImageReferenceInput[];
   provider: {
     model: string;

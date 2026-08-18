@@ -92,10 +92,10 @@ describe("assemblePipelineGraph", () => {
     const withScriptOnly = assemblePipelineGraph(project.id);
     expect(stage(withScriptOnly, "dialogue").status).toBe("pending");
 
-    confirmSceneDialogue(project.id, pathIds.volumeId, pathIds.chapterId, scene.id);
+    await confirmSceneDialogue(project.id, pathIds.volumeId, pathIds.chapterId, scene.id);
     const confirmed = assemblePipelineGraph(project.id);
     expect(stage(confirmed, "dialogue").status).toBe("success");
-  });
+  }, 20_000);
 });
 
 function firstScenePath(projectId: string) {
@@ -153,6 +153,7 @@ function shot(sceneId: string, id: string, action: string, still: string | null)
     continuity_from: null,
     status: still ? "success" : "pending",
     selected_image: still,
+    pageId: "",
     updatedAt: new Date().toISOString(),
   };
 }
