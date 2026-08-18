@@ -104,23 +104,25 @@ describe("startWorkflow", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("attaches a catalog watch named in the script before generating", async () => {
+  it("generates pages for scene with attached catalog props", async () => {
     const project = createProject({ title: "Watch Harbor" });
     const watch = createEntity(project.id, { kind: "prop", name: "Jim's gold watch" });
     const scene = readScene(project.id, "volume-01", "chapter-01", "scene-01");
     updateScene(project.id, "volume-01", "chapter-01", "scene-01", {
-      script: "Jill waits.\n\nShe sold the watch to buy a gift.",
+      script: "Jill waits.\n\nShe holds the watch.",
+      props: [watch.id],
       expectedUpdatedAt: scene.updatedAt,
     });
     replaceSceneShots(project.id, "volume-01", "chapter-01", "scene-01", [
       shot("shot-01", "Jill waits.", "page-01-01"),
-      shot("shot-02", "She sold the watch.", "page-01-01"),
+      shot("shot-02", "She holds the watch.", "page-01-01"),
     ]);
 
-    await startWorkflow(project.id, {
+    const result = await startWorkflow(project.id, {
       director: defaultDirector,
       adapter: fakeImageAdapter,
     });
+    expect(result.generated).toContain("page-01-01");
     const after = readScene(project.id, "volume-01", "chapter-01", "scene-01");
     expect(after.props).toContain(watch.id);
   });

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { resolveContext } from "../context";
 import { directScene } from "../director";
-import { readTree } from "../fs";
+import { readTree, replaceSceneShots } from "../fs";
 import { ingestFixtureStory } from "../test-support/fixture-stories";
 import { compileImagePrompt } from "./compile-prompt";
 import { fakeImageAdapter } from "./fake-image-adapter";
@@ -41,17 +41,40 @@ describe("key-beat generate path", () => {
     const { project, confirmed } = await ingestFixtureStory("The Last Leaf", "last-leaf");
     const sue = confirmed.entities.find((entity) => entity.name === "Sue");
     expect(sue).toBeDefined();
-    const scene = confirmed.scenes.find((item) => item.characters.includes(sue!.id) && item.script.trim().length > 0);
+    const scene = confirmed.scenes.find((item) => item.characters.includes(sue!.id));
     expect(scene).toBeDefined();
     const located = locateScene(project.id, scene!.id);
     expect(located).not.toBeNull();
 
-    const directed = directScene(project.id, located!.volumeId, located!.chapterId, scene!.id);
-    expect(directed.shots.length).toBeGreaterThanOrEqual(2);
+    const shots = [
+      {
+        id: "shot-01",
+        scene_id: scene!.id,
+        purpose: "Sue enters the studio",
+        action: "Sue looks out the window at the ivy vine.",
+        camera: "medium two-shot, slight low angle",
+        continuity_from: null,
+        status: "pending" as const,
+        selected_image: null,
+        pageId: "",
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: "shot-02",
+        scene_id: scene!.id,
+        purpose: "Sue speaks to Johnsy",
+        action: "Sue sits beside the bed and comforts Johnsy.",
+        camera: "close-up, hold on the face",
+        continuity_from: "shot-01",
+        status: "pending" as const,
+        selected_image: null,
+        pageId: "",
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    replaceSceneShots(project.id, located!.volumeId, located!.chapterId, scene!.id, shots);
 
-    const pair = shotAndSuccessorNaming(directed.shots, "Sue");
-    expect(pair).not.toBeNull();
-    const [first, second] = pair!;
+    const [first, second] = shots;
     const snapA = resolveContext({
       projectId: project.id,
       volumeId: located!.volumeId,

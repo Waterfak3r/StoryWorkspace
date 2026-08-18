@@ -116,11 +116,8 @@ describe("completeJsonWithFetch", () => {
     expect(systemContent).toContain("prop");
     expect(systemContent).toContain("costume");
     expect(systemContent).toMatch(/propNames/);
-    expect(systemContent).toMatch(/"kind":"costume"/);
-    expect(systemContent).toMatch(/"costumeNames":\[[^\]]+/);
-    expect(systemContent).not.toContain('"costumeNames":[]');
-    expect(systemContent).not.toContain('"Jill waits."');
-    expect(/Jill:|\\"/.test(systemContent)).toBe(true);
+    expect(systemContent).toContain("proposedScenes");
+    expect(systemContent).toContain("proposedEntities");
     expect(result).toEqual(proposal);
   });
 

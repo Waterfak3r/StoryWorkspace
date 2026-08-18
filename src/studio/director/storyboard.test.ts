@@ -122,7 +122,7 @@ describe("storyboard director and context", () => {
         continuity: expect.any(Object),
       }),
     );
-    expect(Object.keys(parsed).sort()).toEqual(["continuity", "entities", "intent", "scene", "shot", "style"]);
+    expect(Object.keys(parsed).sort()).toEqual(["continuity", "entities", "intent", "scene", "shot", "storyPosition", "style"].sort());
     expect(parsed).not.toHaveProperty("provider");
     expect(parsed).not.toHaveProperty("model");
     expect(parsed).not.toHaveProperty("temperature");

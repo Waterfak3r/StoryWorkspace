@@ -478,7 +478,11 @@ describe("compileImagePrompt", () => {
             references: [],
             spatial: "",
           },
-          state: { outfit: "1900s tenement blouse", condition: "hair cut short into tiny close-lying curls" },
+          state: {
+            outfit: "1900s tenement blouse",
+            condition: "hair cut short into tiny close-lying curls",
+            supersedes: ["knee-length brown hair"],
+          },
         },
       ],
       style: { id: "default", label: "Default", visual: "Watercolor indie." },

@@ -18,6 +18,7 @@ import {
   replaceSceneShots,
   updateEntity,
   updateScene,
+  writeContentState,
 } from "../fs";
 import { writeInferredSceneStates } from "../state/infer-scene-state";
 import { startWorkflow } from "../workflow/start-workflow";
@@ -225,6 +226,27 @@ function seedMagiProject() {
     draftShot(scene3.id, "shot-04", "Della presenting her gift", "Della holds out the watch chain on her palm."),
     draftShot(scene3.id, "shot-05", "bittersweet resolution", "Jim sold his watch and smiles on the couch."),
   ]);
+
+  writeContentState(project.id, "volume-01", chapter2.id, scene2.id, {
+    patches: [
+      {
+        entityId: della.id,
+        condition: "tiny, close-lying curls",
+        supersedes: ["knee-length brown hair", "long hair"],
+        truth: "canon",
+      },
+    ],
+  });
+  writeContentState(project.id, "volume-01", chapter3.id, scene3.id, {
+    patches: [
+      {
+        entityId: della.id,
+        condition: "tiny, close-lying curls",
+        supersedes: ["knee-length brown hair", "long hair"],
+        truth: "canon",
+      },
+    ],
+  });
 
   return { projectId: project.id, dellaId: della.id, jimId: jim.id };
 }

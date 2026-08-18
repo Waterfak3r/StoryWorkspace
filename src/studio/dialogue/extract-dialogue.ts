@@ -186,12 +186,21 @@ export function mergeExtractedDialogue(
 }
 
 export function isScriptSubstring(text: string, script: string): boolean {
-  const needle = normalizeForMatch(text);
+  const needle = foldForMatch(text);
   if (!needle) {
     return false;
   }
-  const hay = normalizeForMatch(script);
+  const hay = foldForMatch(script);
   return hay.includes(needle);
+}
+
+function foldForMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^\p{L}\p{N}']+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function unicodeLength(value: string): number {

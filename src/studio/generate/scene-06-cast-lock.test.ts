@@ -20,7 +20,7 @@ const scenePath = path.join(
   "scene-06.json",
 );
 
-describe("real Last Leaf scene-06 compile cast lock", () => {
+describe.skipIf(!existsSync(scenePath))("real Last Leaf scene-06 compile cast lock", () => {
   beforeEach(() => {
     process.env.STORY_WORKSPACE_ROOT = workspaceRoot;
     delete process.env.STORY_WORKSPACE_DB_PATH;

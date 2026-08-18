@@ -40,10 +40,12 @@
 - 文本是证据；结构化数据要有稳定 ID 与 Provenance。
 - Canon / 用户确认 与 AI 推断必须可区分；模型不得静默覆盖 Canon。
 - LLM 输出先做 schema validation。永久身份、跨章 Story State、镜头 Continuity 分层。
+- **反硬编码与通用契约（ADR 030）**：生产代码（`src/studio/**`、`src/features/**`）严禁出现任何特定测试故事的人名、专名、道具、台词或情节正则；专名只准留在 `test/` 夹具。代码只负责结构、时序、引用完整性与落盘，所有分场、状态演进、说话人与分镜判断必须走 `Prompt → LLM (JSON) → Zod`。无 Provider 时只能返回空推断或保守 fallback，严禁在本地用假规则伪造推断结果。
 - Context Resolver 产出可检查快照；Provider 参数只留在 Binding / Compiler / Adapter。
 - 外部副作用使用幂等键、超时、有限重试和归一化错误。
 
 ## 质量与汇报
+- 提交前必须确认生产代码无测试故事专有词注入。违反硬编码直接判定无效交付，审查（agy）拥有一票否决权。
 - 新核心字段同步更新 schema、夹具和 `docs/product`。密钥不进客户端、日志、项目 JSON、截图或提交。
 - 修改聚焦当前切片；保留他人改动。子代理跑与改动相称的测试。
 - 关键决定写入 `docs/decisions/`。汇报含完成内容、修改文件、验证结果、风险、未完成项。

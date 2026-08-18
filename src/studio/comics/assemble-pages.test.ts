@@ -134,18 +134,18 @@ describe("assembleComicsBook", () => {
       stillShot("scene-01", "shot-02", "B turns.", "outputs/images/scene-01/shot-02/run-01.png"),
     ]);
 
-    createChapter(project.id, "volume-01", { id: "chapter-02", title: "Later" });
-    createScene(project.id, "volume-01", "chapter-02", { id: "scene-01", title: "Later scene" });
-    replaceSceneShots(project.id, "volume-01", "chapter-02", "scene-01", [
-      stillShot("scene-01", "shot-01", "C arrives.", "outputs/images/scene-01/shot-01/run-02.png"),
+    const chap2 = createChapter(project.id, "volume-01", { id: "chapter-02", title: "Later" });
+    const sceneB = createScene(project.id, "volume-01", chap2.id);
+    replaceSceneShots(project.id, "volume-01", chap2.id, sceneB.id, [
+      stillShot(sceneB.id, "shot-01", "C arrives.", "outputs/images/scene-01/shot-01/run-02.png"),
     ]);
 
-    createVolume(project.id, { id: "volume-02", title: "Volume two" });
-    createChapter(project.id, "volume-02", { id: "chapter-01", title: "Next volume" });
-    createScene(project.id, "volume-02", "chapter-01", { id: "scene-01", title: "Next scene" });
-    replaceSceneShots(project.id, "volume-02", "chapter-01", "scene-01", [
-      stillShot("scene-01", "shot-01", "D looks back.", "outputs/images/scene-01/shot-01/run-03.png"),
-      stillShot("scene-01", "shot-02", "E closes the door.", "outputs/images/scene-01/shot-02/run-03.png"),
+    const vol2 = createVolume(project.id, { id: "volume-02", title: "Volume two" });
+    const chap3 = createChapter(project.id, vol2.id, { id: "chapter-01", title: "Next volume" });
+    const sceneC = createScene(project.id, vol2.id, chap3.id);
+    replaceSceneShots(project.id, vol2.id, chap3.id, sceneC.id, [
+      stillShot(sceneC.id, "shot-01", "D looks back.", "outputs/images/scene-01/shot-01/run-03.png"),
+      stillShot(sceneC.id, "shot-02", "E closes the door.", "outputs/images/scene-01/shot-02/run-03.png"),
     ]);
 
     const book = assembleComicsBook(project.id);
