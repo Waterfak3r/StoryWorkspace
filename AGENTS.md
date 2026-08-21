@@ -9,32 +9,29 @@
 - 用户在网页终端里看程序：起 `npm run dev`（127.0.0.1:5173，Caddy 已反代），用户打开 https://dev.wonderfaker.online（basic auth `pad`）。不要改用 3000。需要看时再起，看完可停。
 
 ## 角色
-- 主代理：Grok 4.6，effort 用会话默认（`xhigh`）。负责产品构思、架构、范围、路线、接口、拆解、分发、验收。先形成产品判断，再决定问不问、派不派。
-- 实现：`spawn_subagent` `general-purpose`，模型 **grok-4.6**，effort **medium**。按已锁定合同编码并跑测试/lint/typecheck（及合同要求的 Playwright），回报文件/命令/阻塞。不得再探产品、再派生子代理、自认主代理、改范围或核心架构。
-- 主代理必须自己想清再派。禁止把整仓实现读进主上下文；**必须**读当前问题会错的那几处（生成、导演、Outputs、相关 schema）。
-- 提问：只有真正的产品分叉才问，一次一个。已说清的指令直接执行。先给判断与推荐，再问。
-- 用户把主代理放在 Herdr 里，就是为了和 Antigravity（Gemini 3.7 Flash，kind `agy`）对抗性合作：互相挑错、交叉审查。不是单向派活、主代理盖章。不使用 Claude。
-- 分工：后端架构与编码由 Grok / 4.6 实现。agy 担任质量与安全审计员：负责前端审美/布局，并对 Grok 的全部后端交付进行 ADR 030 反硬编码、通用契约与反欺骗代码审查。Grok 每次切片提交前必须派发 agy 审查，未经 agy 审查通过严禁宣称完成或合并。
+- 主代理：Antigravity（Gemini 3.7 Flash，kind `agy`）。主导产品设计、范围定义、体验迭代、切片规划、前端审美与交互审查，以及最终质量验收。
+- 执行协调：主 Grok（Grok 4.6）。负责具体代码架构设计、模块建构与任务拆解。主 Grok 自身不负责具体编码与自审，而是派发 `subagent` 执行后端编码，并派出独立 `subagent` 进行后端代码审查与测试验证。
+- 前端审查：由 Antigravity 统一负责前端审美、交互流畅度、视觉层级与文案审查。
+- 分工协同：Antigravity 下发切片合同与通用契约（ADR 030）→ 主 Grok 架构拆解并派发子代理实现/后端自审 → Antigravity 进行前端审查与终审验收。
+- 提问：只有真正的产品分叉才问，一次一个。已说清的指令直接执行。
 - 共享工作区：不得覆盖、回滚或整理与当前任务无关的他人改动。
 
 ## Herdr
 - 先 `test "${HERDR_ENV:-}" = 1`。不在 Herdr 里就说明并停手，不得去控当前 session。用法以 `herdr --skill` 为准，语法以已装 binary 为准：`herdr --help`、`herdr agent`、`herdr pane`。不要裸跑 `herdr`（会进 TUI）。
 - 先拆 pane 再 `agent start`：start 不建布局。默认当前 tab 兄弟 pane、cwd 仓库根、`--no-focus`。先 `herdr pane layout --pane "$HERDR_PANE_ID"`：宽向右拆、窄/高向下拆。从 JSON 读 `.result.pane.pane_id`，不要猜侧栏。
-- 目标 pane 须在交互提示符且前台无命令/编辑器/代理。`herdr agent start <name> --kind agy --pane <paneId>`；name 匹配 `[a-z][a-z0-9_-]{0,31}` 且现场唯一。只对 `--current`、明确 paneId 或唯一 agent 名操作。
+- 目标 pane 须在交互提示符且前台无命令/编辑器/代理。`herdr agent start <name> --kind <kind> --pane <paneId>`；name 匹配 `[a-z][a-z0-9_-]{0,31}` 且现场唯一。只对 `--current`、明确 paneId 或唯一 agent 名操作。
 - 已识别代理用 `herdr agent prompt <name> "…" --wait`，读 `agent get` / `agent read --source recent-unwrapped`。`--wait` timeout 与 `agent_prompt_stalled` 只表示本次等待结束。`idle`/`done` 才是可接收下一句；`blocked` 先读再送键；`unknown` 不是完成。
-- start 超时但 pane 已是 agy 界面：改 `pane send-text` + Enter。别屏读不到全文时，让它把结论写文件再读盘。测试/命令用 `pane run` / `pane wait-output`，不要误走 agent 面。
+- start 超时但 pane 已是 agent 界面：改 `pane send-text` + Enter。别屏读不到全文时，让它把结论写文件再读盘。测试/命令用 `pane run` / `pane wait-output`，不要误走 agent 面。
 - 不得关自己没建的 workspace/tab/pane；自己建的也要等完成、取消或确认无需继续才关。禁止 `herdr server stop`、禁止杀主 Herdr 进程。
 
 ## 工作流
 1. 产品讨论从用户原话和 `concept.md` 起；需要落地时才对照 `mvp.md` 与仓库改动。
-2. 先给出产品判断。真正分叉才问；问清后再写合同。
-3. 合同写清用户故事、切片、接口、文件归属、验收。改范围先改 `mvp.md`。
-4. 核心后端切片派 4.6 / medium。界面审美与前端呈现派 Antigravity（走 Herdr），能并行就并行。
-5. 先打通文件真相上的前后端闭环，再扩展同一能力。
-6. **完善已通主链**按 [workflow-hardening.md](docs/product/workflow-hardening.md)：一页当证据，摊开身份/此刻状态/对白/分镜，对情节找洞，和 agy 对链路，改 API，再直出验收。禁止对着图修图或手改 JSON 当完成。
-7. 架构与依赖由主代理处理。对抗审查：agy 负责界面审美审查 + 后端 ADR 030 代码审计（一票否决任何假规则/硬编码/假推断）。
-8. 交付门禁：Grok 编码与测试完成后，必须主动 prompt agy 进行代码审查；agy 给出 PASS 结论后方可验收。未过审查一律退回。
-9. 未通过 agy 审查与测试验收不得宣称完成。不要在很长、刚压缩或余额不足的会话上开 `/goal`。用户当场纠正产品后写入 `mvp.md`。
+2. Antigravity 给出产品判断与切片合同（写清用户故事、接口、文件归属、ADR 030 契约与验收标准）。
+3. 主 Grok 接收合同进行架构建构，派发 `subagent` 编码，并派发子代理跑测试与后端审查。
+4. Antigravity 负责前端界面实现/审查（审美、布局、交互流畅度）。
+5. 交付门禁：Grok 子代理完成编码与测试自审后向主 Grok 汇报，主 Grok 汇总后报 Antigravity 审查。
+6. Antigravity 完成前端审查与 ADR 030 终审并给出 PASS 结论后方可宣称完成或合并。
+7. 未通过 Antigravity 审查与全量测试验收严禁宣称完成。用户当场纠正产品后写入 `mvp.md`。
 
 ## 领域原则
 - 文本是证据；结构化数据要有稳定 ID 与 Provenance。
