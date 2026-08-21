@@ -12,7 +12,7 @@
 - 主代理：Antigravity（Gemini 3.7 Flash，kind `agy`）。主导产品设计、范围定义、体验迭代、切片规划、前端审美与交互审查，以及最终质量验收。
 - 执行协调：主 Grok（Grok 4.6）。负责具体代码架构设计、模块建构与任务拆解。主 Grok 自身不负责具体编码与自审，而是派发 `subagent` 执行后端编码，并派出独立 `subagent` 进行后端代码审查与测试验证。
 - 前端审查：由 Antigravity 统一负责前端审美、交互流畅度、视觉层级与文案审查。
-- 分工协同：Antigravity 下发切片合同与通用契约（ADR 030）→ 主 Grok 架构拆解并派发子代理实现/后端自审 → Antigravity 进行前端审查与终审验收。
+- 分工协同：Antigravity 使用全英文（English）下发切片合同与通用契约（ADR 030）→ 主 Grok 架构拆解并派发子代理实现/后端自审 → Antigravity 进行前端审查与终审验收。
 - 提问：只有真正的产品分叉才问，一次一个。已说清的指令直接执行。
 - 共享工作区：不得覆盖、回滚或整理与当前任务无关的他人改动。
 
@@ -27,8 +27,8 @@
 
 ## 工作流
 1. 产品讨论从用户原话和 `concept.md` 起；需要落地时才对照 `mvp.md` 与仓库改动。
-2. Antigravity 给出产品判断与切片合同（写清用户故事、接口、文件归属、ADR 030 契约与验收标准）。
-3. 主 Grok 在全新的干净 session 中接收合同进行架构拆解，派发 `subagent` 编码并派发独立子代理跑测试自审。
+2. Antigravity 给出产品判断并**一律使用英文（English）**下发切片合同（写清用户故事、接口、文件归属、ADR 030 契约与验收标准）。
+3. 主 Grok 在全新的干净 session 中接收英文合同进行架构拆解，派发 `subagent` 编码并派发独立子代理跑测试自审。
 4. Antigravity 负责前端界面实现/审查（审美、布局、交互流畅度）。
 5. 交付门禁：Grok 汇总后报 Antigravity 审查，Antigravity 终审 PASS 后方可宣称完成并合并。
 6. 验收完成后，Antigravity 清理当前 Grok session，为下一个任务新开 session。
