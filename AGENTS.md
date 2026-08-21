@@ -22,15 +22,16 @@
 - 目标 pane 须在交互提示符且前台无命令/编辑器/代理。`herdr agent start <name> --kind <kind> --pane <paneId>`；name 匹配 `[a-z][a-z0-9_-]{0,31}` 且现场唯一。只对 `--current`、明确 paneId 或唯一 agent 名操作。
 - 已识别代理用 `herdr agent prompt <name> "…" --wait`，读 `agent get` / `agent read --source recent-unwrapped`。`--wait` timeout 与 `agent_prompt_stalled` 只表示本次等待结束。`idle`/`done` 才是可接收下一句；`blocked` 先读再送键；`unknown` 不是完成。
 - start 超时但 pane 已是 agent 界面：改 `pane send-text` + Enter。别屏读不到全文时，让它把结论写文件再读盘。测试/命令用 `pane run` / `pane wait-output`，不要误走 agent 面。
+- **单切片单会话（防降智）**：主 Grok 每次完成并验收完一个切片任务后，Antigravity 负责关闭旧 session 并新开全新 session 承接下一任务，杜绝长会话 compact 导致智力衰减。
 - 不得关自己没建的 workspace/tab/pane；自己建的也要等完成、取消或确认无需继续才关。禁止 `herdr server stop`、禁止杀主 Herdr 进程。
 
 ## 工作流
 1. 产品讨论从用户原话和 `concept.md` 起；需要落地时才对照 `mvp.md` 与仓库改动。
 2. Antigravity 给出产品判断与切片合同（写清用户故事、接口、文件归属、ADR 030 契约与验收标准）。
-3. 主 Grok 接收合同进行架构建构，派发 `subagent` 编码，并派发子代理跑测试与后端审查。
+3. 主 Grok 在全新的干净 session 中接收合同进行架构拆解，派发 `subagent` 编码并派发独立子代理跑测试自审。
 4. Antigravity 负责前端界面实现/审查（审美、布局、交互流畅度）。
-5. 交付门禁：Grok 子代理完成编码与测试自审后向主 Grok 汇报，主 Grok 汇总后报 Antigravity 审查。
-6. Antigravity 完成前端审查与 ADR 030 终审并给出 PASS 结论后方可宣称完成或合并。
+5. 交付门禁：Grok 汇总后报 Antigravity 审查，Antigravity 终审 PASS 后方可宣称完成并合并。
+6. 验收完成后，Antigravity 清理当前 Grok session，为下一个任务新开 session。
 7. 未通过 Antigravity 审查与全量测试验收严禁宣称完成。用户当场纠正产品后写入 `mvp.md`。
 
 ## 领域原则
