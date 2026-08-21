@@ -1,6 +1,7 @@
 import "server-only";
 
 import { planScenePages } from "../comics/plan-pages";
+import { storyPositionEventsForScene } from "../context";
 import { isStudioSlug, nextNumberedId, type StudioScene, type StudioShot, type StudioShotStatus } from "../domain";
 import { StudioValidationError } from "../errors";
 import { readContentState, readEntity, readScene, readStyle, replaceSceneShots } from "../fs";
@@ -152,6 +153,9 @@ function directorEvidence(
     stateSummary,
     timeSummary: `${volumeId} / ${chapterId}`,
     eventSummary: scene.intent,
+    storyPosition: {
+      events: storyPositionEventsForScene(projectId, volumeId, chapterId, scene.id),
+    },
   };
 }
 

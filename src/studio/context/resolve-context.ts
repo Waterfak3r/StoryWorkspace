@@ -38,13 +38,24 @@ export function resolveContext(input: {
     entities,
     shotId: input.shotId,
     storyPosition: {
-      events: prior.slice(-STORY_POSITION_LIMIT).map((item) => ({
-        title: item.title,
-        summary: truncateSummary(item.summary),
-      })),
+      events: storyPositionEventsForScene(input.projectId, input.volumeId, input.chapterId, input.sceneId),
     },
     priorPatches: [...priorPatches, ...currentPatches],
   });
+}
+
+export function storyPositionEventsForScene(
+  projectId: string,
+  volumeId: string,
+  chapterId: string,
+  sceneId: string,
+): { title: string; summary: string }[] {
+  return priorStoryScenes(projectId, volumeId, chapterId, sceneId)
+    .slice(-STORY_POSITION_LIMIT)
+    .map((item) => ({
+      title: item.title,
+      summary: truncateSummary(item.summary),
+    }));
 }
 
 export function buildContextSnapshot(input: {

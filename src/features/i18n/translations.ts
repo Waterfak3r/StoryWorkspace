@@ -894,6 +894,7 @@ export const zhTranslations: Record<string, string> = {
   "No events in this chapter.": "本章还没有事件。",
   "No entities attached to this beat.": "本拍暂无出场实体。",
   "Click an entity to highlight its trajectory across the story.": "点击实体以高亮其在全篇故事中的出场轨迹与连线。",
+  "Drag the map to inspect the timeline.": "拖拽画布以检视时间线导图。",
   "Click an event to inspect dramatic beats and state updates.": "点击事件以查看戏剧节拍与状态更新。",
   "Entities involved": "涉及实体",
   "State update": "状态更新",

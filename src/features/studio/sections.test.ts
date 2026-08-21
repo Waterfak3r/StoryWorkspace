@@ -30,8 +30,16 @@ describe("Outline and Workflow surfaces", () => {
   it("renders a mindmap and a connected pipeline, not the old lists", () => {
     const outline = readFileSync(path.join(__dirname, "OutlinePanel.tsx"), "utf8");
     expect(outline).toContain("data-outline-map");
+    expect(outline).toContain("data-outline-canvas");
+    expect(outline).toContain("data-outline-graph");
+    expect(outline).toContain("data-pan-x");
+    expect(outline).toContain("data-pan-y");
+    expect(outline).toContain("applyMapPan");
+    expect(outline).toContain("entityTrajectory");
     expect(outline).toContain("data-outline-time");
     expect(outline).toContain("data-time-kind");
+    expect(outline).toContain("data-entity-on-time");
+    expect(outline).toContain("data-entity-on-event");
     expect(outline).toContain("data-outline-event");
     expect(outline).toContain("data-outline-entity");
     expect(outline).toContain("data-outline-edge");

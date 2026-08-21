@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   CaretDown,
   CaretRight,
@@ -27,6 +27,7 @@ import type {
 } from "@/studio/domain";
 import { useI18n } from "@/features/i18n/LocaleProvider";
 import { getStudioOutline } from "./api";
+import { applyMapPan, entityTrajectory, isInteractivePanTarget, type MapOffset } from "./outline-map";
 
 function entityKindIcon(kind: StudioEntityKind, isSelected: boolean) {
   switch (kind) {
@@ -270,6 +271,8 @@ function OutlineMindmap({
 }) {
   const { t } = useI18n();
   const { times, events, entities, stateChanges } = outline.timeline;
+  const [pan, setPan] = useState<MapOffset>({ x: 0, y: 0 });
+  const dragRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
 
   const [collapsedChapters, setCollapsedChapters] = useState<Record<string, boolean>>({});
 
@@ -287,11 +290,49 @@ function OutlineMindmap({
     return entities.find((e) => e.id === selectedEntityId) ?? null;
   }, [entities, selectedEntityId]);
 
+  const trajectory = useMemo(() => {
+    if (!selectedEntityObj) {
+      return { eventIds: [] as string[], timeIds: [] as string[] };
+    }
+    return entityTrajectory({
+      appearanceEventIds: selectedEntityObj.appearanceEventIds,
+      events,
+      times,
+    });
+  }, [selectedEntityObj, events, times]);
+
+  const onCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || isInteractivePanTarget(event.target)) {
+      return;
+    }
+    dragRef.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const delta = { x: event.clientX - drag.lastX, y: event.clientY - drag.lastY };
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    setPan((current) => applyMapPan(current, delta));
+  };
+
+  const onCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null;
+    }
+  };
+
   return (
     <div
-      className="mt-8 rounded-2xl border border-line bg-surface-raised p-4 sm:p-8 shadow-xs overflow-x-auto"
+      className="mt-8 rounded-2xl border border-line bg-surface-raised p-4 sm:p-8 shadow-xs"
       data-outline-map="true"
       data-outline-timeline="true"
+      data-pan-x={pan.x}
+      data-pan-y={pan.y}
     >
       {/* Top Map Toolbar / Legend */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/80 pb-4">
@@ -304,7 +345,8 @@ function OutlineMindmap({
             <p className="text-[11px] text-ink-muted">
               {selectedEntityId
                 ? t("Highlighting {name}", { name: selectedEntityObj?.name ?? selectedEntityId })
-                : t("Click an entity to highlight its trajectory across the story.")}
+                : t("Click an entity to highlight its trajectory across the story.")}{" "}
+              {t("Drag the map to inspect the timeline.")}
             </p>
           </div>
         </div>
@@ -352,7 +394,19 @@ function OutlineMindmap({
         </div>
       ) : (
         /* Mindmap Graph (Continuous Time Spine + Branching Event Pearls + Entity Twigs) */
-        <div className="mt-8 space-y-10">
+        <div
+          className="mt-8 overflow-hidden rounded-xl border border-line/70 bg-surface cursor-grab active:cursor-grabbing touch-none"
+          data-outline-canvas="true"
+          onPointerDown={onCanvasPointerDown}
+          onPointerMove={onCanvasPointerMove}
+          onPointerUp={onCanvasPointerUp}
+          onPointerCancel={onCanvasPointerUp}
+        >
+        <div
+          className="min-h-[280px] space-y-10 p-4 sm:p-6"
+          data-outline-graph="true"
+          style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}
+        >
           {volumeTimes.map((volumeTime) => {
             const chapterTimes = times.filter(
               (time) => time.kind === "chapter" && time.parentTimeId === volumeTime.id,
@@ -365,7 +419,12 @@ function OutlineMindmap({
                   <div
                     data-outline-time={volumeTime.id}
                     data-time-kind="volume"
-                    className="inline-flex items-center gap-2.5 rounded-2xl border-2 border-accent/40 bg-surface-raised px-4 py-2.5 text-xs font-bold text-ink shadow-xs ring-4 ring-accent/10"
+                    data-entity-on-time={trajectory.timeIds.includes(volumeTime.id) ? "true" : undefined}
+                    className={`inline-flex items-center gap-2.5 rounded-2xl border-2 bg-surface-raised px-4 py-2.5 text-xs font-bold text-ink shadow-xs ring-4 ${
+                      trajectory.timeIds.includes(volumeTime.id)
+                        ? "border-accent bg-accent-soft/70 ring-accent/25"
+                        : "border-accent/40 ring-accent/10"
+                    }`}
                   >
                     <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent text-on-accent text-xs font-black shadow-2xs">
                       V
@@ -417,7 +476,12 @@ function OutlineMindmap({
                             onClick={() => toggleChapter(chapterTime.id)}
                             data-outline-time={chapterTime.id}
                             data-time-kind="chapter"
-                            className="group inline-flex items-center gap-2.5 rounded-xl border border-line bg-surface px-4 py-2 text-xs font-bold text-ink shadow-2xs hover:border-accent hover:bg-surface-raised transition-all"
+                            data-entity-on-time={trajectory.timeIds.includes(chapterTime.id) ? "true" : undefined}
+                            className={`group inline-flex items-center gap-2.5 rounded-xl border px-4 py-2 text-xs font-bold text-ink shadow-2xs hover:border-accent hover:bg-surface-raised transition-all ${
+                              trajectory.timeIds.includes(chapterTime.id)
+                                ? "border-accent bg-accent-soft/60 ring-2 ring-accent/25"
+                                : "border-line bg-surface"
+                            }`}
                           >
                             <span className="text-ink-muted group-hover:text-accent transition-colors">
                               {isCollapsed ? <CaretRight size={14} weight="bold" /> : <CaretDown size={14} weight="bold" />}
@@ -485,6 +549,7 @@ function OutlineMindmap({
                                         data-outline-event={event.id}
                                         data-timeline-event={event.id}
                                         data-timeline-sequence={event.sequence}
+                                        data-entity-on-event={isEntityParticipant ? "true" : undefined}
                                         onClick={() => onSelectEvent(event.id)}
                                         className={`group relative flex w-full max-w-md flex-col rounded-2xl border p-4 text-left transition-all duration-150 shadow-2xs ${
                                           isEventSelected
@@ -661,6 +726,7 @@ function OutlineMindmap({
               </div>
             );
           })}
+        </div>
         </div>
       )}
     </div>

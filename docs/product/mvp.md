@@ -22,13 +22,13 @@
 | [Story 删除](./slice-05-story-delete.md) | 已实现：卷/章/场级联硬删 + 确认弹窗；实体不删 |
 | [故事大纲栏](./slice-06-story-outline.md) | 已实现：只读汇编卷/章/场 + 情节/环境/实体/镜头节拍；导航「故事大纲」 |
 | 全本故事摄入 | 已实现：`test/resource` 长文走 parse→confirm；剧本覆盖原文；环境/实体可复用 |
-| 艺术分镜导演 | 已实现：可注入；无镜时至少 2 镜；机位变化且含景别/运动语汇；已配文本模型则 LLM，失败回退 |
+| 艺术分镜导演 | 已实现：可注入；无镜时至少 2 镜；机位变化且含景别/运动语汇；已配文本模型则 LLM，失败回退；证据含 `storyPosition.events` 前情提要 |
 | [漫画页](./slice-07-comics-pages.md) | 已实现：Image API **一次生成一整页漫画**；遗留静帧合成一张页图；Outputs 一页一图 |
 | [实体参考图](./slice-08-entity-references.md) | 已实现：实体可上传参考图；生图把图片发给 `/images/edits`，保持角色/地点/道具/服饰一致 |
 | [确认对白引用](./slice-09-confirmed-dialogue.md) | 已实现：对白确认到场（说话人=人物实体，赋格）；生图/描字只引用确认行；Workflow 可确认 |
 | [实体大纲图](./slice-10-entity-outline-graph.md) | 已实现：实体上图、出场轨迹、点实体看人设；只读汇编；agy 已过观感一刀 |
 | [Story State + 前情](./slice-11-story-state-context.md) | 已实现并改：每场一份「此刻」状态，对应本场情节；Resolver 叠 default + 本场之前 + **本场**；推断补丁挂在状态已经成立的那一场 |
-| [大纲导图](./slice-12-outline-mindmap.md) | 已实现：时间作脊连接实体/时间/事件；覆盖泳道矩阵主视图；agy 已过观感二刀 |
+| [大纲导图](./slice-12-outline-mindmap.md) | 已实现：时间作脊连接实体/时间/事件；覆盖泳道矩阵主视图；画布可拖拽平移检视；点实体高亮其在各时间点的出场轨迹 |
 | [原剧本对白对齐](./slice-13-script-dialogue-match.md) | 已实现：从原文抽对白/短旁白并对齐场·实体·事件；页内文字可选模型或描字 |
 | [生图单位与版式](./slice-14-page-compose-layout.md) | 已实现：整页/逐格分叉、2–4/auto/marvel 版式、地点空间锁、一键开始、旧稿归档；agy 已过观感二刀 |
 
@@ -64,14 +64,14 @@
 | 生图 | 调用用户自备 Image API。默认一次出一整页漫画；可选逐格再生再拼。出场实体参考图作为图片输入。地点 `visual.spatial` 锁房间左右。当前页写 `outputs/comics/current/`，被替换的旧稿搬进 `outputs/archive/<batchId>/` |
 | 单镜头重生成 | `compose=page` 重画该镜所在整页；`compose=panels` 只重画该格再合成页。先归档旧当前图。Agent 带连续性与空间约束 |
 | Workflow 面板 | 全链图：文字生成 → 导入 → 分镜 → 对话处理 → 最终生成漫画；顶栏一键开始（导演缺镜 → 确认对白 → 出齐缺页）；不替人确认解析；镜头重跑/锁定是钻入 |
-| 故事大纲栏 | 只读导图：时间节点（卷/章作脊）+ 事件节点 + 实体节点（角色必上图，地点为环境锚点，多场道具/服饰上图）+ 包含边 + 参与边 + 序列边；点实体看出场轨迹与人设；不另存大纲库；不是卡片罗列，也不是人物泳道矩阵 |
+| 故事大纲栏 | 只读导图：时间节点（卷/章作脊）+ 事件节点 + 实体节点（角色必上图，地点为环境锚点，多场道具/服饰上图）+ 包含边 + 参与边 + 序列边；点实体高亮其在各时间点的出场轨迹与人设；画布可拖拽平移检视，不在图上新建关系；不另存大纲库；不是卡片罗列，也不是人物泳道矩阵 |
 | 对白 / 描字 | 工作流从**原场剧本**抽出对白与短旁白，对齐本场人物实体、大纲事件、分镜格后确认。生图只引用确认行，禁止再扫 `script`。`shot.action` / `panel.caption` 不是对白。项目可选页内文字：`model`（模型按确认行画字）或 `overlay`（后期描字）；默认 `model`；禁止双重字 |
 | Story State | 实体身份（`visual.base` / 参考图）只写首次稳定外观。实体在故事不同时间的状态按场分开，对应本场情节（`content-states/.../scene.json` 的 `outfit` / `condition`）。Resolver 叠 default + 本场之前 + **本场此刻**。Canon 与推断可区分。后面的剪发、负伤、卖掉不得写回人设 |
 | 前情进编译 | Compiler 消费出场实体、确认对白、当前叠后状态、本场前情摘要；生成范围（本页）与上下文范围（向前取）分开 |
 | 漫画风格选择 | 项目可选漫画风格并持久化；编译页请求包含所选风格文本。页内文字、生图单位、版式随风格持久化 |
 | 实体参考图自动完善 | 无参考图的实体可自动生成真实落盘图片；后续整页生图把图片字节发给 Image adapter |
 | 全本摄入 | 粘贴长文后确认，得到可复用的环境 / 情节 / 实体，供分镜与生图直接引用 |
-| 艺术分镜 | Director 可接大模型；机位有景别与运动，服务已解析的事件、实体、时间与确认对白，不重新扫描原剧本 |
+| 艺术分镜 | Director 可接大模型；机位有景别与运动，服务已解析的事件、实体、时间、确认对白，以及与 Resolver 相同的 `storyPosition.events` 前情提要（前场 title + summary）；空前情不编造；无文本 Provider 时走既有非 LLM fallback，不伪造时间线证据；不重新扫描原剧本 |
 | 漫画页 | 默认 Image API 直接生成一页多格连环画；`compose=panels` 时逐格再合成。版式可选固定 2/3/4、导演 2–4（`auto`）、或整页模式下的漫威不规则分格。Outputs 只汇编 `current/`，一页一图 |
 
 ## 当前限制（随用户决策补充）
@@ -112,7 +112,7 @@ Workflow 是演示核心：能看见节点状态，能重跑某个 Shot，能看
   → AI Parse（Scene + Entity）→ 人工确认
   → Scene 编辑（剧本 + Intent + 挂实体）
   → Story State / 对白处理（LLM JSON + Zod，确认到场×人物）
-  → AI Director（只消费已解析事件、实体、时间、对白）→ Storyboard（可改）
+  → AI Director（已解析事件、实体、时间、对白，以及 `storyPosition.events` 前情提要）→ Storyboard（可改）
   → Context Resolver（实体 + 叠后状态 + 前情 + 确认对白）
   → Prompt Compiler（按 compose/layout）→ Image API（整页一次，或逐格再拼）
   → 当前页进 current/；旧稿进 archive/

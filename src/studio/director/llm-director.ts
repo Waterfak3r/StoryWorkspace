@@ -22,7 +22,7 @@ const directorProposalSchema = z.strictObject({
 const DIRECTOR_SYSTEM = `You are a comic-book storyboard director. Turn the supplied structured scene evidence into cinematic stills.
 Return JSON only with key "shots". Each shot needs purpose, action, camera.
 Cameras must vary and name a framing or move: wide, medium, close-up, low angle, high angle, over-the-shoulder, insert, push-in, or hold.
-Action must follow the supplied intent, entities, state summary, event summary, and confirmed dialogue references; do not invent a new story.
+Action must follow the supplied intent, entities, state summary, event summary, prior-story recap, and confirmed dialogue references; do not invent a new story.
 Give important confirmed dialogue exchanges their own shots when present.
 At least two shots. No secrets.`;
 
@@ -39,6 +39,7 @@ export type DirectorEvidence = {
   stateSummary?: string;
   eventSummary?: string;
   timeSummary?: string;
+  storyPosition?: { events: { title: string; summary: string }[] };
 };
 
 export async function llmDirector(scene: StudioScene, evidence: DirectorEvidence = {}): Promise<DirectorShotDraft[]> {
@@ -64,6 +65,8 @@ export async function llmDirector(scene: StudioScene, evidence: DirectorEvidence
         `State summary: ${evidence.stateSummary || "(none)"}`,
         `Time summary: ${evidence.timeSummary || "(none)"}`,
         `Event summary: ${evidence.eventSummary || scene.intent || "(none)"}`,
+        "Prior story:",
+        formatPriorStoryEvents(evidence.storyPosition?.events ?? []),
         "Confirmed dialogue:",
         scene.dialogue.lines.length > 0
           ? scene.dialogue.lines.map((line) => `- ${line.id} | ${line.speakerId ?? "narration"} | ${line.shotId ?? "unassigned"} | ${line.text}`).join("\n")
@@ -85,4 +88,18 @@ export async function llmDirector(scene: StudioScene, evidence: DirectorEvidence
 
 export function directorOrDefault(director?: SceneDirector): SceneDirector {
   return director ?? defaultDirector;
+}
+
+export function formatPriorStoryEvents(
+  events: readonly { title: string; summary: string }[],
+): string {
+  if (events.length === 0) {
+    return "- none";
+  }
+  return events
+    .map((event) => {
+      const summary = event.summary.replace(/\s+/g, " ").trim();
+      return summary ? `- ${event.title}: ${summary}` : `- ${event.title}`;
+    })
+    .join("\n");
 }

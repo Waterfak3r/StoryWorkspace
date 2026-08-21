@@ -48,6 +48,21 @@ test("story outline is a linked timeline and workflow is a connected stage graph
   await expect(page.locator("[data-outline-edge][data-edge-kind=contains]").first()).toBeVisible();
   await expect(page.locator("[data-outline-entity]").first()).toBeVisible();
   await expect(page.locator("[data-outline-edge][data-edge-kind=participates]").first()).toBeVisible();
+  const map = page.locator("[data-outline-map]");
+  const canvas = page.locator("[data-outline-canvas]");
+  await expect(canvas).toBeVisible();
+  const beforeX = Number(await map.getAttribute("data-pan-x"));
+  const beforeY = Number(await map.getAttribute("data-pan-y"));
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  if (box) {
+    await page.mouse.move(box.x + Math.max(24, box.width - 36), box.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(box.x + Math.max(24, box.width - 36) - 80, box.y + 70, { steps: 6 });
+    await page.mouse.up();
+  }
+  await expect.poll(async () => Number(await map.getAttribute("data-pan-x"))).not.toBe(beforeX);
+  await expect.poll(async () => Number(await map.getAttribute("data-pan-y"))).not.toBe(beforeY);
   await expect(page.locator("article[data-outline-scene]")).toHaveCount(0);
   await expect(page.locator("[data-timeline-lane]")).toHaveCount(0);
   await expect(page.locator("[data-timeline-cell]")).toHaveCount(0);

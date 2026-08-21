@@ -1,3 +1,3 @@
 import "server-only";
 
-export { buildContextSnapshot, resolveContext } from "./resolve-context";
+export { buildContextSnapshot, resolveContext, storyPositionEventsForScene } from "./resolve-context";
